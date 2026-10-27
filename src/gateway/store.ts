@@ -21,7 +21,6 @@ CREATE TABLE IF NOT EXISTS gw_messages (
   thread_ts TEXT,
   user_id TEXT,
   user_name TEXT,
-  is_bot INTEGER NOT NULL DEFAULT 0,
   is_self INTEGER NOT NULL DEFAULT 0,
   is_mention INTEGER NOT NULL DEFAULT 0,
   text TEXT NOT NULL DEFAULT '',
@@ -60,7 +59,6 @@ CREATE TABLE IF NOT EXISTS gw_users (
   id TEXT PRIMARY KEY,
   name TEXT,
   real_name TEXT,
-  is_bot INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL
 );
 
@@ -96,12 +94,12 @@ CREATE TABLE IF NOT EXISTS gw_wakes (
 
 /** What the agent is told about the log. Keep in sync with SCHEMA. */
 export const SCHEMA_DOC = `Tables (SQLite, read-only for you; times are Unix ms; ts is the Slack message ts):
-- gw_messages(channel, ts, thread_ts, user_id, user_name, is_bot, is_self, is_mention, text, subtype, files, created_at, edited_at, deleted_at, send_id, wake)
+- gw_messages(channel, ts, thread_ts, user_id, user_name, is_self, is_mention, text, subtype, files, created_at, edited_at, deleted_at, send_id, wake)
   One row per Slack message, current text. thread_ts is set for thread replies (and on a thread's parent when it has replies: thread_ts = ts).
-  is_self = 1 for your own messages. deleted_at is set when the message was deleted. wake: how the gateway handled it (mention, dm, relevant, not_relevant, steer, self, bot, ...).
+  is_self = 1 for your own messages. deleted_at is set when the message was deleted. wake: how the gateway handled it (mention, dm, relevant, not_relevant, steer, self, ...).
 - gw_edits(channel, ts, kind, old_text, new_text, at): every edit ('edit') and delete ('delete').
 - gw_channels(id, name, type): type is channel, group, im or mpim.
-- gw_users(id, name, real_name, is_bot)
+- gw_users(id, name, real_name)
 - gw_outbox(send_id, channel, thread_ts, text, state, ts, created_at, sent_at): what you sent.
 - gw_patrols(id, due_at, note, state, set_by): patrol schedule.
 - gw_wakes(id, reason, channel, created_at, detail): every time you were woken, with the Jev answers for 'relevant'.
@@ -113,7 +111,6 @@ export interface MessageRow {
   thread_ts: string | null;
   user_id: string | null;
   user_name: string | null;
-  is_bot: number;
   is_self: number;
   is_mention: number;
   text: string;
@@ -177,14 +174,13 @@ export class LogStore {
         return false;
       }
       await tx.run(
-        `INSERT INTO gw_messages (channel, ts, thread_ts, user_id, user_name, is_bot, is_self, is_mention, text, subtype, files, created_at, send_id, event_id, wake)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO gw_messages (channel, ts, thread_ts, user_id, user_name, is_self, is_mention, text, subtype, files, created_at, send_id, event_id, wake)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         row.channel,
         row.ts,
         row.thread_ts,
         row.user_id,
         row.user_name,
-        row.is_bot,
         row.is_self,
         row.is_mention,
         row.text,
@@ -246,10 +242,10 @@ export class LogStore {
     return deleted;
   }
 
-  /** Human messages the gateway saw but did not decide on, for example because of a crash. */
+  /** Messages from others that the gateway saw but did not decide on, for example because of a crash. */
   async undecided(since: number): Promise<MessageRow[]> {
     return this.sql.all(
-      "SELECT * FROM gw_messages WHERE wake IS NULL AND is_self = 0 AND is_bot = 0 AND deleted_at IS NULL AND created_at >= ? ORDER BY created_at",
+      "SELECT * FROM gw_messages WHERE wake IS NULL AND is_self = 0 AND deleted_at IS NULL AND created_at >= ? ORDER BY created_at",
       since,
     );
   }
@@ -286,13 +282,12 @@ export class LogStore {
     return this.sql.get("SELECT id FROM gw_channels WHERE name = ?", name);
   }
 
-  async putUser(id: string, name: string, realName: string, isBot: boolean): Promise<void> {
+  async putUser(id: string, name: string, realName: string): Promise<void> {
     await this.sql.run(
-      "INSERT INTO gw_users (id, name, real_name, is_bot, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET name = excluded.name, real_name = excluded.real_name, is_bot = excluded.is_bot, updated_at = excluded.updated_at",
+      "INSERT INTO gw_users (id, name, real_name, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET name = excluded.name, real_name = excluded.real_name, updated_at = excluded.updated_at",
       id,
       name,
       realName,
-      isBot ? 1 : 0,
       Date.now(),
     );
   }

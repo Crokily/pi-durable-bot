@@ -63,7 +63,7 @@ export class Gateway implements GatewayPort {
   #patrolTimer?: NodeJS.Timeout;
   #patrolCheck: Promise<void> = Promise.resolve();
   readonly #channelNames = new Map<string, string | undefined>();
-  readonly #userIsBot = new Map<string, boolean>();
+  readonly #knownUsers = new Set<string>();
   #agent?: AgentPort;
   #stopped = false;
 
@@ -175,13 +175,13 @@ export class Gateway implements GatewayPort {
     await this.#store.editMessage(event.channel!, inner.ts, translated.text, tsToMs(inner.edited?.ts ?? event.event_ts), eventId);
   }
 
-  /** Log a message. New human messages go to the waker. */
+  /** Log a message. New messages from others go to the waker. */
   async #logMessage(event: SlackEvent & { subtype?: string }, eventId: string | null): Promise<void> {
     const channel = event.channel!;
     const ts = event.ts!;
     const translated = await this.#adapter.translate(event);
     const isSelf = this.#adapter.isSelf(event);
-    const isBot = isSelf || (await this.#rememberUser(event, translated));
+    await this.#rememberUser(translated);
     const system = event.subtype !== undefined && SYSTEM_SUBTYPES.has(event.subtype);
     const channelType = event.channel_type ?? (await this.#store.channel(channel))?.type ?? "channel";
     await this.#channelName(channel, channelType);
@@ -191,12 +191,11 @@ export class Gateway implements GatewayPort {
       thread_ts: event.thread_ts ?? null,
       user_id: translated.author.userId,
       user_name: translated.author.userName,
-      is_bot: isBot ? 1 : 0,
       is_self: isSelf ? 1 : 0,
       is_mention: translated.isMention ? 1 : 0,
       text: translated.text,
       created_at: tsToMs(ts),
-      wake: isSelf ? "self" : isBot ? "bot" : system ? "system" : null,
+      wake: isSelf ? "self" : system ? "system" : null,
       channel_type: channelType,
     };
     const files = event.files?.length ? JSON.stringify(event.files.map((file) => ({ id: file.id, name: file.name, mimetype: file.mimetype, url: file.url_private }))) : null;
@@ -204,24 +203,11 @@ export class Gateway implements GatewayPort {
     if (added && row.wake === null && row.created_at >= Date.now() - RECOVERY_WINDOW_MS) this.#waker.add(row);
   }
 
-  /**
-   * Whether the author is a bot. A person who posts through an app (as the tests do with a user token) gets a
-   * `bot_id` on the message too, so the answer comes from the author's profile, not from `bot_id`.
-   */
-  async #rememberUser(event: SlackEvent & { subtype?: string }, message: Message<unknown>): Promise<boolean> {
-    if (!event.user) return event.subtype === "bot_message" || event.bot_id !== undefined;
-    let isBot = this.#userIsBot.get(event.user);
-    if (isBot === undefined) {
-      try {
-        const info = await this.#adapter.client.users.info({ user: event.user });
-        isBot = info.user?.is_bot === true || info.user?.id === "USLACKBOT";
-      } catch {
-        isBot = message.author.isBot === true;
-      }
-      this.#userIsBot.set(event.user, isBot);
-      await this.#store.putUser(event.user, message.author.userName, message.author.fullName, isBot);
-    }
-    return isBot;
+  async #rememberUser(message: Message<unknown>): Promise<void> {
+    const id = message.author.userId;
+    if (!id || this.#knownUsers.has(id)) return;
+    this.#knownUsers.add(id);
+    await this.#store.putUser(id, message.author.userName, message.author.fullName);
   }
 
   /** Name of a channel, from cache, the log, or Slack. DMs are named after the other person. */
@@ -365,7 +351,6 @@ export class Gateway implements GatewayPort {
       thread_ts: threadTs ?? null,
       user_id: this.#adapter.botUserId ?? null,
       user_name: this.botName,
-      is_bot: 1,
       is_self: 1,
       is_mention: 0,
       text: input.text,

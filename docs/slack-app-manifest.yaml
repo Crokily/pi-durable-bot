@@ -1,0 +1,51 @@
+# personal-bot · Slack app manifest
+# 用法：api.slack.com/apps → Create New App → From an app manifest → 选工作区 → 粘贴本文件。
+# 基于 Vercel Chat SDK Slack adapter README 的推荐 manifest，改为 socket mode，并补上私信、文件权限。
+# 本文件不含任何令牌。令牌不要写进本仓库，也不要贴进聊天。
+display_information:
+  name: coly
+  description: Crokily 团队里的同事
+features:
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+  bot_user:
+    display_name: coly
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read
+      - channels:history
+      - channels:read
+      - chat:write
+      - files:read
+      - files:write
+      - groups:history
+      - groups:read
+      - im:history
+      - im:read
+      - im:write
+      - mpim:history
+      - mpim:read
+      - reactions:read
+      - reactions:write
+      - users:read
+    user:
+      - chat:write
+      - im:write
+settings:
+  event_subscriptions:
+    bot_events:
+      - app_mention
+      - message.channels
+      - message.groups
+      - message.im
+      - message.mpim
+      - member_joined_channel
+  interactivity:
+    is_enabled: true
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false

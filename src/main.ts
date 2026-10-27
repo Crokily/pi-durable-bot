@@ -75,7 +75,6 @@ async function startBot(config: BotConfig): Promise<RunningBot> {
     logSchema: SCHEMA_DOC,
     personaFile: config.persona,
     paths,
-    turnoverRatio: config.turnoverRatio,
     compaction: config.compaction,
     log,
   });

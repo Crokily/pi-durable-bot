@@ -27,10 +27,12 @@ await tools.slack_send({ channel: "C123", thread_ts: "1793080260.811919", text: 
 \`\`\`
 - 你在 Slack 里的名字是 ${name}。`;
 
-export const MEMORY_RULES = (paths: PromptPaths, turnoverPercent: number) => `## 笔记与翻篇
+export const MEMORY_RULES = (paths: PromptPaths) => `## 笔记与翻篇
 - 笔记文件：${paths.notes}。翻篇后它还在。把以后要用的东西写进去：正在做的事、答应别人的事、各频道的进度、用户的偏好。
 - 你负责的事写在 ${paths.responsibilities}。Jev 用它判断没有 @ 你的消息和你有没有关系。你接手新的事、或者不再负责某件事时，更新这个文件。写具体。
-- 每次唤醒都会告诉你上下文用了多少 token。用量到 ${turnoverPercent}% 时，或者你认为该翻篇时（例如一件大事做完了）：
+- 每次唤醒都会告诉你：上下文用了多少 token，用到多少时 pi 会自动压缩。随时也可以用 tools.context_status 查。
+- 自动压缩会把旧的对话变成一段摘要，由 pi 来写，细节会丢。翻篇由你自己来做：你先把要记住的写进笔记，再开新的上下文。什么时候翻篇，由你自己判断。
+- 翻篇的步骤：
   1. 先用 tools.write 或 tools.edit 更新笔记文件。
   2. 再调用 tools.context_reset({ note })。note 写给翻篇后的自己：接下来先做什么。
   翻篇后，旧的对话你就看不到了。新上下文的第一条消息里有笔记全文和 note。要找细节，查消息日志。
@@ -52,6 +54,8 @@ const REASONS: Record<Wake["reason"], string> = {
 export interface ContextStatus {
   used: number;
   window: number;
+  /** Where pi starts compacting on its own. */
+  compactAt: number;
 }
 
 /** "2026-10-27 17:04:07 星期二 (GMT+11)", in the machine's time zone. */
@@ -75,7 +79,7 @@ export function formatTime(ms: number): string {
 }
 
 /** The wake message: where, who, why, and how full the context is. No message text. */
-export function renderWake(wake: Wake, status: ContextStatus, turnoverRatio: number): string {
+export function renderWake(wake: Wake, status: ContextStatus): string {
   const lines = [`[唤醒] ${REASONS[wake.reason]}`, `时间：${formatTime(Date.now())}`];
   if (wake.channel) {
     const place = wake.channelName ? `${wake.channelName.startsWith("dm-") ? wake.channelName : `#${wake.channelName}`}（${wake.channel}）` : wake.channel;
@@ -84,14 +88,15 @@ export function renderWake(wake: Wake, status: ContextStatus, turnoverRatio: num
   if (wake.people.length > 0) lines.push(`谁：${wake.people.join("、")}`);
   if (wake.count > 0) lines.push(`新消息：${wake.count} 条，ts ${wake.fromTs}${wake.toTs !== wake.fromTs ? ` 到 ${wake.toTs}` : ""}`);
   if (wake.note) lines.push(`备注：${wake.note}`);
-  lines.push(renderContext(status, turnoverRatio));
+  lines.push(renderContext(status));
   return lines.join("\n");
 }
 
-export function renderContext(status: ContextStatus, turnoverRatio: number): string {
-  const percent = Math.round((status.used / status.window) * 100);
-  const advice = status.used >= status.window * turnoverRatio ? "已到翻篇线：做完这件事后，先写笔记，再翻篇。" : `到 ${Math.round(turnoverRatio * 100)}% 时翻篇。`;
-  return `上下文：已用约 ${Math.round(status.used / 1000)}k / ${Math.round(status.window / 1000)}k tokens（${percent}%）。${advice}`;
+/** Facts only. When to turn the page is the agent's decision. */
+export function renderContext(status: ContextStatus): string {
+  const k = (tokens: number) => `${Math.round(tokens / 1000)}k`;
+  const left = Math.max(0, status.compactAt - status.used);
+  return `上下文：已用约 ${k(status.used)} tokens，窗口 ${k(status.window)}。用到约 ${k(status.compactAt)} 时 pi 会自动压缩，还剩约 ${k(left)}。`;
 }
 
 export function renderHandoff(note: string, notes: string, notesPath: string): string {
@@ -105,6 +110,3 @@ ${note.trim() || "（无）"}
 ## 笔记全文（${notesPath}）
 ${notes.trim() || "（笔记是空的）"}`;
 }
-
-export const NUDGE_TURNOVER = (percent: number) =>
-  `[系统] 上下文已用约 ${percent}%。请现在翻篇：先把要记住的写进笔记文件，再调用 tools.context_reset({ note })。`;

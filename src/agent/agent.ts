@@ -9,10 +9,9 @@ import {
   type Conversation,
   createRegistry,
   defineExtension,
+  DEFAULT_COMPACTION_POLICY,
   defineTool,
-  GenerationTask,
   Harness,
-  hook,
   type ModelRef,
   type Storage,
   type SubmissionId,
@@ -27,7 +26,6 @@ import {
   DEFAULT_PERSONA,
   formatTime,
   MEMORY_RULES,
-  NUDGE_TURNOVER,
   PATROL_RULES,
   type PromptPaths,
   renderContext,
@@ -48,7 +46,6 @@ export interface AgentOptions {
   logSchema: string;
   personaFile?: string;
   paths: PromptPaths;
-  turnoverRatio: number;
   compaction: { reserveTokens?: number; keepRecentTokens?: number; backgroundTokens?: number };
   log: (message: string, data?: Record<string, unknown>) => void;
 }
@@ -81,9 +78,6 @@ export class Agent implements AgentPort {
       if (!agent) throw new Error("agent is not open yet");
       return agent;
     };
-    /** Conversation → the context head (reset or compaction) it was last asked to turn the page in. */
-    const nudged = new Map<number, number | "start">();
-
     const codemode = createCodemodeExtension({
       sandbox: new CodemodeSandbox({ timeoutMs: 30 * 60_000, memoryLimitBytes: 512 * 1024 * 1024 }),
       models: false,
@@ -156,14 +150,14 @@ export class Agent implements AgentPort {
       }),
       defineTool({
         name: "context_status",
-        description: "How many tokens your context uses now, and the window size.",
+        description: "How many tokens your context uses now, the window size, and where pi starts compacting on its own.",
         parameters: Type.Object({}),
-        structuredOutputSchema: Type.Object({ used: Type.Number(), window: Type.Number() }),
+        structuredOutputSchema: Type.Object({ used: Type.Number(), window: Type.Number(), compactAt: Type.Number() }),
         callers: ["tools"],
         replay: "safe",
         execute: async () => {
           const status = await self().contextStatus();
-          return { output: [{ type: "text", text: renderContext(status, options.turnoverRatio) }], structuredOutput: { ...status } };
+          return { output: [{ type: "text", text: renderContext(status) }], structuredOutput: { ...status } };
         },
       }),
       defineTool({
@@ -195,23 +189,8 @@ export class Agent implements AgentPort {
         ),
         section("work", () => WORK_RULES(gateway.botName, paths), { tag: false }),
         section("log", () => `## 消息日志\n${options.logSchema}`, { tag: false }),
-        section("memory", () => MEMORY_RULES(paths, Math.round(options.turnoverRatio * 100)), { tag: false }),
+        section("memory", () => MEMORY_RULES(paths), { tag: false }),
         section("patrol", () => PATROL_RULES, { tag: false }),
-      ],
-      hooks: [
-        hook(GenerationTask, {
-          // When a run ends with the context past the line, ask once per context to write notes and turn the page.
-          onYield: async (_answer, api) => {
-            const status = await self().contextStatus();
-            if (status.used < status.window * options.turnoverRatio) return undefined;
-            const view = await self().#root.context(context);
-            const head: number | "start" = view.head?.id ?? "start";
-            if (nudged.get(api.conversationId) === head) return undefined;
-            nudged.set(api.conversationId, head);
-            options.log("turnover nudge", { used: status.used });
-            return { continue: NUDGE_TURNOVER(Math.round((status.used / status.window) * 100)) };
-          },
-        }),
       ],
     });
 
@@ -278,7 +257,7 @@ export class Agent implements AgentPort {
   }
 
   async #submit(wake: Wake, whenBusy: "steer" | "followUp"): Promise<void> {
-    const content = renderWake(wake, await this.contextStatus(), this.#options.turnoverRatio);
+    const content = renderWake(wake, await this.contextStatus());
     const submission = await this.#root.submit(
       { type: "input", content, requestId: wake.id, whenBusy, entry: { kind: "pb.wake", data: { ...wake } as unknown as JsonValue } },
       context,
@@ -328,6 +307,9 @@ export class Agent implements AgentPort {
     }
     let used = index >= 0 ? calculateContextTokens((messages[index] as Extract<Message, { role: "assistant" }>).usage) : 0;
     for (const message of messages.slice(index + 1)) used += 2 * estimateMessageTokens(message);
-    return { used, window };
+    // pi compacts in the background from (window - reserve - background), and blocks at (window - reserve).
+    const policy = { ...DEFAULT_COMPACTION_POLICY, ...this.#options.compaction };
+    const compactAt = window - policy.reserveTokens - (policy.backgroundTokens > 0 ? policy.backgroundTokens : 0);
+    return { used, window, compactAt };
   }
 }

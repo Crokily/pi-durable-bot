@@ -28,8 +28,6 @@ export interface BotConfig {
   debounceMaxMs: number;
   /** Jev wakes the agent when both answers are at least this probable. */
   jevThreshold: number;
-  /** When context use passes this share of the window, the agent is told to write notes and turn the page. */
-  turnoverRatio: number;
   /** pi-durable compaction, the fallback when the agent does not turn the page. Fields as in pi-durable's CompactionPolicy. */
   compaction: { reserveTokens?: number; keepRecentTokens?: number; backgroundTokens?: number };
   /** Patrol interval when the agent has not set one. */
@@ -43,7 +41,6 @@ const DEFAULTS = {
   debounceMs: 3_000,
   debounceMaxMs: 20_000,
   jevThreshold: 0.5,
-  turnoverRatio: 0.6,
   compaction: { reserveTokens: 32_768 },
   defaultPatrolMinutes: 120,
 } satisfies Partial<BotConfig>;

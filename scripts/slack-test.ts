@@ -6,8 +6,8 @@
 //   node scripts/slack-test.ts edit <channel ID> <ts> <text>
 //   node scripts/slack-test.ts delete <channel ID> <ts>
 //   node scripts/slack-test.ts history <channel ID> [count]              newest last, with thread replies
-//   node scripts/slack-test.ts cleanup <channel ID> [--dry-run] [--before <ts>]
-//       delete the user's and the bot's messages (older than ts); join and leave notices stay
+//   node scripts/slack-test.ts cleanup <channel ID> [--dry-run] [--before <ts>] [--keep <ts>]...
+//       delete the user's and the bot's messages (older than ts, except kept ones); join and leave notices stay
 import { join } from "node:path";
 import { CONFIG_DIR } from "../src/bot/definition.ts";
 import { readSecrets } from "../src/core/env-file.ts";
@@ -87,13 +87,14 @@ switch (command) {
     const options = process.argv.slice(4);
     const dry = options.includes("--dry-run");
     const before = options.includes("--before") ? options[options.indexOf("--before") + 1] : undefined;
+    const keep = new Set(options.flatMap((option, index) => (option === "--keep" ? [options[index + 1]] : [])));
     const { user, bot } = await ids();
     let deleted = 0;
     const skipped: string[] = [];
     for (const message of (await everything(a!)).reverse()) {
       const owner: Who | undefined = message.user === user ? "user" : message.user === bot ? "bot" : undefined;
       const notice = message.subtype === "channel_join" || message.subtype === "channel_leave";
-      if (!owner || notice || (before && Number(message.ts) >= Number(before))) {
+      if (!owner || notice || keep.has(message.ts) || (before && Number(message.ts) >= Number(before))) {
         skipped.push(`${message.ts} ${message.user ?? message.bot_id ?? "?"} ${message.subtype ?? ""}`);
         continue;
       }

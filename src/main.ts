@@ -1,108 +1,98 @@
-import { existsSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { createModels } from "@earendil-works/pi-ai/models";
-import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
-import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
-import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { Agent } from "./agent/agent.ts";
-import { FileModelsStore, PiAuthFile } from "./agent/credentials.ts";
-import { type BotConfig, loadBots, requireKeys } from "./config.ts";
-import { Gateway } from "./gateway/gateway.ts";
-import { LogStore, SCHEMA_DOC } from "./gateway/store.ts";
+import { existsSync, readdirSync } from "node:fs";
+import { unlink, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { Bot } from "./bot/bot.ts";
+import { botPaths, CONFIG_DIR, DATA_DIR, readDefinition } from "./bot/definition.ts";
+import { readSecrets } from "./core/env-file.ts";
 
-interface RunningBot {
-  stop(): Promise<void>;
-}
+// Runs every bot folder in the data directory: a folder with a bot.json is a bot. Checks the folders every few
+// seconds, so a new folder starts a bot, a removed one stops it, and a changed bot.json applies while running.
 
-function logger(bot: string) {
+const SCAN_MS = 5_000;
+const binDir = join(dirname(fileURLToPath(import.meta.url)), "..", "bin");
+
+function print(bot: string | undefined) {
   return (message: string, data?: Record<string, unknown>) => {
-    console.log(JSON.stringify({ time: new Date().toISOString(), bot, message, ...data }));
+    console.log(JSON.stringify({ time: new Date().toISOString(), ...(bot ? { bot } : {}), message, ...data }));
   };
 }
 
-async function startBot(config: BotConfig): Promise<RunningBot> {
-  const log = logger(config.id);
-  const slack = requireKeys(config.slackEnv, ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN"]);
-  const jev = requireKeys(config.jevEnv, ["JEV_API_KEY"]);
-
-  const paths = {
-    notes: join(config.dataDir, "notes.md"),
-    responsibilities: join(config.dataDir, "responsibilities.md"),
-    workspace: join(config.dataDir, "workspace"),
-  };
-  await mkdir(paths.workspace, { recursive: true, mode: 0o700 });
-  if (!existsSync(paths.responsibilities)) await writeFile(paths.responsibilities, `${config.responsibilities}\n`);
-  if (!existsSync(paths.notes)) await writeFile(paths.notes, "# 笔记\n");
-
-  // One SQLite file: gateway tables (gw_) and pi-durable tables (pi_) on one connection.
-  const dbPath = join(config.dataDir, "bot.sqlite");
-  const db = await openNodeSqliteDatabase(dbPath);
-  const store = await LogStore.open(db, dbPath);
-  const storage = await SqliteStorage.open(db, { prefix: "pi_" });
-
-  const models = createModels({
-    credentials: new PiAuthFile(join(homedir(), ".pi/agent/auth.json")),
-    modelsStore: new FileModelsStore(join(config.dataDir, "models-store.json")),
-  });
-  models.setProvider(openaiProvider());
-  const [provider, ...rest] = config.model.split("/");
-  const model = { provider: provider!, modelId: rest.join("/") };
-  if (!models.getModel(model.provider, model.modelId)) {
-    await models.refresh();
-    if (!models.getModel(model.provider, model.modelId)) throw new Error(`unknown model ${config.model}`);
-  }
-
-  const gateway = new Gateway(store, {
-    botName: config.name,
-    slackAppToken: slack.SLACK_APP_TOKEN!,
-    slackBotToken: slack.SLACK_BOT_TOKEN!,
-    jevApiKey: jev.JEV_API_KEY!,
-    jevThreshold: config.jevThreshold,
-    debounceMs: config.debounceMs,
-    debounceMaxMs: config.debounceMaxMs,
-    responsibilitiesFile: paths.responsibilities,
-    defaultPatrolMinutes: config.defaultPatrolMinutes,
-    log,
-  });
-  const agent = await Agent.open({
-    storage,
-    models,
-    model,
-    thinking: config.thinking,
-    gateway,
-    logSchema: SCHEMA_DOC,
-    personaFile: config.persona,
-    paths,
-    compaction: config.compaction,
-    log,
-  });
-  await gateway.start(agent);
-  log("started", { model: config.model, dataDir: config.dataDir });
-
-  return {
-    async stop() {
-      await gateway.stop();
-      await agent.close(); // closes the storage and the shared connection
-      store.close();
-      log("stopped");
-    },
-  };
-}
-
-const bots = await Promise.all(loadBots().map(startBot));
-
+const log = print(undefined);
+const running = new Map<string, { bot: Bot; text: string }>();
+const failed = new Map<string, string>();
+let scanning: Promise<void> = Promise.resolve();
 let stopping = false;
+
+async function scan(): Promise<void> {
+  const ids = existsSync(DATA_DIR)
+    ? readdirSync(DATA_DIR, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && /^[a-z0-9][a-z0-9_-]*$/.test(entry.name) && existsSync(join(DATA_DIR, entry.name, "bot.json")))
+        .map((entry) => entry.name)
+    : [];
+  for (const [id, entry] of running) {
+    if (ids.includes(id)) continue;
+    running.delete(id);
+    await entry.bot.stop().catch((error) => log("bot stop failed", { bot: id, error: String(error) }));
+  }
+  for (const id of ids) {
+    const paths = botPaths(join(DATA_DIR, id));
+    let read: ReturnType<typeof readDefinition>;
+    try {
+      read = readDefinition(paths.definition);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (failed.get(id) !== message) {
+        failed.set(id, message);
+        print(id)("bot.json is not valid; keeping the running definition", { error: message });
+        await writeFile(paths.definitionError, `${message}\n`).catch(() => {});
+      }
+      continue;
+    }
+    const current = running.get(id);
+    if (current && current.text === read.text) continue;
+    if (failed.get(id) === read.text) continue;
+    try {
+      if (current) {
+        await current.bot.applyDefinition(read.definition);
+        current.text = read.text;
+      } else {
+        const jev = readSecrets(join(CONFIG_DIR, "jev.env"), ["JEV_API_KEY"]);
+        const bot = await Bot.start(id, paths.dir, read.definition, { dataDir: DATA_DIR, configDir: CONFIG_DIR, binDir, jevApiKey: jev.JEV_API_KEY! }, print(id));
+        running.set(id, { bot, text: read.text });
+      }
+      failed.delete(id);
+      if (existsSync(paths.definitionError)) await unlink(paths.definitionError).catch(() => {});
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // Try again only when bot.json changes.
+      failed.set(id, read.text);
+      print(id)(current ? "applying bot.json failed" : "bot start failed", { error: message });
+      await writeFile(paths.definitionError, `${message}\n`).catch(() => {});
+    }
+  }
+}
+
+function rescan(): Promise<void> {
+  scanning = scanning.then(() => (stopping ? undefined : scan())).catch((error) => log("scan failed", { error: String(error) }));
+  return scanning;
+}
+
+await rescan();
+log("started", { dataDir: DATA_DIR, bots: [...running.keys()] });
+const timer = setInterval(() => void rescan(), SCAN_MS);
+
 async function shutdown(signal: string): Promise<void> {
   if (stopping) return;
   stopping = true;
-  console.log(JSON.stringify({ time: new Date().toISOString(), message: "shutdown", signal }));
-  const timer = setTimeout(() => process.exit(1), 20_000);
-  await Promise.allSettled(bots.map((bot) => bot.stop()));
-  clearTimeout(timer);
+  log("shutdown", { signal });
+  clearInterval(timer);
+  const deadline = setTimeout(() => process.exit(1), 25_000);
+  await scanning;
+  await Promise.allSettled([...running.values()].map((entry) => entry.bot.stop()));
+  clearTimeout(deadline);
   process.exit(0);
 }
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
 process.on("SIGINT", () => void shutdown("SIGINT"));
-process.on("unhandledRejection", (error) => console.log(JSON.stringify({ time: new Date().toISOString(), message: "unhandled rejection", error: String(error) })));
+process.on("unhandledRejection", (error) => log("unhandled rejection", { error: String(error) }));

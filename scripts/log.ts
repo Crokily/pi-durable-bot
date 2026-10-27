@@ -1,9 +1,9 @@
-// Read-only SQL on a bot's log, for checks by hand.
+// Read-only SQL on a bot's database, for checks by hand.
 //   node scripts/log.ts <bot id> "<sql>"
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { DATA_DIR } from "../src/config.ts";
+import { DATA_DIR } from "../src/bot/definition.ts";
 
-const [bot = "personal", sql = "SELECT channel, ts, user_name, wake, text FROM gw_messages ORDER BY created_at DESC LIMIT 20"] = process.argv.slice(2);
+const [bot = "coly", sql = "SELECT id, kind, place, person, wake, text FROM gw_events ORDER BY id DESC LIMIT 20"] = process.argv.slice(2);
 const db = new DatabaseSync(join(DATA_DIR, bot, "bot.sqlite"), { readOnly: true });
-console.table(db.prepare(sql).all());
+for (const row of db.prepare(sql).all()) console.log(JSON.stringify(row));

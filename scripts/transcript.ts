@@ -2,9 +2,9 @@
 //   node scripts/transcript.ts <bot id> [count]
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { DATA_DIR } from "../src/config.ts";
+import { DATA_DIR } from "../src/bot/definition.ts";
 
-const [bot = "personal", count = "30"] = process.argv.slice(2);
+const [bot = "coly", count = "30"] = process.argv.slice(2);
 const db = new DatabaseSync(join(DATA_DIR, bot, "bot.sqlite"), { readOnly: true });
 const rows = db.prepare("SELECT id, record FROM pi_entries ORDER BY id DESC LIMIT ?").all(Number(count)) as { id: number; record: string }[];
 

@@ -1,153 +1,188 @@
-import { readFile } from "node:fs/promises";
-import type { AgentPort, Wake, WakeReason } from "../core/types.ts";
-import type { Jev } from "./jev.ts";
-import type { LogStore, MessageRow } from "./store.ts";
+import type { PlaceInfo } from "../core/channel.ts";
+import type { PlaceWake, PlaceWakeReason, WakeEvent, WakeTarget } from "../core/wake.ts";
+import type { Jev, JevAnswer, JevItem } from "./jev.ts";
+import type { LoggedMessage, MessageLog, UndecidedEvent } from "./log.ts";
 
-export interface WakerOptions {
-  botName: string;
-  debounceMs: number;
-  debounceMaxMs: number;
-  responsibilitiesFile: string;
-  log: (message: string, data?: Record<string, unknown>) => void;
+export interface WakerSettings {
+  /** Wait this long after the last event in a place before deciding. */
+  readonly debounceMs: number;
+  /** Never wait longer than this after the first event. */
+  readonly debounceMaxMs: number;
+  /** Jev wakes the bot when both answers are at least this probable. */
+  readonly jevThreshold: number;
+  /** How many earlier messages of the place Jev sees. */
+  readonly jevContextMessages: number;
 }
 
 interface Batch {
-  messages: (MessageRow & { channel_type: string })[];
-  first: number;
+  readonly events: UndecidedEvent[];
+  readonly first: number;
   timer: NodeJS.Timeout;
 }
 
+type Log = (message: string, data?: Record<string, unknown>) => void;
+
 /**
- * Decides when new messages wake the agent. Per channel, it waits until people stop typing
- * (debounceMs after the last message, at most debounceMaxMs after the first), then:
- * 1. the agent works on this channel now → steer;
- * 2. a message @-mentions the bot or is a DM → wake;
+ * Decides when new events wake the bot. Per place, it waits until people stop (debounce), then:
+ * 1. the bot works on this place now → steer;
+ * 2. an event @-mentions the bot, or the place is a one-to-one DM → wake;
  * 3. otherwise Jev decides.
  */
 export class Waker {
   readonly #batches = new Map<string, Batch>();
-  readonly #flushing = new Set<Promise<void>>();
-  readonly #store: LogStore;
+  readonly #deciding = new Set<Promise<void>>();
+  readonly #log: MessageLog;
   readonly #jev: Jev;
-  readonly #options: WakerOptions;
-  readonly #channelName: (channel: string) => Promise<string | undefined>;
-  agent?: AgentPort;
+  readonly #settings: () => WakerSettings;
+  readonly #print: Log;
+  target?: WakeTarget;
 
-  constructor(store: LogStore, jev: Jev, options: WakerOptions, channelName: (channel: string) => Promise<string | undefined>) {
-    this.#store = store;
+  constructor(log: MessageLog, jev: Jev, settings: () => WakerSettings, print: Log) {
+    this.#log = log;
     this.#jev = jev;
-    this.#options = options;
-    this.#channelName = channelName;
+    this.#settings = settings;
+    this.#print = print;
   }
 
-  add(message: MessageRow & { channel_type: string }): void {
+  add(event: UndecidedEvent): void {
+    const key = event.place ?? `${event.channel}:`;
     const now = Date.now();
-    const batch = this.#batches.get(message.channel);
-    // Recovery can offer a message twice (backfill, then the undecided list).
-    if (batch?.messages.some((queued) => queued.ts === message.ts)) return;
+    const settings = this.#settings();
+    const batch = this.#batches.get(key);
+    if (batch?.events.some((queued) => queued.id === event.id)) return;
     if (batch) {
       clearTimeout(batch.timer);
-      batch.messages.push(message);
+      batch.events.push(event);
     }
-    const current = batch ?? { messages: [message], first: now, timer: undefined as unknown as NodeJS.Timeout };
-    const wait = Math.max(0, Math.min(this.#options.debounceMs, current.first + this.#options.debounceMaxMs - now));
-    current.timer = setTimeout(() => this.#flush(message.channel), wait);
-    this.#batches.set(message.channel, current);
+    const current: Batch = batch ?? { events: [event], first: now, timer: undefined as unknown as NodeJS.Timeout };
+    const wait = Math.max(0, Math.min(settings.debounceMs, current.first + settings.debounceMaxMs - now));
+    current.timer = setTimeout(() => this.#flush(key), wait);
+    this.#batches.set(key, current);
   }
 
-  /** Stop timers. Undecided messages stay undecided in the log and are picked up on the next start. */
+  /** Stop the timers. Undecided events stay undecided in the log and come back on the next start. */
   async stop(): Promise<void> {
     for (const batch of this.#batches.values()) clearTimeout(batch.timer);
     this.#batches.clear();
-    await Promise.allSettled(this.#flushing);
+    await Promise.allSettled(this.#deciding);
   }
 
-  #flush(channel: string): void {
-    const batch = this.#batches.get(channel);
+  #flush(key: string): void {
+    const batch = this.#batches.get(key);
     if (!batch) return;
-    this.#batches.delete(channel);
-    const task = this.#decide(channel, batch.messages)
-      .catch((error) => this.#options.log("wake decision failed", { channel, error: String(error) }))
-      .finally(() => this.#flushing.delete(task));
-    this.#flushing.add(task);
+    this.#batches.delete(key);
+    const task = this.#decide(batch.events)
+      .catch((error) => this.#print("wake decision failed", { place: key, error: String(error) }))
+      .finally(() => this.#deciding.delete(task));
+    this.#deciding.add(task);
   }
 
-  async #decide(channel: string, batch: Batch["messages"]): Promise<void> {
-    const agent = this.agent;
-    if (!agent) throw new Error("no agent");
-    // A message deleted while we waited is no reason to wake.
-    const deleted = new Set(await this.#store.deletedAmong(channel, batch.map((message) => message.ts)));
-    if (deleted.size > 0) await this.#store.setWake(channel, [...deleted], "deleted");
-    const messages = batch.filter((message) => !deleted.has(message.ts));
-    if (messages.length === 0) return;
-    const tss = messages.map((message) => message.ts);
-    const base = await this.#wakeBase(channel, messages);
+  async #decide(events: UndecidedEvent[]): Promise<void> {
+    const target = this.target;
+    if (!target) throw new Error("no wake target");
+    const first = events[0]!;
+    const place: PlaceInfo = first.place
+      ? { address: first.place, kind: first.place_kind ?? "channel", ...(first.place_name ? { name: first.place_name } : {}) }
+      : { address: `${first.channel}:`, kind: "channel", name: first.channel };
+    const ids = events.map((event) => event.id);
+    const wakeEvents = events.map(toWakeEvent);
+    const id = (reason: string) => `${reason}:${place.address}:${ids.at(-1)}`;
 
-    const direct: WakeReason | undefined = messages.some((message) => message.channel_type === "im")
-      ? "dm"
-      : messages.some((message) => message.is_mention)
-        ? "mention"
-        : undefined;
-
-    if (await agent.isActiveChannel(channel)) {
-      const note = direct === "mention" ? "其中有 @ 你的消息" : undefined;
-      const wake: Wake = { ...base, id: `steer:${channel}:${tss.at(-1)}`, reason: "steer", ...(note ? { note } : {}) };
-      await this.#store.addWake(wake.id, wake.reason, channel, { messages: tss });
-      await agent.steer(wake);
-      await this.#store.setWake(channel, tss, "steer");
-      this.#options.log("steer", { channel, count: messages.length });
-      return;
-    }
-
-    if (direct) {
-      const wake: Wake = { ...base, id: `${direct}:${channel}:${tss.at(-1)}`, reason: direct };
-      await this.#store.addWake(wake.id, wake.reason, channel, { messages: tss });
-      await agent.wake(wake);
-      await this.#store.setWake(channel, tss, direct);
-      this.#options.log("wake", { reason: direct, channel, count: messages.length });
-      return;
-    }
-
-    const earlier = await this.#store.recentMessages(channel, messages[0]!.ts, 15);
-    const responsibilities = await readFile(this.#options.responsibilitiesFile, "utf8").catch(() => "");
-    const toJev = (message: MessageRow) => ({
-      author: message.is_self ? `${this.#options.botName} (me)` : (message.user_name ?? message.user_id ?? "unknown"),
-      text: message.text,
-      ts: message.ts,
-      ...(message.thread_ts ? { thread_ts: message.thread_ts } : {}),
-    });
-    const answer = await this.#jev.judge({
-      botName: this.#options.botName,
-      responsibilities,
-      channel: base.channelName ?? channel,
-      earlier: earlier.map(toJev),
-      latest: messages.map(toJev),
-    });
-    const id = `relevant:${channel}:${tss.at(-1)}`;
-    const detail = { messages: tss, related: answer.related, respond: answer.respond };
-    this.#options.log("jev", { channel, count: messages.length, related: answer.related, respond: answer.respond, wake: answer.wake });
-    if (!answer.wake) {
-      await this.#store.setWake(channel, tss, "not_relevant");
-      return;
-    }
-    const note = `Jev: related ${answer.related.toFixed(2)}, needs response ${answer.respond.toFixed(2)}`;
-    await this.#store.addWake(id, "relevant", channel, detail);
-    await agent.wake({ ...base, id, reason: "relevant", note });
-    await this.#store.setWake(channel, tss, "relevant");
-  }
-
-  async #wakeBase(channel: string, messages: Batch["messages"]): Promise<Omit<Wake, "id" | "reason">> {
-    const people = [...new Set(messages.map((message) => `${message.user_name ?? "unknown"} (${message.user_id ?? "?"})`))];
-    const threads = new Set(messages.map((message) => message.thread_ts ?? ""));
-    const thread = threads.size === 1 ? [...threads][0] : undefined;
-    return {
-      channel,
-      channelName: await this.#channelName(channel),
-      ...(thread ? { threadTs: thread } : {}),
-      people,
-      fromTs: messages[0]!.ts,
-      toTs: messages.at(-1)!.ts,
-      count: messages.length,
+    const deliver = async (reason: PlaceWakeReason, decision: string, jev?: PlaceWake["jev"]) => {
+      await target.deliver({ id: id(reason), reason, place, events: wakeEvents, ...(jev ? { jev } : {}) });
+      await this.#log.setWake(ids, decision);
+      this.#print("wake", { reason, place: place.address, events: ids.length });
     };
+
+    if (target.isWorkingOn(place.address)) return deliver("steer", "steer");
+    if (place.kind === "dm") return deliver("dm", "dm");
+    if (events.some((event) => event.mentions_me)) return deliver("mention", "mention");
+
+    const settings = this.#settings();
+    let answer: JevAnswer;
+    try {
+      answer = await this.#askJev(target, place, events, settings);
+    } catch (error) {
+      // Jev could not decide. Nothing is dropped: the bot gets the events and decides itself.
+      this.#print("jev failed", { place: place.address, error: String(error) });
+      return deliver("relevant", "relevant", { error: String(error) });
+    }
+    this.#print("jev", { place: place.address, events: ids.length, related: answer.related, respond: answer.respond });
+    if (answer.related >= settings.jevThreshold && answer.respond >= settings.jevThreshold) {
+      return deliver("relevant", "relevant", answer);
+    }
+    // The bot may have started working on this place while Jev thought.
+    if (target.isWorkingOn(place.address)) return deliver("steer", "steer");
+    await this.#log.setWake(ids, "jev_no");
   }
+
+  async #askJev(target: WakeTarget, place: PlaceInfo, events: UndecidedEvent[], settings: WakerSettings): Promise<JevAnswer> {
+    const earlier = await this.#log.messagesBefore(place.address, events[0]!.at, settings.jevContextMessages);
+    const latest: JevItem[] = [];
+    for (const event of events) latest.push(await this.#describe(event, target.name));
+    const input = {
+      name: target.name,
+      responsibilities: await target.responsibilities(),
+      place: `${place.name ?? place.address} (${place.kind})`,
+      earlier: earlier.map((message) => messageItem(message, target.name)),
+      latest,
+    };
+    let lastError: unknown;
+    for (const delay of [0, 2_000, 8_000]) {
+      if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+      try {
+        return await this.#jev.judge(input);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError;
+  }
+
+  /** An event as Jev sees it: what happened, with the current state of the message it is about. */
+  async #describe(event: UndecidedEvent, name: string): Promise<JevItem> {
+    const author = event.person_name ?? event.person ?? "unknown";
+    const time = new Date(event.at).toISOString();
+    const message = event.message ? await this.#log.message(event.message) : undefined;
+    const state = message?.deleted_at ? " (since deleted)" : "";
+    const thread = event.thread ? { thread: event.thread } : {};
+    switch (event.kind) {
+      case "message":
+        return { what: `new message${state}`, author, time, text: message?.text ?? event.text ?? "", ...thread };
+      case "edit":
+        return { what: `edited a message${state}`, author, time, text: message?.text ?? event.text ?? "", ...thread };
+      default: {
+        const about = message ? ` on ${message.from_me ? `${name}'s` : `${message.person_name ?? "someone"}'s`} message${state}` : "";
+        return {
+          what: `${event.kind}${event.text && event.kind !== "update" ? ` ${event.text}` : ""}${about}`,
+          author,
+          time,
+          ...(message ? { text: message.text } : {}),
+          ...thread,
+        };
+      }
+    }
+  }
+}
+
+function toWakeEvent(event: UndecidedEvent): WakeEvent {
+  return {
+    id: event.id,
+    kind: event.kind,
+    at: event.at,
+    mentionsMe: event.mentions_me === 1,
+    ...(event.message ? { message: event.message } : {}),
+    ...(event.thread ? { thread: event.thread } : {}),
+    ...(event.person ? { person: { address: event.person, ...(event.person_name ? { name: event.person_name } : {}) } } : {}),
+  };
+}
+
+function messageItem(message: LoggedMessage, name: string): JevItem {
+  return {
+    what: message.deleted_at ? "message (since deleted)" : "message",
+    author: message.from_me ? `${name} (me)` : (message.person_name ?? message.person ?? "unknown"),
+    time: new Date(message.at).toISOString(),
+    text: message.text,
+    ...(message.thread ? { thread: message.thread } : {}),
+  };
 }

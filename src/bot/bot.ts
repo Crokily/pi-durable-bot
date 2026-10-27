@@ -1,0 +1,346 @@
+import { randomUUID } from "node:crypto";
+import { existsSync, unlinkSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { createModels, type MutableModels } from "@earendil-works/pi-ai/models";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
+import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
+import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { Agent } from "../agent/agent.ts";
+import { FileModelsStore, PiAuthFile } from "../agent/credentials.ts";
+import { loadChannel } from "../channels/load.ts";
+import type { Address, ChannelAdapter, ChannelConfig } from "../core/channel.ts";
+import type { Sql } from "../core/sql.ts";
+import type { PlaceWake, WakeTarget } from "../core/wake.ts";
+import { Gateway } from "../gateway/gateway.ts";
+import { Jev } from "../gateway/jev.ts";
+import { MessageLog } from "../gateway/log.ts";
+import { ControlServer } from "./control.ts";
+import { type BotDefinition, type BotPaths, botPaths } from "./definition.ts";
+import {
+  folderSection,
+  identitySection,
+  logSection,
+  memorySection,
+  type PromptFacts,
+  renderContext,
+  renderHandoff,
+  renderPlaceWake,
+  renderTimerWake,
+  workSection,
+} from "./prompt.ts";
+import { type Timer, Timers } from "./timers.ts";
+
+const WAKES_SCHEMA = `
+CREATE TABLE IF NOT EXISTS bot_wakes (
+  id TEXT PRIMARY KEY,
+  at INTEGER NOT NULL,
+  reason TEXT NOT NULL,
+  place TEXT,
+  text TEXT NOT NULL,
+  submission TEXT
+);
+`;
+
+export interface BotEnvironment {
+  dataDir: string;
+  configDir: string;
+  /** Directory with the pb command. */
+  binDir: string;
+  jevApiKey: string;
+}
+
+type Print = (message: string, data?: Record<string, unknown>) => void;
+
+/**
+ * One bot: a person with a name, persona, responsibilities, memory, timed wakes, a workspace and one long
+ * conversation. It joins the gateway (channels) and the agent (pi-durable).
+ */
+export class Bot implements WakeTarget {
+  readonly id: string;
+  readonly paths: BotPaths;
+  #definition: BotDefinition;
+  readonly #env: BotEnvironment;
+  readonly #print: Print;
+  readonly #sql: Sql & { close(): Promise<void> };
+  readonly #gateway: Gateway;
+  readonly #timers: Timers;
+  readonly #agent: Agent;
+  readonly #control: ControlServer;
+  /** Which place each wake submission is about, for "is the bot working on this place". */
+  readonly #submissionPlaces = new Map<string, Address>();
+  /** Places the agent sent or reacted to in its current busy period. */
+  readonly #touched = new Set<Address>();
+
+  private constructor(init: {
+    id: string;
+    paths: BotPaths;
+    definition: BotDefinition;
+    env: BotEnvironment;
+    print: Print;
+    sql: Sql & { close(): Promise<void> };
+    gateway: Gateway;
+    timers: Timers;
+    agent: Agent;
+  }) {
+    this.id = init.id;
+    this.paths = init.paths;
+    this.#definition = init.definition;
+    this.#env = init.env;
+    this.#print = init.print;
+    this.#sql = init.sql;
+    this.#gateway = init.gateway;
+    this.#timers = init.timers;
+    this.#agent = init.agent;
+    this.#control = new ControlServer(init.paths.socket, this.#routes());
+    this.#agent.onRunChange((inputs) => {
+      if (!inputs) this.#touched.clear();
+      this.#print(inputs ? "agent working" : "agent idle", inputs ? { inputs } : {});
+    });
+  }
+
+  static async start(id: string, dir: string, definition: BotDefinition, env: BotEnvironment, print: Print): Promise<Bot> {
+    const paths = botPaths(dir);
+    await mkdir(paths.workspace, { recursive: true, mode: 0o700 });
+    for (const file of [paths.persona, paths.responsibilities, paths.notes]) if (!existsSync(file)) await writeFile(file, "");
+
+    // One SQLite file: gateway (gw_), bot (bot_) and pi-durable (pi_) tables on one connection.
+    const sql = (await openNodeSqliteDatabase(paths.db)) as unknown as Sql & { close(): Promise<void> };
+    const log = await MessageLog.open(sql);
+    await sql.exec(WAKES_SCHEMA);
+    const storage = await SqliteStorage.open(sql as never, { prefix: "pi_" });
+    const models = await openModels(paths, definition.model);
+
+    let bot: Bot | undefined;
+    const self = () => {
+      if (!bot) throw new Error("the bot is still starting");
+      return bot;
+    };
+    const settings = () => (bot ? bot.#definition.settings : definition.settings);
+    const gateway = new Gateway(log, new Jev(env.jevApiKey), settings, print);
+    const timers = await Timers.open(sql, () => settings().fallbackWakeMinutes, (timer) => self().#deliverTimer(timer), print);
+    const facts = (): PromptFacts => {
+      const current = bot ? bot.#definition : definition;
+      return {
+        id,
+        name: current.name,
+        paths,
+        dataDir: env.dataDir,
+        configDir: env.configDir,
+        pb: `${env.binDir}/pb`,
+        fallbackWakeMinutes: current.settings.fallbackWakeMinutes,
+        accounts: gateway.channels.map((channel) => ({ channel: channel.id, ...(channel.me ? { me: channel.me } : {}) })),
+      };
+    };
+    const agent = await Agent.open({
+      storage,
+      models,
+      model: modelRef(definition.model),
+      thinking: definition.thinking,
+      compaction: () => settings().compaction,
+      workspace: paths.workspace,
+      shellEnv: { ...process.env, PERSONAL_BOT_ID: id, PATH: `${env.binDir}:${process.env.PATH ?? ""}`, HOME: process.env.HOME ?? homedir() },
+      sections: [
+        { name: "identity", render: async () => identitySection(facts(), await readFile(paths.persona, "utf8").catch(() => "")) },
+        { name: "work", render: () => workSection(facts()) },
+        { name: "log", render: () => logSection(facts()) },
+        { name: "folder", render: () => folderSection(facts()) },
+        { name: "memory", render: () => memorySection(facts()) },
+      ],
+      actions: {
+        send: (to, text, sendId) => self().send(to, text, sendId),
+        react: (message, emoji, remove) => self().react(message, emoji, remove),
+        call: (channel, method, params) => self().call(channel, method, params),
+      },
+      log: print,
+    });
+
+    bot = new Bot({ id, paths, definition, env, print, sql, gateway, timers, agent });
+    // Crash test: with this file in the bot folder, the process dies right after the platform accepts the next send,
+    // before the outbox records it. The next start must find that message instead of sending it again.
+    gateway.outbox.afterPlatformSend = (sendId) => {
+      if (!existsSync(paths.crashAfterSend)) return;
+      unlinkSync(paths.crashAfterSend);
+      print("crash test: dying after the platform send", { sendId });
+      process.kill(process.pid, "SIGKILL");
+    };
+    for (const row of await sql.all<{ submission: string; place: string }>(
+      "SELECT submission, place FROM bot_wakes WHERE submission IS NOT NULL AND place IS NOT NULL ORDER BY at DESC LIMIT 1000",
+    )) {
+      bot.#submissionPlaces.set(row.submission, row.place);
+    }
+    const adapters = await Promise.all(definition.channels.map((channel) => bot!.#loadChannel(channel)));
+    await gateway.start(bot, adapters);
+    agent.resume();
+    await timers.start();
+    await bot.#control.start();
+    print("bot started", { name: definition.name, model: definition.model, channels: adapters.map((adapter) => adapter.id) });
+    return bot;
+  }
+
+  async stop(): Promise<void> {
+    await this.#control.stop();
+    await this.#timers.stop();
+    await this.#gateway.stop();
+    await this.#agent.close();
+    await this.#sql.close().catch(() => {});
+    this.#print("bot stopped");
+  }
+
+  get definition(): BotDefinition {
+    return this.#definition;
+  }
+
+  /** Apply a changed bot.json while running. */
+  async applyDefinition(next: BotDefinition): Promise<void> {
+    const before = this.#definition;
+    this.#definition = next;
+    if (before.model !== next.model || before.thinking !== next.thinking) {
+      await this.#agent.configure(modelRef(next.model), next.thinking);
+    }
+    const old = new Map(before.channels.map((channel) => [channel.id, JSON.stringify(channel)]));
+    const fresh = new Map(next.channels.map((channel) => [channel.id, JSON.stringify(channel)]));
+    const nameChanged = before.name !== next.name;
+    for (const [channelId, config] of old) {
+      if (fresh.get(channelId) !== config || nameChanged) await this.#gateway.removeChannel(channelId);
+    }
+    for (const channel of next.channels) {
+      if (old.get(channel.id) !== JSON.stringify(channel) || nameChanged) await this.#gateway.addChannel(await this.#loadChannel(channel));
+    }
+    this.#print("definition applied", { name: next.name, model: next.model, channels: next.channels.map((channel) => channel.id) });
+  }
+
+  #loadChannel(config: ChannelConfig): Promise<ChannelAdapter> {
+    return loadChannel(config, {
+      botDir: this.paths.dir,
+      botName: this.#definition.name,
+      log: (message, data) => this.#print(`${config.id}: ${message}`, data),
+    });
+  }
+
+  // ---- WakeTarget ----
+
+  get name(): string {
+    return this.#definition.name;
+  }
+
+  isWorkingOn(place: Address): boolean {
+    const inputs = this.#agent.runInputs;
+    if (!inputs) return false;
+    if (this.#touched.has(place)) return true;
+    return inputs.some((submission) => this.#submissionPlaces.get(submission) === place);
+  }
+
+  async deliver(wake: PlaceWake): Promise<void> {
+    const text = renderPlaceWake(wake, await this.#agent.contextStatus());
+    await this.#submit(wake.id, wake.reason, wake.place.address, text, wake.reason === "steer");
+  }
+
+  responsibilities(): Promise<string> {
+    return readFile(this.paths.responsibilities, "utf8").catch(() => "");
+  }
+
+  async #deliverTimer(timer: Timer): Promise<void> {
+    const text = renderTimerWake(timer, await this.#agent.contextStatus(), this.#definition.settings.fallbackWakeMinutes);
+    await this.#submit(`timer:${timer.id}`, timer.set_by === "fallback" ? "fallback" : "timer", undefined, text, false);
+  }
+
+  async #submit(id: string, reason: string, place: Address | undefined, text: string, steer: boolean): Promise<void> {
+    const submission = await this.#agent.submit({ id, text, steer, data: { reason, ...(place ? { place } : {}) } });
+    if (place) this.#submissionPlaces.set(submission, place);
+    await this.#sql.run(
+      "INSERT OR IGNORE INTO bot_wakes (id, at, reason, place, text, submission) VALUES (?, ?, ?, ?, ?, ?)",
+      id,
+      Date.now(),
+      reason,
+      place ?? null,
+      text,
+      submission,
+    );
+  }
+
+  // ---- Actions, for the agent's tools and the command line ----
+
+  async send(to: Address, text: string, sendId: string) {
+    const sent = await this.#gateway.send(sendId, to, text);
+    this.#touch(sent.place);
+    return sent;
+  }
+
+  async react(message: Address, emoji: string, remove: boolean): Promise<void> {
+    await this.#gateway.react(message, emoji, remove);
+    this.#touch(this.#gateway.adapterFor(message).placeOf(message));
+  }
+
+  call(channel: string, method: string, params: Record<string, unknown>): Promise<unknown> {
+    return this.#gateway.call(channel, method, params);
+  }
+
+  #touch(place: Address | undefined): void {
+    if (place && this.#agent.runInputs) this.#touched.add(place);
+  }
+
+  async turnPage(note: string): Promise<{ notesChars: number }> {
+    const notes = await readFile(this.paths.notes, "utf8").catch(() => "");
+    await this.#agent.turnPage(renderHandoff(note, notes, this.paths.notes));
+    this.#print("turn page", { notesChars: notes.length });
+    return { notesChars: notes.length };
+  }
+
+  #routes() {
+    const text = (value: unknown, name: string) => {
+      if (typeof value !== "string") throw new Error(`"${name}" is required`);
+      return value;
+    };
+    return {
+      "POST /send": async (body: Record<string, unknown>) =>
+        this.send(text(body.to, "to"), text(body.text, "text"), typeof body.id === "string" && body.id ? body.id : `cli:${randomUUID()}`),
+      "POST /react": async (body: Record<string, unknown>) => {
+        await this.react(text(body.message, "message"), text(body.emoji, "emoji"), body.remove === true);
+        return "ok";
+      },
+      "POST /call": async (body: Record<string, unknown>) =>
+        this.call(text(body.channel, "channel"), text(body.method, "method"), (body.params as Record<string, unknown> | undefined) ?? {}),
+      "POST /wake": async (body: Record<string, unknown>) => {
+        const at = typeof body.at === "number" ? body.at : Date.now();
+        return this.#timers.add(at, typeof body.note === "string" ? body.note : "");
+      },
+      "GET /wakes": async () => this.#timers.pending(),
+      "POST /wakes/cancel": async (body: Record<string, unknown>) => {
+        if (!(await this.#timers.cancel(Number(body.id)))) throw new Error(`no pending wake ${String(body.id)}`);
+        return "cancelled";
+      },
+      "GET /context": async () => {
+        const status = await this.#agent.contextStatus();
+        return { ...status, text: renderContext(status) };
+      },
+      "POST /turn-page": async (body: Record<string, unknown>) => this.turnPage(text(body.note, "note")),
+      "GET /status": async () => ({
+        id: this.id,
+        name: this.#definition.name,
+        model: this.#definition.model,
+        busy: this.#agent.runInputs !== undefined,
+        channels: this.#gateway.channels.map((channel) => ({ id: channel.id, me: channel.me?.address })),
+      }),
+    };
+  }
+}
+
+function modelRef(model: string) {
+  const [provider, ...rest] = model.split("/");
+  return { provider: provider!, modelId: rest.join("/") };
+}
+
+async function openModels(paths: BotPaths, model: string): Promise<MutableModels> {
+  const models = createModels({
+    credentials: new PiAuthFile(`${homedir()}/.pi/agent/auth.json`),
+    modelsStore: new FileModelsStore(paths.modelsStore),
+  });
+  for (const provider of builtinProviders()) models.setProvider(provider);
+  const ref = modelRef(model);
+  if (!models.getModel(ref.provider, ref.modelId)) {
+    await models.refresh();
+    if (!models.getModel(ref.provider, ref.modelId)) throw new Error(`unknown model ${model}`);
+  }
+  return models;
+}

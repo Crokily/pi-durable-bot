@@ -1,57 +1,51 @@
 import { noul, TypeSafeClient } from "@typesafe-ai/sdk";
 
-export interface JevMessage {
+export interface JevItem {
+  readonly what: string;
   readonly author: string;
-  readonly text: string;
-  readonly ts: string;
-  readonly thread_ts?: string;
+  readonly time: string;
+  readonly text?: string;
+  readonly thread?: string;
 }
 
 export interface JevAnswer {
-  /** Probability that the messages are about what the bot is responsible for. */
+  /** Probability that the events are about what the bot is responsible for. */
   readonly related: number;
   /** Probability that the bot should respond. */
   readonly respond: number;
-  readonly wake: boolean;
 }
 
 /**
  * Asks Jev only two questions: is this about me, and do I need to respond. No urgency.
- * Jev sees the bot's responsibilities file, so it knows what "about me" means.
+ * Jev sees what the bot is responsible for, so it knows what "about me" means.
  */
 export class Jev {
   readonly #client: TypeSafeClient;
-  readonly #threshold: number;
 
-  constructor(apiKey: string, threshold: number) {
+  constructor(apiKey: string) {
     this.#client = new TypeSafeClient({ apiKey });
-    this.#threshold = threshold;
   }
 
   async judge(input: {
-    botName: string;
+    name: string;
     responsibilities: string;
-    channel: string;
-    earlier: readonly JevMessage[];
-    latest: readonly JevMessage[];
+    place: string;
+    earlier: readonly JevItem[];
+    latest: readonly JevItem[];
   }): Promise<JevAnswer> {
     const { answers } = await this.#client.systemOne({
       state: {
-        team_member: input.botName,
+        team_member: input.name,
         what_this_team_member_is_responsible_for: input.responsibilities,
-        channel: input.channel,
-        earlier_messages: input.earlier.map((message) => ({ ...message })),
-        new_messages: input.latest.map((message) => ({ ...message })),
+        place: input.place,
+        earlier_messages: input.earlier.map((item) => ({ ...item })),
+        new_events: input.latest.map((item) => ({ ...item })),
       },
       questions: {
-        related: noul(`Are the new messages about something ${input.botName} is responsible for, or addressed to ${input.botName}?`),
-        respond: noul(
-          `Should ${input.botName} respond to the new messages now, as a helpful team member would? Answer no if people are only talking among themselves and do not need ${input.botName}.`,
-        ),
+        related: noul(`Are the new events about something ${input.name} is responsible for, or addressed to ${input.name}?`),
+        respond: noul(`Does ${input.name} need to respond to the new events?`),
       },
     });
-    const related = answers.related.noul;
-    const respond = answers.respond.noul;
-    return { related, respond, wake: related >= this.#threshold && respond >= this.#threshold };
+    return { related: answers.related.noul, respond: answers.respond.noul };
   }
 }

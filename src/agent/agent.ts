@@ -1,202 +1,141 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { CodemodeSandbox } from "@earendil-works/pi-codemode";
 import { type Message, Type } from "@earendil-works/pi-ai";
 import type { MutableModels } from "@earendil-works/pi-ai/models";
 import { calculateContextTokens, estimateMessageTokens } from "@earendil-works/pi-ai/utils/estimate";
 import {
   type Conversation,
   createRegistry,
-  defineExtension,
   DEFAULT_COMPACTION_POLICY,
+  defineExtension,
   defineTool,
   Harness,
   type ModelRef,
   type Storage,
-  type SubmissionId,
   section,
 } from "@earendil-works/pi-durable";
-import { createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
-import type { AgentPort, GatewayPort, Wake } from "../core/types.ts";
-import {
-  type ContextStatus,
-  DEFAULT_PERSONA,
-  formatTime,
-  MEMORY_RULES,
-  PATROL_RULES,
-  type PromptPaths,
-  renderContext,
-  renderHandoff,
-  renderWake,
-  WORK_RULES,
-} from "./prompt.ts";
 
 const context = BACKGROUND_CONTEXT;
+
+/** What the agent's channel tools do. The bot provides them; the agent knows no platform. */
+export interface AgentActions {
+  send(to: string, text: string, sendId: string): Promise<{ message: string; recovered?: boolean; repeated?: boolean }>;
+  react(message: string, emoji: string, remove: boolean): Promise<void>;
+  call(channel: string, method: string, params: Record<string, unknown>): Promise<unknown>;
+}
+
+export type Thinking = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+
+export interface Compaction {
+  reserveTokens?: number;
+  keepRecentTokens?: number;
+  backgroundTokens?: number;
+}
 
 export interface AgentOptions {
   storage: Storage;
   models: MutableModels;
   model: ModelRef;
-  thinking: "low" | "medium" | "high" | "xhigh";
-  gateway: GatewayPort;
-  /** The gateway's description of the log tables, for the prompt. */
-  logSchema: string;
-  personaFile?: string;
-  paths: PromptPaths;
-  compaction: { reserveTokens?: number; keepRecentTokens?: number; backgroundTokens?: number };
+  thinking: Thinking;
+  compaction: () => Compaction;
+  workspace: string;
+  /** Environment of bash commands. */
+  shellEnv: NodeJS.ProcessEnv;
+  /** System prompt parts, rendered before each request in this order. */
+  sections: readonly { name: string; render: () => Promise<string | undefined> | string | undefined }[];
+  actions: AgentActions;
   log: (message: string, data?: Record<string, unknown>) => void;
 }
 
+export interface ContextStatus {
+  /** Tokens in the context now. */
+  used: number;
+  window: number;
+  /** Where pi starts compacting on its own. */
+  compactAt: number;
+}
+
+/** Call results longer than this go to a file in the workspace. */
+const CALL_OUTPUT_CHARS = 30_000;
+
 /**
- * The bot's agent: one long-lived pi-durable conversation (the root) that the model only drives through code mode.
- * It implements AgentPort, so the gateway can wake and steer it without knowing pi-durable.
+ * The bot's agent: one long-lived pi-durable conversation (the root). Tools: read, write, edit, bash, and the
+ * channel actions send, react and call. Everything else the agent does with code.
  */
-export class Agent implements AgentPort {
+export class Agent {
   readonly #options: AgentOptions;
   readonly #harness: Harness;
   readonly #root: Conversation;
-  /** Our submissions that are not settled yet, with the channel each one is about. */
-  readonly #tracked = new Map<SubmissionId, string | undefined>();
-  /** Channels the agent posted to in the current busy period. */
-  readonly #posted = new Set<string>();
-  #closing = false;
+  #model: ModelRef;
+  #runInputs: readonly string[] | undefined;
+  readonly #runListeners = new Set<(inputs: readonly string[] | undefined) => void>();
+  #disposeView?: () => void;
 
   private constructor(options: AgentOptions, harness: Harness, root: Conversation) {
     this.#options = options;
     this.#harness = harness;
     this.#root = root;
+    this.#model = options.model;
   }
 
   static async open(options: AgentOptions): Promise<Agent> {
-    const { gateway, paths } = options;
-    // Filled in once the Harness is open. Tools and hooks only run after that.
-    let agent: Agent | undefined;
-    const self = () => {
-      if (!agent) throw new Error("agent is not open yet");
-      return agent;
-    };
-    const codemode = createCodemodeExtension({
-      sandbox: new CodemodeSandbox({ timeoutMs: 30 * 60_000, memoryLimitBytes: 512 * 1024 * 1024 }),
-      models: false,
-    });
-    const codemodeTool = codemode.tools!.find((tool) => tool.name === "codemode")!;
-
-    const rows = Type.Array(Type.Record(Type.String(), Type.Any()));
+    const { actions } = options;
+    const text = (value: string) => [{ type: "text" as const, text: value }];
     const tools = [
       defineTool({
-        name: "log_query",
-        description: "Run one read-only SQL statement (SQLite) on the message log. Returns rows as objects, at most 500.",
-        parameters: Type.Object({ sql: Type.String(), params: Type.Optional(Type.Array(Type.Union([Type.String(), Type.Number(), Type.Null()]))) }),
-        structuredOutputSchema: rows,
-        callers: ["tools"],
-        replay: "safe",
-        execute: async (args) => {
-          const result = await gateway.query(args.sql, args.params ?? []);
-          return { output: [{ type: "text", text: JSON.stringify(result) }], structuredOutput: result as JsonValue };
-        },
-      }),
-      defineTool({
-        name: "slack_send",
+        name: "send",
         description:
-          "Say something in Slack. channel: channel ID, #name, or a user ID for a DM. thread_ts: reply in that thread. text: Markdown. Returns { channel, ts }. Sent exactly once, also across restarts.",
-        parameters: Type.Object({ channel: Type.String(), text: Type.String(), thread_ts: Type.Optional(Type.String()) }),
-        structuredOutputSchema: Type.Object({ channel: Type.String(), ts: Type.String() }),
-        callers: ["tools"],
-        // A rerun after a crash keeps the task ID, so the gateway finds the first attempt instead of sending again.
+          "Say something in a channel. to: a place, thread, message or person address, copied from a wake message or the log. " +
+          "A place gets a new message; a thread or message gets a reply in that thread; a person gets a DM. text: Markdown; " +
+          "write <person address> to mention someone. Sent exactly once, also across restarts. Returns the new message's address.",
+        parameters: Type.Object({ to: Type.String(), text: Type.String() }),
+        // A rerun after a crash keeps the task ID, so the outbox finds the first attempt instead of sending again.
         replay: "safe",
         execute: async (args, api) => {
-          const sent = await gateway.send(`task-${api.taskId}`, { channel: args.channel, text: args.text, ...(args.thread_ts ? { threadTs: args.thread_ts } : {}) });
-          self().#posted.add(sent.channel);
-          return { output: [{ type: "text", text: `sent: ${JSON.stringify(sent)}` }], structuredOutput: { channel: sent.channel, ts: sent.ts } };
+          const sent = await actions.send(args.to, args.text, `tool:${api.taskId}`);
+          return { output: text(`sent: ${sent.message}${sent.recovered ? " (found after a restart, not sent again)" : ""}`) };
         },
       }),
       defineTool({
-        name: "slack_react",
-        description: "Add (or with remove: true, remove) an emoji reaction, for example eyes or white_check_mark, on the message ts in channel.",
-        parameters: Type.Object({ channel: Type.String(), ts: Type.String(), emoji: Type.String(), remove: Type.Optional(Type.Boolean()) }),
-        callers: ["tools"],
+        name: "react",
+        description: "Add an emoji reaction to a message (message address), for example eyes or white_check_mark. remove: true takes it away.",
+        parameters: Type.Object({ message: Type.String(), emoji: Type.String(), remove: Type.Optional(Type.Boolean()) }),
         replay: "safe",
         execute: async (args) => {
-          try {
-            await gateway.react(args);
-          } catch (error) {
-            // A rerun finds the first attempt's reaction already there.
-            if (!/already_reacted|no_reaction/.test(String(error))) throw error;
-          }
-          return { output: [{ type: "text", text: "ok" }] };
+          await actions.react(args.message, args.emoji, args.remove ?? false);
+          return { output: text("ok") };
         },
       }),
       defineTool({
-        name: "patrol_schedule",
-        description: "Set when you next wake up to look around (replaces the pending patrol). minutes: from now. note: what to check first.",
-        parameters: Type.Object({ minutes: Type.Number(), note: Type.String() }),
-        callers: ["tools"],
-        replay: "safe",
-        execute: async (args) => {
-          const dueAt = await gateway.schedulePatrol(args.minutes, args.note);
-          return { output: [{ type: "text", text: `next patrol: ${formatTime(dueAt)}` }] };
-        },
-      }),
-      defineTool({
-        name: "clock",
-        description: "The current local date and time. Scripts have no real clock; use this.",
-        parameters: Type.Object({}),
-        callers: ["tools"],
-        replay: "safe",
-        execute: async () => ({ output: [{ type: "text", text: `${formatTime(Date.now())} (unix ms ${Date.now()})` }] }),
-      }),
-      defineTool({
-        name: "context_status",
-        description: "How many tokens your context uses now, the window size, and where pi starts compacting on its own.",
-        parameters: Type.Object({}),
-        structuredOutputSchema: Type.Object({ used: Type.Number(), window: Type.Number(), compactAt: Type.Number() }),
-        callers: ["tools"],
-        replay: "safe",
-        execute: async () => {
-          const status = await self().contextStatus();
-          return { output: [{ type: "text", text: renderContext(status) }], structuredOutput: { ...status } };
-        },
-      }),
-      defineTool({
-        name: "context_reset",
+        name: "call",
         description:
-          "Turn the page: start a new context. Update your notes file first. note: what the next context should do first. The new context gets your notes file in full and this note. Call it last; the current run ends.",
-        parameters: Type.Object({ note: Type.String() }),
-        callers: ["tools"],
+          "Call a platform API method directly, for what send and react do not cover, for example editing your own message or uploading a file. " +
+          "channel: the channel account (the part of an address before the first colon). method and params: as the platform's API documents them; " +
+          "take platform IDs from the raw column of the log. Returns the platform's answer as JSON.",
+        parameters: Type.Object({ channel: Type.String(), method: Type.String(), params: Type.Optional(Type.Record(Type.String(), Type.Any())) }),
         execute: async (args, api) => {
-          const notes = await readFile(paths.notes, "utf8").catch(() => "");
-          const conversation = await self().#harness.conversation(api.conversationId, context);
-          if (!conversation) throw new Error("conversation not found");
-          // Queued while the run is busy; placed at the end of this tool round, where it ends the run.
-          await conversation.reset(renderHandoff(args.note, notes, paths.notes), context);
-          options.log("context reset", { notesChars: notes.length });
-          return { output: [{ type: "text", text: "Page turned. This run ends now." }] };
+          const result = JSON.stringify(await actions.call(args.channel, args.method, args.params ?? {}), null, 1) ?? "null";
+          if (result.length <= CALL_OUTPUT_CHARS) return { output: text(result) };
+          const dir = join(options.workspace, "call-results");
+          await mkdir(dir, { recursive: true });
+          const file = join(dir, `${api.taskId}.json`);
+          await writeFile(file, result);
+          return { output: text(`The answer is ${result.length} characters; full JSON in ${file}. First part:\n${result.slice(0, 4_000)}`) };
         },
       }),
     ];
 
     const bot = defineExtension({
-      name: "personal-bot",
+      name: "bot",
       tools,
-      sections: [
-        section(
-          "persona",
-          async () => (options.personaFile ? await readFile(options.personaFile, "utf8").catch(() => undefined) : undefined) ?? DEFAULT_PERSONA(gateway.botName),
-          { tag: false },
-        ),
-        section("work", () => WORK_RULES(gateway.botName, paths), { tag: false }),
-        section("log", () => `## 消息日志\n${options.logSchema}`, { tag: false }),
-        section("memory", () => MEMORY_RULES(paths), { tag: false }),
-        section("patrol", () => PATROL_RULES, { tag: false }),
-      ],
+      sections: options.sections.map((part) => section(part.name, () => part.render(), { tag: false })),
     });
-
     const registry = createRegistry();
     registry.install(CodingTools);
-    registry.install(codemode);
     registry.install(bot);
 
     const harness = await Harness.open(
@@ -211,82 +150,84 @@ export class Agent implements AgentPort {
           afterFailedRun: "continue",
           retry: { maxRetries: 4 },
           // The fallback when the agent does not turn the page itself.
-          compaction: options.compaction,
+          get compaction() {
+            return options.compaction();
+          },
         },
-        env: () => new NodeExecutionEnv({ cwd: paths.workspace }),
+        env: () => new NodeExecutionEnv({ cwd: options.workspace, shellEnv: options.shellEnv }),
         onReport: (error, info) => options.log("pi report", { type: info.type, error: String(error) }),
       },
       context,
     );
     const root = await harness.root(context, { agent: { model: options.model, thinkingLevel: options.thinking } });
-    await root.configure({ model: options.model, thinkingLevel: options.thinking, cwd: paths.workspace, modelTools: [codemodeTool] }, context);
-    agent = new Agent(options, harness, root);
-    await agent.#recoverTracking();
-    harness.resume();
+    await root.configure({ model: options.model, thinkingLevel: options.thinking, cwd: options.workspace }, context);
+    const agent = new Agent(options, harness, root);
+    await agent.#watchRun();
     return agent;
   }
 
+  /** Continue the work the last process left unfinished. Call once the channels are up, so its tools can act. */
+  resume(): void {
+    this.#harness.resume();
+  }
+
+  async #watchRun(): Promise<void> {
+    const view = await this.#root.viewState(context);
+    const update = (value: { docs: Readonly<Record<string, unknown>> }) => {
+      const live = value.docs["pi.live"] as { run?: { inputs?: unknown[] } } | undefined;
+      const inputs = live?.run ? (live.run.inputs ?? []).map(String) : undefined;
+      const changed = (inputs === undefined) !== (this.#runInputs === undefined) || inputs?.join() !== this.#runInputs?.join();
+      this.#runInputs = inputs;
+      if (changed) for (const listener of this.#runListeners) listener(inputs);
+    };
+    update(view.value);
+    const unsubscribe = view.subscribe(update);
+    this.#disposeView = () => {
+      unsubscribe();
+      view.dispose();
+    };
+  }
+
   async close(): Promise<void> {
-    this.#closing = true;
+    this.#disposeView?.();
     await this.#harness.close(context);
   }
 
-  /** Submissions a previous process left queued or running. Wake IDs are "<reason>:<channel>:<ts>". */
-  async #recoverTracking(): Promise<void> {
-    const inspection = await this.#harness.inspect(context);
-    for (const submission of inspection.submissions) {
-      if (submission.conversationId !== this.#root.id || submission.type !== "input") continue;
-      if (submission.status !== "queued" && submission.status !== "placed") continue;
-      const channel = submission.requestId?.split(":")[1];
-      this.#track(submission.id, channel || undefined);
-    }
-  }
-
-  #track(id: SubmissionId, channel: string | undefined): void {
-    if (this.#tracked.has(id)) return;
-    this.#tracked.set(id, channel);
-    void this.#harness
-      .submission(id, context)
-      .then((submission) => submission?.wait(context))
-      .then((settled) => {
-        if (settled?.status === "unanswered") this.#options.log("wake unanswered", { id, reason: settled.reason });
-      })
-      // Closing ends every wait. The submission itself is durable and is tracked again on the next start.
-      .catch((error) => this.#closing || this.#options.log("wake wait failed", { id, error: String(error) }))
-      .finally(() => this.#tracked.delete(id));
-  }
-
-  async #submit(wake: Wake, whenBusy: "steer" | "followUp"): Promise<void> {
-    const content = renderWake(wake, await this.contextStatus());
+  /**
+   * Hand text to the agent. Busy: steer joins the running work after the current tool round; otherwise it waits for
+   * the run to end. Idle: starts a run. The same id is one submission. Returns the submission ID.
+   */
+  async submit(input: { id: string; text: string; steer: boolean; data?: JsonValue }): Promise<string> {
     const submission = await this.#root.submit(
-      { type: "input", content, requestId: wake.id, whenBusy, entry: { kind: "pb.wake", data: { ...wake } as unknown as JsonValue } },
+      {
+        type: "input",
+        content: input.text,
+        requestId: input.id,
+        whenBusy: input.steer ? "steer" : "followUp",
+        entry: { kind: "bot.wake", ...(input.data === undefined ? {} : { data: input.data }) },
+      },
       context,
     );
-    this.#track(submission.id, wake.channel);
+    return String(submission.id);
   }
 
-  wake(wake: Wake): Promise<void> {
-    return this.#submit(wake, "followUp");
+  /** The submissions the current run works on, or undefined while idle. */
+  get runInputs(): readonly string[] | undefined {
+    return this.#runInputs;
   }
 
-  steer(wake: Wake): Promise<void> {
-    return this.#submit(wake, "steer");
+  onRunChange(listener: (inputs: readonly string[] | undefined) => void): void {
+    this.#runListeners.add(listener);
   }
 
-  /** A channel is active while a placed (running) wake is about it, or the agent posted there during the current run. */
-  async isActiveChannel(channel: string): Promise<boolean> {
-    let running = false;
-    for (const [id, about] of this.#tracked) {
-      const record = await (await this.#harness.submission(id, context))?.status(context);
-      if (record?.status !== "placed") continue;
-      running = true;
-      if (about === channel) return true;
-    }
-    if (!running) {
-      this.#posted.clear();
-      return false;
-    }
-    return this.#posted.has(channel);
+  /** Start a new context whose first message is the handoff. While busy, the current run ends at the next boundary. */
+  async turnPage(handoff: string): Promise<void> {
+    await this.#root.reset(handoff, context);
+  }
+
+  async configure(model: ModelRef, thinking: Thinking): Promise<void> {
+    this.#model = model;
+    await this.#root.configure({ model, thinkingLevel: thinking }, context);
   }
 
   /**
@@ -294,7 +235,7 @@ export class Agent implements AgentPort {
    * pi estimates from characters, which counts Chinese at about half, so the estimate is doubled.
    */
   async contextStatus(): Promise<ContextStatus> {
-    const model = this.#options.models.getModel(this.#options.model.provider, this.#options.model.modelId);
+    const model = this.#options.models.getModel(this.#model.provider, this.#model.modelId);
     const window = model?.contextWindow ?? 200_000;
     const messages: readonly Message[] = (await this.#root.context(context)).messages;
     let index = -1;
@@ -307,8 +248,13 @@ export class Agent implements AgentPort {
     }
     let used = index >= 0 ? calculateContextTokens((messages[index] as Extract<Message, { role: "assistant" }>).usage) : 0;
     for (const message of messages.slice(index + 1)) used += 2 * estimateMessageTokens(message);
+    // Before the first answer in this context, the provider has not counted the system prompt yet.
+    if (index < 0) {
+      const parts = await Promise.all(this.#options.sections.map(async (part) => (await part.render()) ?? ""));
+      used += 2 * estimateMessageTokens({ role: "user", content: parts.join("\n\n"), timestamp: 0 });
+    }
     // pi compacts in the background from (window - reserve - background), and blocks at (window - reserve).
-    const policy = { ...DEFAULT_COMPACTION_POLICY, ...this.#options.compaction };
+    const policy = { ...DEFAULT_COMPACTION_POLICY, ...this.#options.compaction() };
     const compactAt = window - policy.reserveTokens - (policy.backgroundTokens > 0 ? policy.backgroundTokens : 0);
     return { used, window, compactAt };
   }

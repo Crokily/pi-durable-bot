@@ -358,41 +358,57 @@ class SlackChannel implements ChannelAdapter {
     )) {
       for (const place of ((conversation as { channels?: { id?: string }[] }).channels ?? [])) {
         if (!place.id) continue;
-        const channel = place.id;
-        const newest = await sink.newestMessage(this.place(channel));
-        const newestTs = newest ? (this.#parse(newest) as { ts?: string }).ts : undefined;
-        const since = newestTs ?? (lastAlive ? (lastAlive / 1000).toFixed(6) : undefined);
-        if (!since) continue;
-        const threads = new Set<string>();
-        for (const address of await sink.threads(this.place(channel))) {
-          const ts = (this.#parse(address) as { ts?: string }).ts;
-          if (ts) threads.add(ts);
-        }
-        for await (const page of paginate((cursor) =>
-          client.conversations.history({ channel, oldest: since, inclusive: false, limit: 200, include_all_metadata: true, ...(cursor ? { cursor } : {}) }),
-        )) {
-          const messages = ((page as { messages?: SlackMessage[] }).messages ?? []).slice().reverse();
-          for (const message of messages) {
-            if (!message.ts) continue;
-            await sink.receive(`history:${channel}:${message.ts}:${message.edited?.ts ?? ""}`, { source: "history", channel, message } satisfies Raw);
-            added++;
-            if (message.latest_reply && message.latest_reply > since) threads.add(message.ts);
-          }
-        }
-        for (const thread of threads) {
-          for await (const page of paginate((cursor) =>
-            client.conversations.replies({ channel, ts: thread, oldest: since, inclusive: false, limit: 200, include_all_metadata: true, ...(cursor ? { cursor } : {}) }),
-          )) {
-            for (const message of ((page as { messages?: SlackMessage[] }).messages ?? [])) {
-              if (!message.ts || message.ts === thread || message.ts <= since) continue;
-              await sink.receive(`history:${channel}:${message.ts}:${message.edited?.ts ?? ""}`, { source: "history", channel, message } satisfies Raw);
-              added++;
-            }
-          }
+        try {
+          added += await this.#backfillPlace(sink, place.id, lastAlive);
+        } catch (error) {
+          // One place that cannot be read (for example a DM whose history the bot may not see) does not stop the rest.
+          sink.log("backfill skipped a place", { channel: place.id, error: String(error) });
         }
       }
     }
     sink.log("backfill done", { messages: added });
+  }
+
+  async #backfillPlace(sink: ChannelSink, channel: string, lastAlive: number | undefined): Promise<number> {
+    const client = this.#client;
+    const newest = await sink.newestMessage(this.place(channel));
+    const newestTs = newest ? (this.#parse(newest) as { ts?: string }).ts : undefined;
+    const since = newestTs ?? (lastAlive ? (lastAlive / 1000).toFixed(6) : undefined);
+    if (!since) return 0;
+    let added = 0;
+    const threads = new Set<string>();
+    for (const address of await sink.threads(this.place(channel))) {
+      const ts = (this.#parse(address) as { ts?: string }).ts;
+      if (ts) threads.add(ts);
+    }
+    for await (const page of paginate((cursor) =>
+      client.conversations.history({ channel, oldest: since, inclusive: false, limit: 200, include_all_metadata: true, ...(cursor ? { cursor } : {}) }),
+    )) {
+      const messages = ((page as { messages?: SlackMessage[] }).messages ?? []).slice().reverse();
+      for (const message of messages) {
+        if (!message.ts) continue;
+        await sink.receive(`history:${channel}:${message.ts}:${message.edited?.ts ?? ""}`, { source: "history", channel, message } satisfies Raw);
+        added++;
+        if (message.latest_reply && message.latest_reply > since) threads.add(message.ts);
+      }
+    }
+    for (const thread of threads) {
+      try {
+        for await (const page of paginate((cursor) =>
+          client.conversations.replies({ channel, ts: thread, oldest: since, inclusive: false, limit: 200, include_all_metadata: true, ...(cursor ? { cursor } : {}) }),
+        )) {
+          for (const message of ((page as { messages?: SlackMessage[] }).messages ?? [])) {
+            if (!message.ts || message.ts === thread || message.ts <= since) continue;
+            await sink.receive(`history:${channel}:${message.ts}:${message.edited?.ts ?? ""}`, { source: "history", channel, message } satisfies Raw);
+            added++;
+          }
+        }
+      } catch (error) {
+        // A thread whose first message is gone cannot be read any more.
+        if (!/thread_not_found/.test(String(error))) throw error;
+      }
+    }
+    return added;
   }
 
   // ---- Send ----

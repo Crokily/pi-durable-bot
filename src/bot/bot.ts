@@ -44,7 +44,6 @@ CREATE TABLE IF NOT EXISTS bot_wakes (
 
 export interface BotEnvironment {
   dataDir: string;
-  configDir: string;
   /** Directory with the pb command. */
   binDir: string;
   jevApiKey: string;
@@ -129,8 +128,8 @@ export class Bot implements WakeTarget {
         name: current.name,
         paths,
         dataDir: env.dataDir,
-        configDir: env.configDir,
         pb: `${env.binDir}/pb`,
+        node: process.execPath,
         fallbackWakeMinutes: current.settings.fallbackWakeMinutes,
         accounts: gateway.channels.map((channel) => ({ channel: channel.id, ...(channel.me ? { me: channel.me } : {}) })),
       };
@@ -142,7 +141,13 @@ export class Bot implements WakeTarget {
       thinking: definition.thinking,
       compaction: () => settings().compaction,
       workspace: paths.workspace,
-      shellEnv: { ...process.env, PERSONAL_BOT_ID: id, PATH: `${env.binDir}:${process.env.PATH ?? ""}`, HOME: process.env.HOME ?? homedir() },
+      shellEnv: {
+        ...process.env,
+        PERSONAL_BOT_ID: id,
+        PERSONAL_BOT_NODE: process.execPath,
+        PATH: `${env.binDir}:${process.env.PATH ?? ""}`,
+        HOME: process.env.HOME ?? homedir(),
+      },
       sections: [
         { name: "identity", render: async () => identitySection(facts(), await readFile(paths.persona, "utf8").catch(() => "")) },
         { name: "work", render: () => workSection(facts()) },

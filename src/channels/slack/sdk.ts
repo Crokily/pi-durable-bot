@@ -12,13 +12,14 @@ type Ack = (response?: Record<string, unknown>) => Promise<void>;
 /**
  * The Chat SDK Slack adapter, used only to translate between Slack and plain text.
  * Changes to its behavior:
- * - Socket events go to `onSocketEvent`, which stores them, before the ack. The SDK acks first and routes through
- *   Chat handlers; this bot does neither.
+ * - Socket events, interactions and slash commands go to `onSocketEvent`, which stores them, before the ack. The SDK
+ *   acks first and routes through Chat handlers; this bot does neither.
  * - Posts made inside `postWithSendId` carry the send ID as message metadata, so a send can be found again.
  * - Link previews are not awaited: the SDK waits for unfurls that only its own handlers would store.
  */
 export class GatewaySlackAdapter extends SlackAdapter {
-  onSocketEvent?: (body: Record<string, unknown>) => Promise<void>;
+  /** Every event, interaction and slash command, before the ack. */
+  onSocketEvent?: (body: Record<string, unknown>, type: string) => Promise<void>;
   onSocketError?: (error: unknown) => void;
 
   protected override async routeSocketEvent(
@@ -28,9 +29,11 @@ export class GatewaySlackAdapter extends SlackAdapter {
     options?: Parameters<SlackAdapter["routeSocketEvent"]>[3],
     retryNum?: number,
   ): Promise<void> {
-    if (eventType !== "events_api" || !this.onSocketEvent) return super.routeSocketEvent(body, eventType, ack, options, retryNum);
+    if (!this.onSocketEvent || !["events_api", "interactive", "slash_commands"].includes(eventType)) {
+      return super.routeSocketEvent(body, eventType, ack, options, retryNum);
+    }
     try {
-      await this.onSocketEvent(body);
+      await this.onSocketEvent(body, eventType);
     } catch (error) {
       // No ack: Slack delivers the event again.
       this.onSocketError?.(error);

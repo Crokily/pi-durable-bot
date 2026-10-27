@@ -12,8 +12,9 @@ export interface PromptFacts {
   name: string;
   paths: BotPaths;
   dataDir: string;
-  configDir: string;
   pb: string;
+  /** The node binary, for running pb where PATH has no node (cron). */
+  node: string;
   fallbackWakeMinutes: number;
   /** This bot's own person address in each channel account. */
   accounts: readonly { channel: string; me?: PersonInfo }[];
@@ -49,7 +50,7 @@ ${accounts}
   pb wake --list | --cancel <id>
   pb context
   pb turn-page --note <文字>
-  不在你自己的 bash 里运行时（例如 cron），加 --bot ${facts.id}。
+  在你自己的 bash 以外（例如 cron）运行时，写全：PERSONAL_BOT_NODE=${facts.node} ${facts.pb} --bot ${facts.id} <命令>
 - 你在这台机器上有 sudo 和全部权限，操作不需要审批。工作目录：${facts.paths.workspace}`;
 }
 
@@ -73,8 +74,7 @@ export function folderSection(facts: PromptFacts): string {
 - responsibilities.md：你负责的事。Jev 用它判断没有 @ 你的事件和你有没有关系。你负责的事变了，就更新它。
 - notes.md：你的笔记。翻篇后靠它和消息日志找回需要的内容。
 - workspace/：工作目录。
-- 其他 bot 在 ${facts.dataDir} 下，每个子文件夹一个 bot。你可以改它们的定义；加一个带 bot.json 的文件夹，就多一个 bot。
-- 令牌和 key 在 ${facts.configDir}，由 gateway 读取。`;
+- 其他 bot 在 ${facts.dataDir} 下，每个子文件夹一个 bot。你可以改它们的定义；加一个带 bot.json 的文件夹，就多一个 bot。`;
 }
 
 export function memorySection(facts: PromptFacts): string {

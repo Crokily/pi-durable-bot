@@ -58,7 +58,7 @@ async function scan(): Promise<void> {
         current.text = read.text;
       } else {
         const jev = readSecrets(join(CONFIG_DIR, "jev.env"), ["JEV_API_KEY"]);
-        const bot = await Bot.start(id, paths.dir, read.definition, { dataDir: DATA_DIR, configDir: CONFIG_DIR, binDir, jevApiKey: jev.JEV_API_KEY! }, print(id));
+        const bot = await Bot.start(id, paths.dir, read.definition, { dataDir: DATA_DIR, binDir, jevApiKey: jev.JEV_API_KEY! }, print(id));
         running.set(id, { bot, text: read.text });
       }
       failed.delete(id);

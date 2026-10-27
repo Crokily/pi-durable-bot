@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { createMemoryState } from "@chat-adapter/state-memory";
 import type { SlackEvent } from "@chat-adapter/slack";
@@ -25,6 +26,7 @@ import { GatewaySlackAdapter, SEND_EVENT_TYPE } from "./sdk.ts";
 /** What the inbox stores for this channel. */
 type Raw =
   | { source: "socket"; envelope: { event_id?: string; event?: SlackRawEvent } }
+  | { source: "socket"; type: "interactive" | "slash_commands"; body: Record<string, any> }
   | { source: "history"; channel: string; message: SlackMessage }
   | { source: "sent"; channel: string; message: SlackMessage };
 
@@ -88,12 +90,16 @@ class SlackChannel implements ChannelAdapter {
       userName: this.#env.botName,
       logger: quietLogger(sink.log),
     });
-    sdk.onSocketEvent = async (body) => {
-      const envelope = body as { event_id?: string; token?: unknown; event?: SlackRawEvent };
-      if (!envelope.event_id) return;
+    sdk.onSocketEvent = async (body, type) => {
       // Slack's legacy verification token rides along in every envelope. It is not stored.
-      const { token: _token, ...stored } = envelope;
-      await sink.receive(envelope.event_id, { source: "socket", envelope: stored } satisfies Raw);
+      const { token: _token, ...stored } = body as Record<string, any>;
+      if (type === "events_api") {
+        if (typeof stored.event_id !== "string") return;
+        await sink.receive(stored.event_id, { source: "socket", envelope: stored } satisfies Raw);
+        return;
+      }
+      const id = stored.trigger_id ?? createHash("sha256").update(JSON.stringify(stored)).digest("hex").slice(0, 32);
+      await sink.receive(`${type}:${id}`, { source: "socket", type: type as "interactive" | "slash_commands", body: stored } satisfies Raw);
     };
     sdk.onSocketError = (error) => sink.log("event not stored, Slack will deliver it again", { error: String(error) });
     // Chat holds the adapter and its in-memory state. No handlers: the SDK only translates.
@@ -149,6 +155,7 @@ class SlackChannel implements ChannelAdapter {
     if (raw.source === "history" || raw.source === "sent") {
       return [await this.#messageHappening({ ...raw.message, channel: raw.channel })];
     }
+    if ("body" in raw) return [await this.#interaction(raw.type, raw.body)];
     const event = raw.envelope.event;
     if (!event) return [];
     const at = tsToMs(event.event_ts ?? event.ts);
@@ -294,6 +301,24 @@ class SlackChannel implements ChannelAdapter {
       ...files(message),
       ...(sendId ? { sendId } : {}),
       raw: message,
+    };
+  }
+
+  /** A slash command or an interaction (a button, a shortcut): someone used the app. */
+  async #interaction(type: "interactive" | "slash_commands", body: Record<string, any>): Promise<Happening> {
+    const channel: string | undefined = body.channel?.id ?? body.channel_id;
+    const user: string | undefined = body.user?.id ?? body.user_id;
+    const message: string | undefined = body.message?.ts ?? body.container?.message_ts;
+    const text = type === "slash_commands" ? `${body.command ?? ""} ${body.text ?? ""}`.trim() : (body.type as string | undefined);
+    return {
+      kind: type === "slash_commands" ? "command" : "interaction",
+      at: Date.now(),
+      ...(channel ? { place: await this.#placeInfo(channel) } : {}),
+      ...(channel && message ? { message: this.message(channel, message) } : {}),
+      ...(user ? { person: await this.#personInfo(user) } : {}),
+      fromMe: false,
+      ...(text ? { text } : {}),
+      raw: body,
     };
   }
 

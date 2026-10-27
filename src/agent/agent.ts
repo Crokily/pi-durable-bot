@@ -65,6 +65,7 @@ export class Agent implements AgentPort {
   readonly #tracked = new Map<SubmissionId, string | undefined>();
   /** Channels the agent posted to in the current busy period. */
   readonly #posted = new Set<string>();
+  #closing = false;
 
   private constructor(options: AgentOptions, harness: Harness, root: Conversation) {
     this.#options = options;
@@ -247,6 +248,7 @@ export class Agent implements AgentPort {
   }
 
   async close(): Promise<void> {
+    this.#closing = true;
     await this.#harness.close(context);
   }
 
@@ -270,7 +272,8 @@ export class Agent implements AgentPort {
       .then((settled) => {
         if (settled?.status === "unanswered") this.#options.log("wake unanswered", { id, reason: settled.reason });
       })
-      .catch((error) => this.#options.log("wake wait failed", { id, error: String(error) }))
+      // Closing ends every wait. The submission itself is durable and is tracked again on the next start.
+      .catch((error) => this.#closing || this.#options.log("wake wait failed", { id, error: String(error) }))
       .finally(() => this.#tracked.delete(id));
   }
 

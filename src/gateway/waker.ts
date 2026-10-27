@@ -83,8 +83,15 @@ export class Waker {
     const tss = messages.map((message) => message.ts);
     const base = await this.#wakeBase(channel, messages);
 
+    const direct: WakeReason | undefined = messages.some((message) => message.channel_type === "im")
+      ? "dm"
+      : messages.some((message) => message.is_mention)
+        ? "mention"
+        : undefined;
+
     if (await agent.isActiveChannel(channel)) {
-      const wake: Wake = { ...base, id: `steer:${channel}:${tss.at(-1)}`, reason: "steer" };
+      const note = direct === "mention" ? "其中有 @ 你的消息" : undefined;
+      const wake: Wake = { ...base, id: `steer:${channel}:${tss.at(-1)}`, reason: "steer", ...(note ? { note } : {}) };
       await this.#store.addWake(wake.id, wake.reason, channel, { messages: tss });
       await agent.steer(wake);
       await this.#store.setWake(channel, tss, "steer");
@@ -92,11 +99,6 @@ export class Waker {
       return;
     }
 
-    const direct: WakeReason | undefined = messages.some((message) => message.channel_type === "im")
-      ? "dm"
-      : messages.some((message) => message.is_mention)
-        ? "mention"
-        : undefined;
     if (direct) {
       const wake: Wake = { ...base, id: `${direct}:${channel}:${tss.at(-1)}`, reason: direct };
       await this.#store.addWake(wake.id, wake.reason, channel, { messages: tss });

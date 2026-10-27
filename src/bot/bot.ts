@@ -2,12 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, unlinkSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { createModels, type MutableModels } from "@earendil-works/pi-ai/models";
-import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
-import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
-import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { Agent } from "../agent/agent.ts";
-import { FileModelsStore, PiAuthFile } from "../agent/credentials.ts";
+import { Agent, openDatabase } from "../agent/agent.ts";
 import { loadChannel } from "../channels/load.ts";
 import type { Address, ChannelAdapter, ChannelConfig } from "../core/channel.ts";
 import type { Sql } from "../core/sql.ts";
@@ -65,7 +60,6 @@ export class Bot implements WakeTarget {
   readonly #gateway: Gateway;
   readonly #timers: Timers;
   readonly #agent: Agent;
-  readonly #models: MutableModels;
   readonly #control: ControlServer;
   /** Which place each wake submission is about, for "is the bot working on this place". */
   readonly #submissionPlaces = new Map<string, Address>();
@@ -82,7 +76,6 @@ export class Bot implements WakeTarget {
     gateway: Gateway;
     timers: Timers;
     agent: Agent;
-    models: MutableModels;
   }) {
     this.id = init.id;
     this.paths = init.paths;
@@ -93,7 +86,6 @@ export class Bot implements WakeTarget {
     this.#gateway = init.gateway;
     this.#timers = init.timers;
     this.#agent = init.agent;
-    this.#models = init.models;
     this.#control = new ControlServer(init.paths.socket, this.#routes());
     this.#agent.onRunChange((inputs) => {
       if (!inputs) this.#touched.clear();
@@ -107,7 +99,7 @@ export class Bot implements WakeTarget {
     for (const file of [paths.persona, paths.responsibilities, paths.notes]) if (!existsSync(file)) await writeFile(file, "");
 
     // One SQLite file: gateway (gw_), bot (bot_) and pi-durable (pi_) tables on one connection.
-    const sql = (await openNodeSqliteDatabase(paths.db)) as unknown as Sql & { close(): Promise<void> };
+    const sql = await openDatabase(paths.db);
     let started: Bot | undefined;
     let agent: Agent | undefined;
     try {
@@ -132,8 +124,6 @@ export class Bot implements WakeTarget {
   ): Promise<Bot> {
     const log = await MessageLog.open(sql);
     await sql.exec(WAKES_SCHEMA);
-    const storage = await SqliteStorage.open(sql as never, { prefix: "pi_" });
-    const models = await openModels(paths, definition.model);
 
     let bot: Bot | undefined;
     const self = () => {
@@ -157,9 +147,9 @@ export class Bot implements WakeTarget {
       };
     };
     const agent = await Agent.open({
-      storage,
-      models,
-      model: modelRef(definition.model),
+      database: sql,
+      model: definition.model,
+      modelsStore: paths.modelsStore,
       thinking: definition.thinking,
       compaction: () => settings().compaction,
       workspace: paths.workspace,
@@ -186,7 +176,7 @@ export class Bot implements WakeTarget {
     });
     opened(agent);
 
-    bot = new Bot({ id, paths, definition, env, print, sql, gateway, timers, agent, models });
+    bot = new Bot({ id, paths, definition, env, print, sql, gateway, timers, agent });
     // Crash test: with this file in the bot folder, the process dies right after the platform accepts the next send,
     // before the outbox records it. The next start must find that message instead of sending it again.
     gateway.outbox.afterPlatformSend = (sendId) => {
@@ -231,10 +221,7 @@ export class Bot implements WakeTarget {
   /** Apply a changed bot.json while running. The new definition counts only once every step worked, so a retry redoes all. */
   async applyDefinition(next: BotDefinition): Promise<void> {
     const before = this.#definition;
-    if (before.model !== next.model) await requireModel(this.#models, next.model);
-    if (before.model !== next.model || before.thinking !== next.thinking) {
-      await this.#agent.configure(modelRef(next.model), next.thinking);
-    }
+    if (before.model !== next.model || before.thinking !== next.thinking) await this.#agent.configure(next.model, next.thinking);
     const old = new Map(before.channels.map((channel) => [channel.id, JSON.stringify(channel)]));
     const fresh = new Map(next.channels.map((channel) => [channel.id, JSON.stringify(channel)]));
     const nameChanged = before.name !== next.name;
@@ -364,26 +351,4 @@ export class Bot implements WakeTarget {
       }),
     };
   }
-}
-
-function modelRef(model: string) {
-  const [provider, ...rest] = model.split("/");
-  return { provider: provider!, modelId: rest.join("/") };
-}
-
-async function openModels(paths: BotPaths, model: string): Promise<MutableModels> {
-  const models = createModels({
-    credentials: new PiAuthFile(`${homedir()}/.pi/agent/auth.json`),
-    modelsStore: new FileModelsStore(paths.modelsStore),
-  });
-  for (const provider of builtinProviders()) models.setProvider(provider);
-  await requireModel(models, model);
-  return models;
-}
-
-async function requireModel(models: MutableModels, model: string): Promise<void> {
-  const ref = modelRef(model);
-  if (models.getModel(ref.provider, ref.modelId)) return;
-  await models.refresh();
-  if (!models.getModel(ref.provider, ref.modelId)) throw new Error(`unknown model ${model}`);
 }

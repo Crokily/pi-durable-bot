@@ -10,6 +10,8 @@ import { readSecrets } from "./core/env-file.ts";
 // seconds, so a new folder starts a bot, a removed one stops it, and a changed bot.json applies while running.
 
 const SCAN_MS = 5_000;
+/** A bot that failed to start or to apply bot.json is tried again after this long (for example while the network is not up yet). */
+const RETRY_MS = 60_000;
 const binDir = join(dirname(fileURLToPath(import.meta.url)), "..", "bin");
 
 function print(bot: string | undefined) {
@@ -20,7 +22,9 @@ function print(bot: string | undefined) {
 
 const log = print(undefined);
 const running = new Map<string, { bot: Bot; text: string }>();
-const failed = new Map<string, string>();
+/** Bots whose bot.json could not be read (the error) or used (the bot.json text and when it failed). */
+const invalid = new Map<string, string>();
+const failed = new Map<string, { text: string; at: number }>();
 let scanning: Promise<void> = Promise.resolve();
 let stopping = false;
 
@@ -42,16 +46,23 @@ async function scan(): Promise<void> {
       read = readDefinition(paths.definition);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (failed.get(id) !== message) {
-        failed.set(id, message);
+      if (invalid.get(id) !== message) {
+        invalid.set(id, message);
         print(id)("bot.json is not valid; keeping the running definition", { error: message });
         await writeFile(paths.definitionError, `${message}\n`).catch(() => {});
       }
       continue;
     }
+    invalid.delete(id);
     const current = running.get(id);
-    if (current && current.text === read.text) continue;
-    if (failed.get(id) === read.text) continue;
+    if (current && current.text === read.text) {
+      // Back to the definition that runs: nothing to apply, and no error left.
+      failed.delete(id);
+      if (existsSync(paths.definitionError)) await unlink(paths.definitionError).catch(() => {});
+      continue;
+    }
+    const failure = failed.get(id);
+    if (failure && failure.text === read.text && Date.now() - failure.at < RETRY_MS) continue;
     try {
       if (current) {
         await current.bot.applyDefinition(read.definition);
@@ -65,8 +76,7 @@ async function scan(): Promise<void> {
       if (existsSync(paths.definitionError)) await unlink(paths.definitionError).catch(() => {});
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      // Try again only when bot.json changes.
-      failed.set(id, read.text);
+      failed.set(id, { text: read.text, at: Date.now() });
       print(id)(current ? "applying bot.json failed" : "bot start failed", { error: message });
       await writeFile(paths.definitionError, `${message}\n`).catch(() => {});
     }

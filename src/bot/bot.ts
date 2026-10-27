@@ -228,15 +228,13 @@ export class Bot implements WakeTarget {
     return this.#definition;
   }
 
-  /** Apply a changed bot.json while running. */
+  /** Apply a changed bot.json while running. The new definition counts only once every step worked, so a retry redoes all. */
   async applyDefinition(next: BotDefinition): Promise<void> {
     const before = this.#definition;
     if (before.model !== next.model) await requireModel(this.#models, next.model);
-    this.#definition = next;
     if (before.model !== next.model || before.thinking !== next.thinking) {
       await this.#agent.configure(modelRef(next.model), next.thinking);
     }
-    if (before.settings.fallbackWakeMinutes !== next.settings.fallbackWakeMinutes) await this.#timers.resetFallback();
     const old = new Map(before.channels.map((channel) => [channel.id, JSON.stringify(channel)]));
     const fresh = new Map(next.channels.map((channel) => [channel.id, JSON.stringify(channel)]));
     const nameChanged = before.name !== next.name;
@@ -244,15 +242,18 @@ export class Bot implements WakeTarget {
       if (fresh.get(channelId) !== config || nameChanged) await this.#gateway.removeChannel(channelId);
     }
     for (const channel of next.channels) {
-      if (old.get(channel.id) !== JSON.stringify(channel) || nameChanged) await this.#gateway.addChannel(await this.#loadChannel(channel));
+      const running = this.#gateway.channels.some((adapter) => adapter.id === channel.id);
+      if (!running) await this.#gateway.addChannel(await this.#loadChannel(channel, next.name));
     }
+    this.#definition = next;
+    if (before.settings.fallbackWakeMinutes !== next.settings.fallbackWakeMinutes) await this.#timers.resetFallback();
     this.#print("definition applied", { name: next.name, model: next.model, channels: next.channels.map((channel) => channel.id) });
   }
 
-  #loadChannel(config: ChannelConfig): Promise<ChannelAdapter> {
+  #loadChannel(config: ChannelConfig, botName = this.#definition.name): Promise<ChannelAdapter> {
     return loadChannel(config, {
       botDir: this.paths.dir,
-      botName: this.#definition.name,
+      botName,
       log: (message, data) => this.#print(`${config.id}: ${message}`, data),
     });
   }

@@ -222,16 +222,17 @@ class SlackChannel implements ChannelAdapter {
           place: await this.#placeInfo(channel),
           message: this.message(channel, inner.ts),
           ...(inner.thread_ts ? { thread: this.message(channel, inner.thread_ts) } : {}),
-          ...(author ? { person: await this.#personInfo(author, inner) } : {}),
           fromMe: author === this.#botUserId,
           raw: inner,
         };
+        const person = author ? { person: await this.#personInfo(author, inner) } : {};
         // A thread's first message, deleted while it has replies, stays as a tombstone.
-        if (inner.subtype === "tombstone") return [{ kind: "delete", ...common }];
+        if (inner.subtype === "tombstone") return [{ kind: "delete", ...common, ...person }];
         const edited = inner.text !== before?.text || inner.edited?.ts !== before?.edited?.ts;
+        // Not an edit: Slack changed the message (a link preview, the reply count). Nobody did it, so no person.
         if (!edited) return [{ kind: "update", ...common, ...files(inner) }];
         const translated = await this.#sdk!.translate(inner);
-        return [{ kind: "edit", ...common, text: translated.text, mentionsMe: translated.isMention === true, mentions: this.#mentions(inner), ...files(inner) }];
+        return [{ kind: "edit", ...common, ...person, text: translated.text, mentionsMe: translated.isMention === true, mentions: this.#mentions(inner), ...files(inner) }];
       }
       case "message_deleted": {
         const before = event.previous_message;
@@ -262,7 +263,6 @@ class SlackChannel implements ChannelAdapter {
             place: await this.#placeInfo(channel),
             message: this.message(channel, inner.ts),
             thread: this.message(channel, inner.thread_ts ?? inner.ts),
-            ...(author ? { person: await this.#personInfo(author, inner) } : {}),
             fromMe: author === this.#botUserId,
             raw: inner,
           },

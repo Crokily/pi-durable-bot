@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS gw_state (
 export const LOG_SCHEMA = `Times are Unix ms. Columns that hold an address (place, thread, message, person, to_address) hold the address strings you pass to send, react and pb.
 - gw_events(id, channel, kind, at, place, thread, message, person, from_me, mentions_me, text, raw, wake)
   Everything that happened, in order: kind is message, edit, delete, reaction_added, reaction_removed, join, leave, update (a change to a message that is not its text, for example a link preview), or another word the channel uses.
-  text: the message text for message and edit, the emoji for reactions. from_me = 1: done by you. raw: the platform's data (JSON), for details and for call.
+  text: the message text for message and edit, the emoji for reactions. from_me = 1: done by you (for update: a change to your own message). raw: the platform's data (JSON), for details and for call.
   wake: how the gateway handled the event: self (yours, no notice), log (only logged), mention, dm, relevant, jev_no (Jev saw no need), steer. NULL: not decided yet.
 - gw_messages(address, channel, place, thread, person, from_me, mentions_me, text, mentions, files, at, edited_at, deleted_at, send_id, raw)
   One row per message with its current text. thread: the thread the message is in; a message that starts a thread has its own address there.

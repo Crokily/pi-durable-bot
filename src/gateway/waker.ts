@@ -43,6 +43,8 @@ export class Waker {
   add(message: MessageRow & { channel_type: string }): void {
     const now = Date.now();
     const batch = this.#batches.get(message.channel);
+    // Recovery can offer a message twice (backfill, then the undecided list).
+    if (batch?.messages.some((queued) => queued.ts === message.ts)) return;
     if (batch) {
       clearTimeout(batch.timer);
       batch.messages.push(message);

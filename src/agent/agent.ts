@@ -49,7 +49,7 @@ export interface AgentOptions {
   personaFile?: string;
   paths: PromptPaths;
   turnoverRatio: number;
-  compactionReserveTokens: number;
+  compaction: { reserveTokens?: number; keepRecentTokens?: number; backgroundTokens?: number };
   log: (message: string, data?: Record<string, unknown>) => void;
 }
 
@@ -231,7 +231,7 @@ export class Agent implements AgentPort {
           afterFailedRun: "continue",
           retry: { maxRetries: 4 },
           // The fallback when the agent does not turn the page itself.
-          compaction: { reserveTokens: options.compactionReserveTokens },
+          compaction: options.compaction,
         },
         env: () => new NodeExecutionEnv({ cwd: paths.workspace }),
         onReport: (error, info) => options.log("pi report", { type: info.type, error: String(error) }),

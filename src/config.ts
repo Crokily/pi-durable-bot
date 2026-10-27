@@ -30,8 +30,8 @@ export interface BotConfig {
   jevThreshold: number;
   /** When context use passes this share of the window, the agent is told to write notes and turn the page. */
   turnoverRatio: number;
-  /** pi-durable compaction, the fallback: compact when fewer tokens than this are left in the window. */
-  compactionReserveTokens: number;
+  /** pi-durable compaction, the fallback when the agent does not turn the page. Fields as in pi-durable's CompactionPolicy. */
+  compaction: { reserveTokens?: number; keepRecentTokens?: number; backgroundTokens?: number };
   /** Patrol interval when the agent has not set one. */
   defaultPatrolMinutes: number;
 }
@@ -44,7 +44,7 @@ const DEFAULTS = {
   debounceMaxMs: 20_000,
   jevThreshold: 0.5,
   turnoverRatio: 0.6,
-  compactionReserveTokens: 32_768,
+  compaction: { reserveTokens: 32_768 },
   defaultPatrolMinutes: 120,
 } satisfies Partial<BotConfig>;
 

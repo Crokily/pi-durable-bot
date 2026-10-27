@@ -76,7 +76,7 @@ async function startBot(config: BotConfig): Promise<RunningBot> {
     personaFile: config.persona,
     paths,
     turnoverRatio: config.turnoverRatio,
-    compactionReserveTokens: config.compactionReserveTokens,
+    compaction: config.compaction,
     log,
   });
   await gateway.start(agent);

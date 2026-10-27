@@ -1,0 +1,14 @@
+{
+  "bots": [
+    {
+      "id": "personal",
+      "name": "coly",
+      "slackEnv": "slack.env",
+      "jevEnv": "jev.env",
+      "model": "openai/gpt-6.1-sol",
+      "thinking": "medium",
+      "persona": "persona-personal.md",
+      "responsibilities": "我是 coly，用户的个人助理。我负责：回答用户的问题，帮用户处理个人事务，跟进用户交给我的事情。"
+    }
+  ]
+}

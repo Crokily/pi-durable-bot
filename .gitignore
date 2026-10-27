@@ -5,3 +5,7 @@ dist/
 data/
 *.sqlite
 *.sqlite-*
+
+# local scratch files
+scratch/
+.claude/

@@ -108,6 +108,28 @@ export class Bot implements WakeTarget {
 
     // One SQLite file: gateway (gw_), bot (bot_) and pi-durable (pi_) tables on one connection.
     const sql = (await openNodeSqliteDatabase(paths.db)) as unknown as Sql & { close(): Promise<void> };
+    let started: Bot | undefined;
+    let agent: Agent | undefined;
+    try {
+      started = await Bot.#open(id, paths, sql, definition, env, print, (opened) => (agent = opened));
+      return started;
+    } finally {
+      if (!started) {
+        await agent?.close().catch(() => {});
+        await sql.close().catch(() => {});
+      }
+    }
+  }
+
+  static async #open(
+    id: string,
+    paths: BotPaths,
+    sql: Sql & { close(): Promise<void> },
+    definition: BotDefinition,
+    env: BotEnvironment,
+    print: Print,
+    opened: (agent: Agent) => void,
+  ): Promise<Bot> {
     const log = await MessageLog.open(sql);
     await sql.exec(WAKES_SCHEMA);
     const storage = await SqliteStorage.open(sql as never, { prefix: "pi_" });
@@ -162,6 +184,7 @@ export class Bot implements WakeTarget {
       },
       log: print,
     });
+    opened(agent);
 
     bot = new Bot({ id, paths, definition, env, print, sql, gateway, timers, agent, models });
     // Crash test: with this file in the bot folder, the process dies right after the platform accepts the next send,
@@ -179,9 +202,15 @@ export class Bot implements WakeTarget {
     }
     const adapters = await Promise.all(definition.channels.map((channel) => bot!.#loadChannel(channel)));
     await gateway.start(bot, adapters);
-    agent.resume();
-    await timers.start();
-    await bot.#control.start();
+    try {
+      agent.resume();
+      await timers.start();
+      await bot.#control.start();
+    } catch (error) {
+      await timers.stop();
+      await gateway.stop();
+      throw error;
+    }
     print("bot started", { name: definition.name, model: definition.model, channels: adapters.map((adapter) => adapter.id) });
     return bot;
   }

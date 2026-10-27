@@ -66,6 +66,7 @@ export class Bot implements WakeTarget {
   readonly #gateway: Gateway;
   readonly #timers: Timers;
   readonly #agent: Agent;
+  readonly #models: MutableModels;
   readonly #control: ControlServer;
   /** Which place each wake submission is about, for "is the bot working on this place". */
   readonly #submissionPlaces = new Map<string, Address>();
@@ -82,6 +83,7 @@ export class Bot implements WakeTarget {
     gateway: Gateway;
     timers: Timers;
     agent: Agent;
+    models: MutableModels;
   }) {
     this.id = init.id;
     this.paths = init.paths;
@@ -92,6 +94,7 @@ export class Bot implements WakeTarget {
     this.#gateway = init.gateway;
     this.#timers = init.timers;
     this.#agent = init.agent;
+    this.#models = init.models;
     this.#control = new ControlServer(init.paths.socket, this.#routes());
     this.#agent.onRunChange((inputs) => {
       if (!inputs) this.#touched.clear();
@@ -155,7 +158,7 @@ export class Bot implements WakeTarget {
       log: print,
     });
 
-    bot = new Bot({ id, paths, definition, env, print, sql, gateway, timers, agent });
+    bot = new Bot({ id, paths, definition, env, print, sql, gateway, timers, agent, models });
     // Crash test: with this file in the bot folder, the process dies right after the platform accepts the next send,
     // before the outbox records it. The next start must find that message instead of sending it again.
     gateway.outbox.afterPlatformSend = (sendId) => {
@@ -194,10 +197,12 @@ export class Bot implements WakeTarget {
   /** Apply a changed bot.json while running. */
   async applyDefinition(next: BotDefinition): Promise<void> {
     const before = this.#definition;
+    if (before.model !== next.model) await requireModel(this.#models, next.model);
     this.#definition = next;
     if (before.model !== next.model || before.thinking !== next.thinking) {
       await this.#agent.configure(modelRef(next.model), next.thinking);
     }
+    if (before.settings.fallbackWakeMinutes !== next.settings.fallbackWakeMinutes) await this.#timers.resetFallback();
     const old = new Map(before.channels.map((channel) => [channel.id, JSON.stringify(channel)]));
     const fresh = new Map(next.channels.map((channel) => [channel.id, JSON.stringify(channel)]));
     const nameChanged = before.name !== next.name;
@@ -337,10 +342,13 @@ async function openModels(paths: BotPaths, model: string): Promise<MutableModels
     modelsStore: new FileModelsStore(paths.modelsStore),
   });
   for (const provider of builtinProviders()) models.setProvider(provider);
-  const ref = modelRef(model);
-  if (!models.getModel(ref.provider, ref.modelId)) {
-    await models.refresh();
-    if (!models.getModel(ref.provider, ref.modelId)) throw new Error(`unknown model ${model}`);
-  }
+  await requireModel(models, model);
   return models;
+}
+
+async function requireModel(models: MutableModels, model: string): Promise<void> {
+  const ref = modelRef(model);
+  if (models.getModel(ref.provider, ref.modelId)) return;
+  await models.refresh();
+  if (!models.getModel(ref.provider, ref.modelId)) throw new Error(`unknown model ${model}`);
 }

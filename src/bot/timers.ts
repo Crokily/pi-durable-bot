@@ -80,6 +80,13 @@ export class Timers {
     return true;
   }
 
+  /** The fallback interval changed: put the pending fallback wake at the new interval from now. */
+  async resetFallback(): Promise<void> {
+    await this.#sql.run("UPDATE bot_timers SET state = 'replaced' WHERE state = 'pending' AND set_by = 'fallback'");
+    await this.#ensureFallback();
+    this.#schedule();
+  }
+
   pending(): Promise<Timer[]> {
     return this.#sql.all("SELECT id, due_at, note, set_by, created_at FROM bot_timers WHERE state = 'pending' ORDER BY due_at");
   }

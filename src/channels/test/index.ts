@@ -57,9 +57,12 @@ class TestChannel implements ChannelAdapter {
     return { address: `${this.id}:@${this.#me}`, name: this.#env.botName };
   }
 
-  /** Read the platform from its start. The inbox drops what it already has, so this also fills what was missed. */
+  /**
+   * Read the platform from its start, so what came while the gateway was down is filled in; the inbox drops what it
+   * already has. On a bot's first start there was no "while down": it starts at the end, as the Slack adapter does.
+   */
   async start(sink: ChannelSink): Promise<void> {
-    this.#offset = 0;
+    this.#offset = sink.lastAlive() === undefined && existsSync(this.#file) ? (await stat(this.#file)).size : 0;
     const poll = () => {
       this.#reading = this.#reading.then(() => this.#read(sink)).catch((error) => sink.log("read failed", { error: String(error) }));
     };

@@ -3,9 +3,9 @@ import type { TelemetrySpan } from "@earendil-works/pi-telemetry";
 import type { Address, ChannelAdapter, ChannelSink } from "../core/channel.ts";
 import type { Sql } from "../core/sql.ts";
 import type { WakeTarget } from "../core/wake.ts";
-import { Channels } from "./channels.ts";
+import { Channels, platform } from "./channels.ts";
 import { GatewayConfig, type GatewayOptions } from "./config.ts";
-import { ChannelError, type LogError } from "./errors.ts";
+import type { LogError } from "./errors.ts";
 import { Inbox } from "./inbox.ts";
 import { MessageLog } from "./log.ts";
 import { Outbox, type OutboxHooks, type SendResult } from "./outbox.ts";
@@ -224,7 +224,7 @@ export class Gateway {
     return this.#run(
       Effect.gen({ self: this }, function* () {
         const adapter = yield* this.#channels.adapterFor(message);
-        yield* Effect.tryPromise({ try: () => adapter.react(message, emoji, remove), catch: (cause) => ChannelError.from(adapter.id, cause) });
+        yield* platform(adapter.id, () => adapter.react(message, emoji, remove));
       }).pipe(Effect.withSpan("react", { attributes: { message, emoji, remove }, ...(parent ? { parent } : {}) })),
     );
   }
@@ -234,7 +234,7 @@ export class Gateway {
     return this.#run(
       Effect.gen({ self: this }, function* () {
         const adapter = yield* this.#channels.get(channel);
-        return yield* Effect.tryPromise({ try: () => adapter.call(method, params), catch: (cause) => ChannelError.from(adapter.id, cause) });
+        return yield* platform(adapter.id, () => adapter.call(method, params));
       }).pipe(Effect.withSpan("call", { attributes: { channel, method }, ...(parent ? { parent } : {}) })),
     );
   }

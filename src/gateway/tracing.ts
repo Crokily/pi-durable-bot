@@ -4,7 +4,9 @@ import { OtlpSerialization, OtlpTracer } from "effect/observability";
 import { readFileSync } from "node:fs";
 import type { Sql } from "../core/sql.ts";
 import { GatewayConfig } from "./config.ts";
-import { failureText, LogError } from "./errors.ts";
+import { failureText } from "./errors.ts";
+import { db } from "./log.ts";
+import { LINK } from "./telemetry.ts";
 
 /**
  * Every span of the gateway, in the bot's SQLite file. `pots trace` shows them; the agent can read them with SQL.
@@ -147,7 +149,6 @@ export function tracingLayer(sql: Sql, bot: string) {
     Effect.gen(function* () {
       const below = yield* Tracer.Tracer;
       const { print } = yield* GatewayConfig;
-      const db = <A>(run: () => Promise<A>) => Effect.tryPromise({ try: run, catch: LogError.from });
       yield* db(() => sql.exec(SCHEMA));
       let ended: EndedSpan[] = [];
 
@@ -227,7 +228,11 @@ export function tracingLayer(sql: Sql, bot: string) {
 export class WakeSpans extends Context.Service<
   WakeSpans,
   {
-    remember(submission: string, span: Tracer.AnySpan): void;
+    /**
+     * A wake took this submission: the agent's sends for it join the wake's trace, and the wake links to the agent's run,
+     * also when that run started before a crash and goes on in its first trace.
+     */
+    remember(submission: string, wake: Tracer.AnySpan, run: Tracer.AnySpan | undefined): void;
     /** The spans of the wakes with these submission IDs that are known, in the same order. */
     find(submissions: readonly string[]): Effect.Effect<Tracer.AnySpan[]>;
   }
@@ -246,10 +251,11 @@ export class WakeSpans extends Context.Service<
           Effect.orElseSucceed(() => []),
         );
       return WakeSpans.of({
-        remember: (submission, span) => {
+        remember: (submission, wake, run) => {
           spans.delete(submission);
-          spans.set(submission, span);
+          spans.set(submission, wake);
           if (spans.size > REMEMBERED_WAKES) spans.delete(spans.keys().next().value!);
+          if (run && wake._tag === "Span") wake.addLinks([{ span: run, attributes: { [LINK]: "run" } }]);
         },
         find: (submissions) =>
           Effect.map(

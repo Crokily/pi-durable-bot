@@ -216,7 +216,7 @@ export class MessageLog extends Context.Service<
 }
 
 /** A statement on the shared connection. */
-const db = <A>(run: () => Promise<A>): Effect.Effect<A, LogError> => Effect.tryPromise({ try: run, catch: LogError.from });
+export const db = <A>(run: () => Promise<A>): Effect.Effect<A, LogError> => Effect.tryPromise({ try: run, catch: LogError.from });
 
 /** A statement that needs the current time. */
 const dbAt = <A>(run: (now: number) => Promise<A>): Effect.Effect<A, LogError> => Effect.flatMap(Clock.currentTimeMillis, (now) => db(() => run(now)));

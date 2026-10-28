@@ -3,6 +3,10 @@ import type { Address, ChannelAdapter, ChannelSink } from "../core/channel.ts";
 import { GatewayConfig } from "./config.ts";
 import { ChannelError, message, NoChannelForAddress, UnknownChannel } from "./errors.ts";
 
+/** Something an adapter does on its platform. A failure is a ChannelError of its channel. */
+export const platform = <A>(channel: string, run: () => Promise<A>): Effect.Effect<A, ChannelError> =>
+  Effect.tryPromise({ try: run, catch: (cause) => ChannelError.from(channel, cause) });
+
 /** How long to wait before the next attempt to connect a channel: 5 s more each time, at most a minute. */
 const reconnectDelay = (attempt: number) => Math.min(60_000, 5_000 * attempt);
 
@@ -38,7 +42,7 @@ export class Channels extends Context.Service<
       const tasks = yield* FiberMap.make<string>();
 
       const connectOne = (adapter: ChannelAdapter, sink: ChannelSink) =>
-        Effect.tryPromise({ try: () => adapter.start(sink), catch: (cause) => ChannelError.from(adapter.id, cause) }).pipe(
+        platform(adapter.id, () => adapter.start(sink)).pipe(
           Effect.tap(() => Effect.sync(() => print("channel connected", { channel: adapter.id, me: adapter.me?.address }))),
           Effect.as(true),
           Effect.catch((error) =>
@@ -51,7 +55,7 @@ export class Channels extends Context.Service<
         );
 
       const backfill = (adapter: ChannelAdapter, sink: ChannelSink) =>
-        Effect.tryPromise({ try: () => adapter.backfill(sink), catch: (cause) => ChannelError.from(adapter.id, cause) }).pipe(
+        platform(adapter.id, () => adapter.backfill(sink)).pipe(
           Effect.catch((error) => Effect.sync(() => print("backfill failed", { channel: adapter.id, error: error.message }))),
           Effect.withSpan("channel.backfill", { attributes: { channel: adapter.id } }),
         );
@@ -102,7 +106,7 @@ export class Channels extends Context.Service<
             if (!adapter) return;
             adapters.delete(id);
             yield* FiberMap.remove(tasks, id);
-            yield* Effect.tryPromise({ try: () => adapter.stop(), catch: (cause) => ChannelError.from(id, cause) });
+            yield* platform(id, () => adapter.stop());
           }),
         stop: Effect.gen(function* () {
           yield* FiberMap.clear(tasks);

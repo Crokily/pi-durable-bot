@@ -9,7 +9,7 @@ import { MemoryChannel, SETTINGS } from "./support/core.ts";
 
 // The Gateway class as the bot uses it: promises in, promises out.
 
-const target: WakeTarget = { name: "Coworker", isWorkingOn: () => false, deliver: async () => "submission", responsibilities: async () => "" };
+const target: WakeTarget = { name: "Coworker", isWorkingOn: () => false, deliver: async () => ({ submission: "submission" }), responsibilities: async () => "" };
 
 async function until(check: () => boolean): Promise<void> {
   for (let tries = 0; !check(); tries++) {
@@ -26,7 +26,7 @@ async function openGateway() {
     judge: () => undefined,
     settings: () => SETTINGS,
     fallbackWakeMinutes: () => 120,
-    fireTimer: async () => "timer",
+    fireTimer: async () => ({ submission: "timer" }),
     print: (message) => prints.push(message),
   });
   return { sql, gateway, prints };
@@ -72,7 +72,7 @@ describe("Gateway", () => {
     const { sql, gateway } = await openGateway();
     const channel = new MemoryChannel();
     const wakes: string[] = [];
-    await gateway.start({ ...target, deliver: async (wake) => (wakes.push(wake.id), "submission-1") }, [channel]);
+    await gateway.start({ ...target, deliver: async (wake) => (wakes.push(wake.id), { submission: "submission-1" }) }, [channel]);
 
     await channel.sink!.receive("e1", { id: "e1", place: "general", text: "@bot hello", person: "alice" });
     await until(() => wakes.length === 1);
@@ -108,7 +108,7 @@ describe("Gateway", () => {
     await gateway.stop();
     await sql.run("INSERT INTO gw_spans (span_id, trace_id, name, start_at, end_at, status) VALUES ('old', 'old', 'wake', ?, ?, 'ok')", Date.now() - 8 * 86_400_000, Date.now());
     await sql.run("INSERT INTO gw_spans (span_id, trace_id, name, start_at, end_at, status) VALUES ('new', 'new', 'wake', ?, ?, 'ok')", Date.now() - 6 * 86_400_000, Date.now());
-    const again = await Gateway.open(sql, { bot: "coworker", judge: () => undefined, settings: () => SETTINGS, fallbackWakeMinutes: () => 120, fireTimer: async () => "t", print: () => {} });
+    const again = await Gateway.open(sql, { bot: "coworker", judge: () => undefined, settings: () => SETTINGS, fallbackWakeMinutes: () => 120, fireTimer: async () => ({ submission: "t" }), print: () => {} });
     await again.stop();
     expect((await sql.all<{ span_id: string }>("SELECT span_id FROM gw_spans WHERE span_id IN ('old', 'new')")).map((row) => row.span_id)).toEqual(["new"]);
     await sql.close();
@@ -134,7 +134,7 @@ describe("Gateway", () => {
     try {
       const { sql, gateway } = await openGateway();
       const channel = new MemoryChannel();
-      await gateway.start({ ...target, deliver: async () => "submission-1" }, [channel]);
+      await gateway.start({ ...target, deliver: async () => ({ submission: "submission-1" }) }, [channel]);
       await channel.sink!.receive("e1", { id: "e1", place: "general", text: "@bot hello", person: "alice" });
       await sleep(3_200);
       await gateway.send("tool:1", "mem:#general", "on it", ["submission-1"]);
@@ -160,12 +160,12 @@ describe("Gateway", () => {
     const { sql, gateway } = await openGateway();
     const channel = new MemoryChannel();
     let woken = false;
-    await gateway.start({ ...target, deliver: async () => ((woken = true), "submission-7") }, [channel]);
+    await gateway.start({ ...target, deliver: async () => ((woken = true), { submission: "submission-7" }) }, [channel]);
     await channel.sink!.receive("e1", { id: "e1", place: "general", text: "@bot hello", person: "alice" });
     await until(() => woken);
     await gateway.stop();
 
-    const again = await Gateway.open(sql, { bot: "coworker", judge: () => undefined, settings: () => SETTINGS, fallbackWakeMinutes: () => 120, fireTimer: async () => "t", print: () => {} });
+    const again = await Gateway.open(sql, { bot: "coworker", judge: () => undefined, settings: () => SETTINGS, fallbackWakeMinutes: () => 120, fireTimer: async () => ({ submission: "t" }), print: () => {} });
     await again.start(target, [new MemoryChannel()]);
     await again.send("tool:9", "mem:#general", "after the restart", ["submission-7"]);
     await again.stop();

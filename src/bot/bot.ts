@@ -13,7 +13,7 @@ import type { Address, ChannelAdapter, ChannelConfig } from "../core/channel.ts"
 import { SECRETS_DIR } from "../core/home.ts";
 import type { Judge } from "../core/judge.ts";
 import type { Sql } from "../core/sql.ts";
-import type { PlaceWake, WakeTarget } from "../core/wake.ts";
+import type { Delivered, PlaceWake, WakeTarget } from "../core/wake.ts";
 import { Gateway, type TimersHandle } from "../gateway/gateway.ts";
 import { ControlServer } from "./control.ts";
 import { type BotDefinition, type BotPaths, botPaths } from "./definition.ts";
@@ -316,7 +316,7 @@ export class Bot implements WakeTarget {
     return inputs.some((submission) => this.#submissionPlaces.get(submission) === place);
   }
 
-  async deliver(wake: PlaceWake, caller?: TelemetrySpan): Promise<string> {
+  async deliver(wake: PlaceWake, caller?: TelemetrySpan): Promise<Delivered> {
     const text = renderPlaceWake(wake, await this.#agent.contextStatus());
     return this.#submit(wake.id, wake.reason, wake.place.address, text, wake.reason === "steer", caller);
   }
@@ -325,14 +325,13 @@ export class Bot implements WakeTarget {
     return readFile(this.paths.responsibilities, "utf8").catch(() => "");
   }
 
-  async #deliverTimer(timer: Timer, caller?: TelemetrySpan): Promise<string> {
+  async #deliverTimer(timer: Timer, caller?: TelemetrySpan): Promise<Delivered> {
     const text = renderTimerWake(timer, await this.#agent.contextStatus(), this.#definition.settings.fallbackWakeMinutes);
     return this.#submit(`timer:${timer.id}`, timer.set_by === "fallback" ? "fallback" : "timer", undefined, text, false, caller);
   }
 
-  /** Returns the submission ID. */
-  async #submit(id: string, reason: string, place: Address | undefined, text: string, steer: boolean, caller?: TelemetrySpan): Promise<string> {
-    const submission = await this.#agent.submit({ id, text, steer, data: { reason, ...(place ? { place } : {}) }, caller });
+  async #submit(id: string, reason: string, place: Address | undefined, text: string, steer: boolean, caller?: TelemetrySpan): Promise<Delivered> {
+    const { id: submission, trace } = await this.#agent.submit({ id, text, steer, data: { reason, ...(place ? { place } : {}) }, caller });
     if (place) this.#submissionPlaces.set(submission, place);
     await this.#sql.run(
       "INSERT OR IGNORE INTO bot_wakes (id, at, reason, place, text, submission) VALUES (?, ?, ?, ?, ?, ?)",
@@ -343,7 +342,7 @@ export class Bot implements WakeTarget {
       text,
       submission,
     );
-    return submission;
+    return { submission, run: trace };
   }
 
   // ---- Actions, for the agent's tools and the command line ----

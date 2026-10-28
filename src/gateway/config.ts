@@ -1,6 +1,7 @@
 import type { TelemetrySpan } from "@earendil-works/pi-telemetry";
 import { Context } from "effect";
 import type { Judge } from "../core/judge.ts";
+import type { Delivered } from "../core/wake.ts";
 import type { Timer } from "./timers.ts";
 import type { WakerSettings } from "./waker.ts";
 
@@ -15,8 +16,8 @@ export interface GatewayOptions {
   readonly settings: () => WakerSettings;
   /** When the agent has no timed wake set, it is woken this often. */
   readonly fallbackWakeMinutes: () => number;
-  /** Hand a due timer to the bot. Resolves with the submission ID once the wake is durable. caller: the wake's span. */
-  readonly fireTimer: (timer: Timer, caller?: TelemetrySpan) => Promise<string>;
+  /** Hand a due timer to the bot. Resolves once the wake is durable. caller: the wake's span. */
+  readonly fireTimer: (timer: Timer, caller?: TelemetrySpan) => Promise<Delivered>;
   readonly print: Print;
 }
 

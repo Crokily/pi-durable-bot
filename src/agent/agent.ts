@@ -19,7 +19,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
-import type { TelemetryContext, TelemetrySpan } from "@earendil-works/pi-telemetry";
+import type { TelemetryCarrier, TelemetryContext, TelemetrySpan } from "@earendil-works/pi-telemetry";
 import type { Sql } from "../core/sql.ts";
 import { modelRef, requireModel } from "./models.ts";
 
@@ -228,10 +228,14 @@ export class Agent {
 
   /**
    * Hand text to the agent. Busy: steer joins the running work after the current tool round; otherwise it waits for
-   * the run to end. Idle: starts a run. The same id is one submission. Returns the submission ID. caller: the span of
-   * what woke the agent; pi-durable links the submission to it.
+   * the run to end. Idle: starts a run. The same id is one submission. caller: the span of what woke the agent;
+   * pi-durable links the submission to it. Returns the submission ID and its stored trace context, which is the first
+   * one for a submission made before.
    */
-  async submit(input: { id: string; text: string; steer: boolean; data?: JsonValue; caller?: TelemetrySpan | undefined }): Promise<string> {
+  async submit(input: { id: string; text: string; steer: boolean; data?: JsonValue; caller?: TelemetrySpan | undefined }): Promise<{
+    id: string;
+    trace?: TelemetryCarrier;
+  }> {
     const submission = await this.#root.submit(
       {
         type: "input",
@@ -242,7 +246,8 @@ export class Agent {
       },
       input.caller ? withTelemetry(input.caller, context) : context,
     );
-    return String(submission.id);
+    const { trace } = await submission.status(context);
+    return { id: String(submission.id), ...(trace ? { trace } : {}) };
   }
 
   /** Why a run with these submissions got no answer, such as a missing login; undefined when they were answered. */

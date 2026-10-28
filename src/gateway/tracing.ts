@@ -113,7 +113,13 @@ class StoredSpan implements Tracer.Span {
       status: !failed ? "ok" : interrupted ? "interrupted" : "error",
       error: failed && !interrupted ? failureText(Cause.squash(exit.cause)) : null,
       attributes: json(Object.fromEntries(this.attributes)),
-      links: json(this.links.map((link) => ({ trace_id: link.span.traceId, span_id: link.span.spanId }))),
+      links: json(
+        this.links.map((link) => ({
+          trace_id: link.span.traceId,
+          span_id: link.span.spanId,
+          ...(Object.keys(link.attributes).length > 0 ? { attributes: link.attributes } : {}),
+        })),
+      ),
     });
   }
 

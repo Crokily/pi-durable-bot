@@ -69,7 +69,9 @@ export const traceCommand = Command.make(
           .flatMap((span) => links(span))
           .flatMap((id) => all("SELECT * FROM gw_spans WHERE span_id = ? AND name = 'wake'", id))[0];
       const parts = wake ? [trace(wake.trace_id), ...runs(all, wake).map(trace)] : [start];
-      const events = (wake ? links(wake) : []).flatMap((id) => all("SELECT * FROM gw_spans WHERE span_id = ?", id)).flatMap((span) => trace(span.trace_id));
+      const events = (wake ? linkList(wake).filter((link) => !isRun(link)) : [])
+        .flatMap((link) => all("SELECT * FROM gw_spans WHERE span_id = ?", link.span_id))
+        .flatMap((span) => trace(span.trace_id));
       yield* Console.log(view(parts, events));
     }).pipe(Effect.scoped),
 ).pipe(Command.withDescription("Show what the gateway did: the last wakes, or one wake from its events to the messages sent for it."));
@@ -78,21 +80,37 @@ function attributes(span: Span): Record<string, unknown> {
   return span.attributes ? (JSON.parse(span.attributes) as Record<string, unknown>) : {};
 }
 
-function links(span: Span): string[] {
-  return span.links ? (JSON.parse(span.links) as { span_id: string }[]).map((link) => link.span_id) : [];
+interface Link {
+  trace_id: string;
+  span_id: string;
+  attributes?: Record<string, unknown>;
 }
 
+function linkList(span: Span): Link[] {
+  return span.links ? (JSON.parse(span.links) as Link[]) : [];
+}
+
+function links(span: Span): string[] {
+  return linkList(span).map((link) => link.span_id);
+}
+
+/** A wake links to the events it is about and to the agent's run for it (LINK in src/gateway/telemetry.ts). */
+const isRun = (link: Link) => link.attributes?.["pots.link"] === "run";
+
 /**
- * The traces of the agent's runs for a wake: pi-durable starts a trace for each submission, linked to the wake; a
- * submission that steers a running run links to that run, and a run for several submissions links to the others.
+ * The traces of the agent's runs for a wake. The wake links to its run's stored trace context, which stays the first
+ * one when the wake is delivered again after a crash. Besides: pi-durable's submission span and the agent's sends link
+ * to the wake; a submission that steers a running run links to that run, and a run for several submissions links to
+ * the others.
  */
 function runs(all: (sql: string, ...params: (string | number)[]) => Span[], wake: Span): string[] {
-  const traces = new Set<string>();
+  const traces = new Set(linkList(wake).filter(isRun).map((link) => link.trace_id));
   const linking = (id: string) => all("SELECT * FROM gw_spans WHERE links LIKE ?", `%"span_id":"${id}"%`);
-  for (const submit of linking(wake.span_id).filter((span) => span.name === "pi.durable.submit")) {
-    traces.add(submit.trace_id);
-    for (const id of links(submit)) for (const span of all("SELECT * FROM gw_spans WHERE span_id = ?", id)) traces.add(span.trace_id);
-    for (const span of linking(submit.span_id)) traces.add(span.trace_id);
+  for (const span of linking(wake.span_id)) {
+    traces.add(span.trace_id);
+    if (span.name !== "pi.durable.submit") continue;
+    for (const link of linkList(span)) traces.add(link.trace_id);
+    for (const linked of linking(span.span_id)) traces.add(linked.trace_id);
   }
   traces.delete(wake.trace_id);
   return [...traces];

@@ -22,7 +22,12 @@ export interface PiTelemetry extends TelemetryContext {
   view(span: Tracer.AnySpan): TelemetrySpan;
   /** The gateway span behind a pi context, if it is one of ours. */
   spanOf(context: TelemetryContext | undefined): Tracer.AnySpan | undefined;
+  /** The span a stored trace context names, such as the agent's run for a wake. */
+  spanOfCarrier(carrier: TelemetryCarrier | undefined): Tracer.AnySpan | undefined;
 }
+
+/** What a link of a wake points to: the events it is about, or the agent's run for it. */
+export const LINK = "pots.link";
 
 /** The Effect span behind each pi context this module made: spans, extracted parents and views. */
 const behind = new WeakMap<object, Tracer.AnySpan>();
@@ -145,6 +150,7 @@ export function piTelemetry(tracer: Tracer.Tracer): PiTelemetry {
       return context;
     },
     spanOf: (context) => (context ? behind.get(context) : undefined),
+    spanOfCarrier: (carrier) => behind.get(propagation.extract(carrier)),
   };
   return root;
 }

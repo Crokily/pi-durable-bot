@@ -169,6 +169,14 @@ describe("crashes and restarts", { timeout: 90_000 }, () => {
     expect(gateway.sent()).toHaveLength(1);
     expect(gateway.query<{ id: string }>("SELECT id FROM bot_wakes").map((row) => row.id)).toEqual([`mention:test:#general:1`]);
     expect(gateway.query("SELECT * FROM gw_pending_wakes")).toEqual([]);
+
+    // The wake delivered again after the restart leads to the agent's run, which went on in its first trace.
+    await gateway.stop();
+    expect(gateway.pots("trace")).toMatch(/mention\s+test:#general\s+1 event\s+sent 1\s+model \d+×/);
+    const trace = gateway.pots("trace", "mention:test:#general:1");
+    expect(trace).toMatch(/^agent run, trace /m);
+    expect(trace).toMatch(/─ model fake\/coworker, 100 in, 10 out, toolUse/);
+    expect(trace).toMatch(/└─ send send=tool:\d+ .*result=sent/);
   });
 
   it("finishes the agent's work after a stop that came while the agent and the judge were waiting for the model", async () => {

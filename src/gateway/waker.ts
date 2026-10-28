@@ -5,7 +5,7 @@ import type { PlaceWake, PlaceWakeReason, WakeEvent, WakeTarget } from "../core/
 import { GatewayConfig } from "./config.ts";
 import { DeliverError, failureText, JudgeError, type LogError, message, NoWakeTarget } from "./errors.ts";
 import { type LoggedMessage, MessageLog, type UndecidedEvent } from "./log.ts";
-import { Telemetry } from "./telemetry.ts";
+import { LINK, Telemetry } from "./telemetry.ts";
 import { WakeSpans } from "./tracing.ts";
 
 export interface WakerSettings {
@@ -76,13 +76,18 @@ export class Waker extends Context.Service<
         Effect.gen(function* () {
           const span = yield* Effect.currentSpan.pipe(Effect.option);
           const caller = Option.isSome(span) ? telemetry.view(span.value) : undefined;
-          const submission = yield* Effect.tryPromise({
+          const { submission, run } = yield* Effect.tryPromise({
             try: () => bot.deliver(wake, caller),
             catch: (cause) => new DeliverError({ message: message(cause), cause }),
           }).pipe(Effect.withSpan("wake.deliver", { attributes: { wake: wake.id } }));
           hooks.afterDeliver?.(wake.id);
           yield* log.wakeDelivered(wake.id);
-          if (Option.isSome(span)) wakeSpans.remember(submission, span.value);
+          if (Option.isSome(span)) {
+            wakeSpans.remember(submission, span.value);
+            // The agent's run, also when it started before a crash and goes on in its first trace.
+            const runSpan = telemetry.spanOfCarrier(run);
+            if (runSpan && span.value._tag === "Span") span.value.addLinks([{ span: runSpan, attributes: { [LINK]: "run" } }]);
+          }
           yield* Effect.annotateCurrentSpan({ reason: wake.reason, wake: wake.id, submission });
           config.print("wake", { reason: wake.reason, place: wake.place.address, events: wake.events.length });
         });
@@ -127,7 +132,7 @@ export class Waker extends Context.Service<
           if (bot.isWorkingOn(place.address)) return yield* deliver("steer", "steer");
           yield* log.setWake(ids, "judge_no");
           yield* Effect.annotateCurrentSpan({ reason: "judge_no" });
-        }).pipe(Effect.withSpan("wake", { root: true, links: links.map((span) => ({ span, attributes: {} })) }));
+        }).pipe(Effect.withSpan("wake", { root: true, links: links.map((span) => ({ span, attributes: { [LINK]: "event" } })) }));
 
       const askJudge = (judge: Judge, bot: WakeTarget, place: PlaceInfo, events: UndecidedEvent[], settings: WakerSettings) =>
         Effect.gen(function* () {

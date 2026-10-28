@@ -38,7 +38,7 @@ export class Recorder {
       isWorkingOn: (place) => this.working.has(place),
       deliver: async (wake) => {
         this.wakes.push({ wake, at: this.now() });
-        return `submission-${this.wakes.length}`;
+        return { submission: `submission-${this.wakes.length}` };
       },
       responsibilities: async () => "pricing",
     };
@@ -69,7 +69,7 @@ export const withCore = <A, E, R>(options: CoreOptions, body: (recorder: Recorde
       fireTimer: async (timer) => {
         if (options.failTimer?.(timer)) throw new Error("the bot is busy");
         recorder.timers.push({ timer, at: recorder.now() });
-        return `timer-${timer.id}`;
+        return { submission: `timer-${timer.id}` };
       },
       print: (message, data) => recorder.prints.push({ message, ...(data ? { data } : {}) }),
     };

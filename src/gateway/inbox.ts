@@ -1,6 +1,6 @@
 import { Cause, Context, Deferred, Effect, FiberHandle, Layer, Option, Queue, Schema, type Tracer } from "effect";
 import { Happening } from "../core/channel.ts";
-import { Channels } from "./channels.ts";
+import { Channels, platform } from "./channels.ts";
 import { GatewayConfig } from "./config.ts";
 import { BadHappening, ChannelError, failureText, type LogError } from "./errors.ts";
 import { MessageLog } from "./log.ts";
@@ -60,7 +60,7 @@ export class Inbox extends Context.Service<
         Effect.gen(function* () {
           const adapter = channels.running(channel);
           if (!adapter) return yield* Effect.fail(ChannelError.from(channel, `channel ${channel} is not running`));
-          const translated = yield* Effect.tryPromise({ try: () => adapter.translate(raw), catch: (cause) => ChannelError.from(channel, cause) });
+          const translated = yield* platform(channel, () => adapter.translate(raw));
           const happenings = yield* decodeHappenings(withoutNulls(translated)).pipe(
             Effect.mapError((error) => new BadHappening({ message: `${channel} gave a happening that does not fit: ${error.message}`, channel })),
           );

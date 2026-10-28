@@ -48,10 +48,11 @@ export const traceCommand = Command.make(
         return yield* Effect.fail(userError(`bot ${id} has no traces yet`));
       }
       const trace = (id: string) => all("SELECT * FROM gw_spans WHERE trace_id = ? ORDER BY start_at, end_at", id);
+      const linking = linkingSpans(all);
       if (Option.isNone(input.id)) {
         const wakes = all("SELECT * FROM gw_spans WHERE name = 'wake' AND parent_id IS NULL ORDER BY start_at DESC LIMIT ?", input.last).reverse();
         if (wakes.length === 0) return yield* Console.log("No wakes in the last 7 days.");
-        for (const wake of wakes) yield* Console.log(summary(wake, [...trace(wake.trace_id), ...runs(all, wake).flatMap(trace)]));
+        for (const wake of wakes) yield* Console.log(summary(wake, [...trace(wake.trace_id), ...runs(linking, wake).flatMap(trace)]));
         return;
       }
       const key = input.id.value;
@@ -68,7 +69,7 @@ export const traceCommand = Command.make(
           .filter((span) => span.name === "pi.durable.submit")
           .flatMap((span) => links(span))
           .flatMap((id) => all("SELECT * FROM gw_spans WHERE span_id = ? AND name = 'wake'", id))[0];
-      const parts = wake ? [trace(wake.trace_id), ...runs(all, wake).map(trace)] : [start];
+      const parts = wake ? [trace(wake.trace_id), ...runs(linking, wake).map(trace)] : [start];
       const events = (wake ? linkList(wake).filter((link) => !isRun(link)) : [])
         .flatMap((link) => all("SELECT * FROM gw_spans WHERE span_id = ?", link.span_id))
         .flatMap((span) => trace(span.trace_id));
@@ -98,14 +99,34 @@ function links(span: Span): string[] {
 const isRun = (link: Link) => link.attributes?.["pots.link"] === "run";
 
 /**
+ * The spans that link to a wake or a submission, by its ID, in table order: the questions runs() asks. Few spans have
+ * links (wakes, sends, submissions), so one pass over them, at the first question, answers every later one. The IDs are
+ * read from the text, as LIKE '%"span_id":"<id>"%' finds them, without parsing the long list of events of every wake.
+ */
+function linkingSpans(all: (sql: string, ...params: (string | number)[]) => Span[]): (id: string) => Span[] {
+  let from: Map<string, Span[]> | undefined;
+  return (id) => {
+    if (!from) {
+      from = new Map(all("SELECT span_id FROM gw_spans WHERE name IN ('wake', 'pi.durable.submit')").map((span) => [span.span_id, []]));
+      for (const span of all("SELECT * FROM gw_spans WHERE links != '[]' ORDER BY rowid")) {
+        for (const [, target] of span.links!.matchAll(/"span_id":"([^"]*)"/g)) {
+          const list = from.get(target!);
+          if (list && list.at(-1) !== span) list.push(span);
+        }
+      }
+    }
+    return from.get(id) ?? [];
+  };
+}
+
+/**
  * The traces of the agent's runs for a wake. The wake links to its run's stored trace context, which stays the first
  * one when the wake is delivered again after a crash. Besides: pi-durable's submission span and the agent's sends link
  * to the wake; a submission that steers a running run links to that run, and a run for several submissions links to
  * the others.
  */
-function runs(all: (sql: string, ...params: (string | number)[]) => Span[], wake: Span): string[] {
+function runs(linking: (id: string) => Span[], wake: Span): string[] {
   const traces = new Set(linkList(wake).filter(isRun).map((link) => link.trace_id));
-  const linking = (id: string) => all("SELECT * FROM gw_spans WHERE links LIKE ?", `%"span_id":"${id}"%`);
   for (const span of linking(wake.span_id)) {
     traces.add(span.trace_id);
     if (span.name !== "pi.durable.submit") continue;

@@ -25,7 +25,7 @@ const dim = (text: string) => (process.stdout.isTTY ? `\x1b[2m${text}\x1b[0m` : 
 const bold = (text: string) => (process.stdout.isTTY ? `\x1b[1m${text}\x1b[0m` : text);
 
 /** The terminal channel of a bot, or a failure that says how to add one. */
-export const terminalOf = (id: string) =>
+const terminalOf = (id: string) =>
   Effect.suspend(() => {
     const definition = JSON.parse(readFileSync(join(botDir(id), "bot.json"), "utf8")) as { name: string; channels: { id: string; type: string }[] };
     const channel = definition.channels.find((item) => item.type === "terminal");
@@ -131,7 +131,7 @@ export const chatInteractive = (id: string) =>
   });
 
 /** Send one message and print the bot's answers until it is done working, or until the timeout. For scripts and tests. */
-export const chatOnce = (id: string, text: string, timeoutMs: number) =>
+const chatOnce = (id: string, text: string, timeoutMs: number) =>
   Effect.gen(function* () {
     const terminal = yield* terminalOf(id);
     let offset = readFrom(terminal, 0).offset;

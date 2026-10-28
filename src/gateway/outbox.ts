@@ -1,8 +1,8 @@
 import { Context, Effect, Layer, type Tracer } from "effect";
 import type { Address, ChannelAdapter } from "../core/channel.ts";
-import { Channels } from "./channels.ts";
+import { Channels, platform } from "./channels.ts";
 import { GatewayConfig } from "./config.ts";
-import { BadSend, ChannelError, type LogError, type NoChannelForAddress } from "./errors.ts";
+import { BadSend, type ChannelError, type LogError, type NoChannelForAddress } from "./errors.ts";
 import { Inbox } from "./inbox.ts";
 import { MessageLog } from "./log.ts";
 
@@ -51,9 +51,6 @@ export class Outbox extends Context.Service<
       const { print } = yield* GatewayConfig;
       const hooks: OutboxHooks = {};
 
-      const platform = <A>(adapter: ChannelAdapter, run: () => Promise<A>) =>
-        Effect.tryPromise({ try: run, catch: (cause) => ChannelError.from(adapter.id, cause) });
-
       const send = (sendId: string, to: Address, text: string) =>
         Effect.gen(function* () {
           if (!text.trim()) return yield* Effect.fail(new BadSend({ message: "text is empty" }));
@@ -65,7 +62,7 @@ export class Outbox extends Context.Service<
           }
           const adapter = yield* channels.adapterFor(record?.to_address ?? to);
           if (record) {
-            const found = yield* platform(adapter, () => adapter.findSent(record.to_address, sendId, record.created_at)).pipe(
+            const found = yield* platform(adapter.id, () => adapter.findSent(record.to_address, sendId, record.created_at)).pipe(
               Effect.withSpan("channel.findSent", { attributes: { channel: adapter.id } }),
             );
             if (found) {
@@ -78,7 +75,7 @@ export class Outbox extends Context.Service<
           } else {
             yield* log.outboxStart(sendId, to, text);
           }
-          const sent = yield* platform(adapter, () => adapter.send(record?.to_address ?? to, text, sendId)).pipe(
+          const sent = yield* platform(adapter.id, () => adapter.send(record?.to_address ?? to, text, sendId)).pipe(
             Effect.withSpan("channel.send", { attributes: { channel: adapter.id } }),
           );
           hooks.afterPlatformSend?.(sendId);

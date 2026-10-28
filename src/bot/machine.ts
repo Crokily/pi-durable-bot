@@ -1,5 +1,6 @@
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { arch, hostname, release, userInfo } from "node:os";
+import { promisify } from "node:util";
 
 /** The computer the bot runs on, as plain facts for its prompt. */
 export interface Machine {
@@ -13,11 +14,16 @@ export interface Machine {
   sudo: boolean;
 }
 
-export function describeMachine(): Machine {
+/** Asks the system in the background, so the gateway starts while the commands run. */
+export async function describeMachine(): Promise<Machine> {
   const platform = process.platform;
+  const [macOS, sudo] = await Promise.all([
+    platform === "darwin" ? run("sw_vers", ["-productVersion"]) : undefined,
+    platform === "win32" ? undefined : run("sudo", ["-n", "true"]),
+  ]);
   const os =
     platform === "darwin"
-      ? `macOS ${run("sw_vers", ["-productVersion"]) ?? release()}`
+      ? `macOS ${macOS ?? release()}`
       : platform === "win32"
         ? `Windows ${release()}`
         : `${platform === "linux" ? "Linux" : platform} ${release()}`;
@@ -26,13 +32,16 @@ export function describeMachine(): Machine {
     hostname: hostname(),
     user: userInfo().username,
     shell: platform === "win32" ? "Git Bash (Windows paths also work, for example C:/Users)" : "bash",
-    sudo: platform !== "win32" && run("sudo", ["-n", "true"]) !== undefined,
+    sudo: sudo !== undefined,
   };
 }
 
-function run(command: string, args: string[]): string | undefined {
+const execFileAsync = promisify(execFile);
+
+/** The command's output, or undefined when it fails. */
+async function run(command: string, args: string[]): Promise<string | undefined> {
   try {
-    return execFileSync(command, args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000 }).trim();
+    return (await execFileAsync(command, args, { encoding: "utf8", timeout: 5_000 })).stdout.trim();
   } catch {
     return undefined;
   }

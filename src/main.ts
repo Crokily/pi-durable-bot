@@ -1,11 +1,11 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openModels } from "./agent/models.ts";
 import { Bot } from "./bot/bot.ts";
 import { BOT_ID, botPaths, readDefinition } from "./bot/definition.ts";
-import { BIN_DIR, BOTS_DIR, PID_FILE, POTS_HOME } from "./core/home.ts";
+import { BIN_DIR, BOTS_DIR, PID_FILE, POTS_HOME, runningGateway } from "./core/home.ts";
 
 // The gateway: runs every bot folder in ~/.pots/bots. A folder with a bot.json is a bot. Checks the folders every few
 // seconds, so a new folder starts a bot, a removed one stops it, and a changed bot.json applies while running.
@@ -20,19 +20,6 @@ function print(bot: string | undefined) {
   return (message: string, data?: Record<string, unknown>) => {
     console.log(JSON.stringify({ time: new Date().toISOString(), ...(bot ? { bot } : {}), message, ...data }));
   };
-}
-
-/** The process ID in the pid file, when that process is still running. */
-export function runningGateway(): number | undefined {
-  if (!existsSync(PID_FILE)) return undefined;
-  const pid = Number(readFileSync(PID_FILE, "utf8").trim());
-  if (!Number.isInteger(pid) || pid <= 0) return undefined;
-  try {
-    process.kill(pid, 0);
-    return pid;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM" ? pid : undefined;
-  }
 }
 
 /**

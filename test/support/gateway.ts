@@ -23,6 +23,8 @@ export interface BotOptions {
   /** bot.json "judge". */
   readonly judge?: string;
   readonly settings?: Record<string, unknown>;
+  /** Also a terminal channel, for `pots chat`. */
+  readonly terminal?: boolean;
 }
 
 export interface PlatformRecord {
@@ -56,7 +58,7 @@ export class TestGateway {
       model: "fake/coworker",
       thinking: "off",
       judge: options.judge ?? "off",
-      channels: [{ id: CHANNEL, type: "test", dir: this.platformDir, me: ME }],
+      channels: [{ id: CHANNEL, type: "test", dir: this.platformDir, me: ME }, ...(options.terminal ? [{ id: "terminal", type: "terminal" }] : [])],
       settings: { debounceMs: 300, debounceMaxMs: 2_000, ...options.settings },
     };
     writeFileSync(join(this.botDir, "bot.json"), JSON.stringify(definition, null, 2));
@@ -146,6 +148,20 @@ export class TestGateway {
   /** Run a pots command against this home, and return what it printed. */
   pots(...args: string[]): string {
     return execFileSync(process.execPath, [POTS, ...args], { env: { ...process.env, POTS_HOME: this.home, NO_COLOR: "1" }, encoding: "utf8" });
+  }
+
+  /**
+   * Run a pots command, also one that fails, with this standard input and environment. It does not block, so the fake
+   * model in this process keeps answering while the command waits for the bot.
+   */
+  run(args: readonly string[], options: { input?: string; env?: Record<string, string> } = {}): Promise<{ status: number | null; stdout: string; stderr: string }> {
+    const child = spawn(process.execPath, [POTS, ...args], { env: { ...process.env, POTS_HOME: this.home, NO_COLOR: "1", ...options.env } });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString("utf8")));
+    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
+    child.stdin.end(options.input ?? "");
+    return new Promise((resolve) => child.once("close", (status) => resolve({ status, stdout, stderr })));
   }
 
   /** Make the gateway die right after the bot takes its next wake, before the gateway records that. */

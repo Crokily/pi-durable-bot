@@ -1,8 +1,9 @@
 import { Clock, Context, Effect, FiberHandle, Layer, Option, Semaphore } from "effect";
 import type { Sql } from "../core/sql.ts";
 import { GatewayConfig } from "./config.ts";
-import { BadTime, DeliverError, LogError, message } from "./errors.ts";
-import { LINK, Telemetry } from "./telemetry.ts";
+import { BadTime, DeliverError, type LogError, message } from "./errors.ts";
+import { db } from "./log.ts";
+import { Telemetry } from "./telemetry.ts";
 import { WakeSpans } from "./tracing.ts";
 
 const SCHEMA = `
@@ -28,7 +29,7 @@ export interface Timer {
 }
 
 /** Look at the timers at least this often, so a changed clock or a missed change is noticed. */
-export const CHECK_MS = 30_000;
+const CHECK_MS = 30_000;
 
 /**
  * Timed wakes. The agent sets as many as it likes. While it has none pending, one fallback wake is kept,
@@ -54,7 +55,6 @@ export class Timers extends Context.Service<
         const config = yield* GatewayConfig;
         const wakeSpans = yield* WakeSpans;
         const telemetry = yield* Telemetry;
-        const db = <A>(run: () => Promise<A>) => Effect.tryPromise({ try: run, catch: LogError.from });
         yield* db(() => sql.exec(SCHEMA));
         const loop = yield* FiberHandle.make();
         /** Firing and changes to the pending timers happen one at a time. */
@@ -73,18 +73,14 @@ export class Timers extends Context.Service<
 
         const fire = (timer: Timer) =>
           Effect.gen(function* () {
-            const span = yield* Effect.currentSpan.pipe(Effect.option);
+            const span = Option.getOrUndefined(yield* Effect.option(Effect.currentSpan));
             const { submission, run } = yield* Effect.tryPromise({
-              try: () => config.fireTimer(timer, Option.isSome(span) ? telemetry.view(span.value) : undefined),
+              try: () => config.fireTimer(timer, span && telemetry.view(span)),
               catch: (cause) => new DeliverError({ message: message(cause), cause }),
             });
             const now = yield* Clock.currentTimeMillis;
             yield* db(() => sql.run("UPDATE bot_timers SET state = 'fired', fired_at = ? WHERE id = ?", now, timer.id));
-            if (Option.isSome(span)) {
-              wakeSpans.remember(submission, span.value);
-              const runSpan = telemetry.spanOfCarrier(run);
-              if (runSpan && span.value._tag === "Span") span.value.addLinks([{ span: runSpan, attributes: { [LINK]: "run" } }]);
-            }
+            if (span) wakeSpans.remember(submission, span, telemetry.spanOfCarrier(run));
             yield* Effect.annotateCurrentSpan({ submission });
             config.print("timer fired", { id: timer.id, setBy: timer.set_by });
           }).pipe(Effect.withSpan("wake", { root: true, attributes: { reason: timer.set_by === "fallback" ? "fallback" : "timer", timer: timer.id } }));

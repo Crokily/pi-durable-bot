@@ -4,8 +4,7 @@ import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Context, Effect, Layer } from "effect";
-import { LOGS_DIR, PID_FILE, POTS_HOME } from "../core/home.ts";
-import { runningGateway } from "../main.ts";
+import { LOGS_DIR, PID_FILE, POTS_HOME, runningGateway } from "../core/home.ts";
 import { userError } from "./control.ts";
 
 // The gateway as a background service of the user who runs it, so it starts at login and the bots can use the desktop

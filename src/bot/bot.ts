@@ -14,7 +14,9 @@ import { SECRETS_DIR } from "../core/home.ts";
 import type { Judge } from "../core/judge.ts";
 import type { Sql } from "../core/sql.ts";
 import type { Delivered, PlaceWake, WakeTarget } from "../core/wake.ts";
+import type { Print } from "../gateway/config.ts";
 import { Gateway, type TimersHandle } from "../gateway/gateway.ts";
+import type { Timer } from "../gateway/timers.ts";
 import { ControlServer } from "./control.ts";
 import { type BotDefinition, type BotPaths, botPaths } from "./definition.ts";
 import { describeMachine } from "./machine.ts";
@@ -30,7 +32,6 @@ import {
   renderTimerWake,
   workSection,
 } from "./prompt.ts";
-import type { Timer } from "./timers.ts";
 
 const WAKES_SCHEMA = `
 CREATE TABLE IF NOT EXISTS bot_wakes (
@@ -52,12 +53,10 @@ export interface BotEnvironment {
   models: Models;
 }
 
-/** What the agent is told about the computer it runs on. Checked once per process. */
+/** What the agent is told about the computer it runs on. Checked once per process, from when the gateway loads. */
 const MACHINE = describeMachine();
 /** docs/ of this package, next to src/ or dist/. */
 const DOCS_DIR = fileURLToPath(new URL("../../docs", import.meta.url));
-
-type Print = (message: string, data?: Record<string, unknown>) => void;
 
 /**
  * One bot: a person with a name, persona, responsibilities, memory, timed wakes, a workspace and one long
@@ -170,13 +169,14 @@ export class Bot implements WakeTarget {
       print,
     });
     const timers = gateway.timers;
+    const machine = await MACHINE;
     const facts = (): PromptFacts => ({
       id,
       name: current().name,
       paths,
       botsDir: env.botsDir,
       pots: env.potsCommand,
-      machine: MACHINE,
+      machine,
       docs: DOCS_DIR,
       secretsDir: SECRETS_DIR,
       fallbackWakeMinutes: current().settings.fallbackWakeMinutes,
@@ -216,22 +216,19 @@ export class Bot implements WakeTarget {
     opened(agent);
 
     bot = new Bot({ id, paths, definition, env, print, sql, gateway, timers, agent, judge });
-    // Crash test: with this file in the bot folder, the process dies right after the platform accepts the next send,
-    // before the outbox records it. The next start must find that message instead of sending it again.
-    gateway.outbox.afterPlatformSend = (sendId) => {
-      if (!existsSync(paths.crashAfterSend)) return;
-      unlinkSync(paths.crashAfterSend);
-      print("crash test: dying after the platform send", { sendId });
+    // Crash tests: with one of these files in the bot folder, the process dies at that point, once.
+    const crashTest = (file: string, message: string, key: string) => (id: string) => {
+      if (!existsSync(file)) return;
+      unlinkSync(file);
+      print(message, { [key]: id });
       process.kill(process.pid, "SIGKILL");
     };
-    // The same for a wake: the process dies right after the bot took it, before the gateway records that. The next
-    // start must deliver the same wake again, which the agent counts once, instead of deciding its events anew.
-    gateway.waker.afterDeliver = (wakeId) => {
-      if (!existsSync(paths.crashAfterWake)) return;
-      unlinkSync(paths.crashAfterWake);
-      print("crash test: dying after the wake", { wakeId });
-      process.kill(process.pid, "SIGKILL");
-    };
+    // Right after the platform accepts the next send, before the outbox records it. The next start must find that
+    // message instead of sending it again.
+    gateway.outbox.afterPlatformSend = crashTest(paths.crashAfterSend, "crash test: dying after the platform send", "sendId");
+    // Right after the bot took a wake, before the gateway records that. The next start must deliver the same wake again,
+    // which the agent counts once, instead of deciding its events anew.
+    gateway.waker.afterDeliver = crashTest(paths.crashAfterWake, "crash test: dying after the wake", "wakeId");
     for (const row of await sql.all<{ submission: string; place: string }>(
       "SELECT submission, place FROM bot_wakes WHERE submission IS NOT NULL AND place IS NOT NULL ORDER BY at DESC LIMIT 1000",
     )) {
@@ -263,16 +260,19 @@ export class Bot implements WakeTarget {
    * until the agent has stopped, so an action is never refused while the agent still works.
    */
   async stop(): Promise<void> {
-    await this.#control.stop();
-    await this.#gateway.pauseWakes();
-    await this.#agent.close();
-    await this.#gateway.stop();
-    await this.#sql.close().catch(() => {});
+    try {
+      await this.#control.stop();
+      await this.#gateway.pauseWakes();
+      await this.#agent.close();
+    } finally {
+      // Also when a step above failed: a bot that is stopped must not keep its channels or its file open.
+      try {
+        await this.#gateway.stop();
+      } finally {
+        await this.#sql.close().catch(() => {});
+      }
+    }
     this.#print("bot stopped");
-  }
-
-  get definition(): BotDefinition {
-    return this.#definition;
   }
 
   /** Apply a changed bot.json while running. The new definition counts only once every step worked, so a retry redoes all. */

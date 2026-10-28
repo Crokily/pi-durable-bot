@@ -1,6 +1,6 @@
 import { Cause, Clock, Context, Effect, FiberMap, FiberSet, Layer, Option, Result, type Tracer } from "effect";
 import type { PlaceInfo } from "../core/channel.ts";
-import type { Judge, JudgeAnswer, JudgeItem } from "../core/judge.ts";
+import type { Judge, JudgeItem } from "../core/judge.ts";
 import type { PlaceWake, PlaceWakeReason, WakeEvent, WakeTarget } from "../core/wake.ts";
 import { GatewayConfig } from "./config.ts";
 import { DeliverError, failureText, JudgeError, type LogError, message, NoWakeTarget } from "./errors.ts";
@@ -20,10 +20,10 @@ export interface WakerSettings {
 }
 
 /** When the judge fails, it is asked again after these waits. */
-export const JUDGE_RETRY_MS = [2_000, 8_000] as const;
+const JUDGE_RETRY_MS = [2_000, 8_000] as const;
 
 /** How long a group of events waits: until debounceMs after the last event, but never past debounceMaxMs after the first. */
-export function debounceWait(settings: Pick<WakerSettings, "debounceMs" | "debounceMaxMs">, first: number, now: number): number {
+function debounceWait(settings: Pick<WakerSettings, "debounceMs" | "debounceMaxMs">, first: number, now: number): number {
   return Math.max(0, Math.min(settings.debounceMs, first + settings.debounceMaxMs - now));
 }
 
@@ -34,6 +34,8 @@ export interface WakerHooks {
 
 interface Batch {
   readonly events: UndecidedEvent[];
+  /** The IDs of the events, so an event given twice is in the group once. */
+  readonly ids: Set<number>;
   /** The span that logged each event, for the wake's links. */
   readonly spans: Tracer.AnySpan[];
   readonly first: number;
@@ -74,20 +76,14 @@ export class Waker extends Context.Service<
       /** Hand a recorded wake to the bot, and forget it once the bot has it. */
       const handOver = (bot: WakeTarget, wake: PlaceWake) =>
         Effect.gen(function* () {
-          const span = yield* Effect.currentSpan.pipe(Effect.option);
-          const caller = Option.isSome(span) ? telemetry.view(span.value) : undefined;
+          const span = Option.getOrUndefined(yield* Effect.option(Effect.currentSpan));
           const { submission, run } = yield* Effect.tryPromise({
-            try: () => bot.deliver(wake, caller),
+            try: () => bot.deliver(wake, span && telemetry.view(span)),
             catch: (cause) => new DeliverError({ message: message(cause), cause }),
           }).pipe(Effect.withSpan("wake.deliver", { attributes: { wake: wake.id } }));
           hooks.afterDeliver?.(wake.id);
           yield* log.wakeDelivered(wake.id);
-          if (Option.isSome(span)) {
-            wakeSpans.remember(submission, span.value);
-            // The agent's run, also when it started before a crash and goes on in its first trace.
-            const runSpan = telemetry.spanOfCarrier(run);
-            if (runSpan && span.value._tag === "Span") span.value.addLinks([{ span: runSpan, attributes: { [LINK]: "run" } }]);
-          }
+          if (span) wakeSpans.remember(submission, span, telemetry.spanOfCarrier(run));
           yield* Effect.annotateCurrentSpan({ reason: wake.reason, wake: wake.id, submission });
           config.print("wake", { reason: wake.reason, place: wake.place.address, events: wake.events.length });
         });
@@ -150,9 +146,8 @@ export class Waker extends Context.Service<
           let lastError: unknown;
           for (const wait of [0, ...JUDGE_RETRY_MS]) {
             if (wait) yield* Effect.sleep(wait);
-            const span = yield* Effect.currentSpan.pipe(Effect.option);
-            const trace = Option.isSome(span) ? telemetry.view(span.value) : undefined;
-            const result = yield* Effect.result(Effect.tryPromise({ try: () => judge.judge(input, trace), catch: (cause) => cause }));
+            const span = Option.getOrUndefined(yield* Effect.option(Effect.currentSpan));
+            const result = yield* Effect.result(Effect.tryPromise({ try: () => judge.judge(input, span && telemetry.view(span)), catch: (cause) => cause }));
             if (Result.isSuccess(result)) {
               yield* Effect.annotateCurrentSpan({ related: result.success.related, respond: result.success.respond });
               return result.success;
@@ -192,6 +187,12 @@ export class Waker extends Context.Service<
           }
         });
 
+      /** A decision that failed, in the gateway's output. */
+      const reportFailure = (place: string) =>
+        Effect.catchCause((cause: Cause.Cause<unknown>) =>
+          Cause.hasInterruptsOnly(cause) ? Effect.void : Effect.sync(() => config.print("wake decision failed", { place, error: failureText(Cause.squash(cause)) })),
+        );
+
       // Take the whole group at once, so an event that comes now starts the next group.
       const flush = (key: string) =>
         Effect.uninterruptible(
@@ -199,16 +200,7 @@ export class Waker extends Context.Service<
             const batch = batches.get(key);
             if (!batch) return Effect.void;
             batches.delete(key);
-            return FiberSet.run(
-              deciding,
-              decide(batch.events, batch.spans).pipe(
-                Effect.catchCause((cause) =>
-                  Cause.hasInterruptsOnly(cause)
-                    ? Effect.void
-                    : Effect.sync(() => config.print("wake decision failed", { place: key, error: failureText(Cause.squash(cause)) })),
-                ),
-              ),
-            );
+            return FiberSet.run(deciding, decide(batch.events, batch.spans).pipe(reportFailure(key)));
           }),
         );
 
@@ -223,11 +215,7 @@ export class Waker extends Context.Service<
               yield* handOver(target, wake);
             }).pipe(
               Effect.withSpan("wake", { root: true, attributes: { place: wake.place.address, events: wake.events.map((event) => event.id).join(","), again: true } }),
-              Effect.catchCause((cause) =>
-                Cause.hasInterruptsOnly(cause)
-                  ? Effect.void
-                  : Effect.sync(() => config.print("wake decision failed", { place: wake.place.address, error: failureText(Cause.squash(cause)) })),
-              ),
+              reportFailure(wake.place.address),
             ),
           );
         }
@@ -247,9 +235,10 @@ export class Waker extends Context.Service<
             const now = yield* Clock.currentTimeMillis;
             const span = yield* Effect.currentSpan.pipe(Effect.option);
             let batch = batches.get(key);
-            if (batch?.events.some((queued) => queued.id === event.id)) return;
-            if (batch) batch.events.push(event);
-            else batches.set(key, (batch = { events: [event], spans: [], first: now }));
+            if (batch?.ids.has(event.id)) return;
+            if (!batch) batches.set(key, (batch = { events: [], ids: new Set(), spans: [], first: now }));
+            batch.events.push(event);
+            batch.ids.add(event.id);
             if (Option.isSome(span)) batch.spans.push(span.value);
             const wait = debounceWait(config.settings(), batch.first, now);
             yield* FiberMap.run(timers, key, Effect.andThen(Effect.sleep(wait), flush(key)));

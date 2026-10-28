@@ -216,7 +216,7 @@ export class MessageLog extends Context.Service<
 }
 
 /** A statement on the shared connection. */
-const db = <A>(run: () => Promise<A>): Effect.Effect<A, LogError> => Effect.tryPromise({ try: run, catch: LogError.from });
+export const db = <A>(run: () => Promise<A>): Effect.Effect<A, LogError> => Effect.tryPromise({ try: run, catch: LogError.from });
 
 /** A statement that needs the current time. */
 const dbAt = <A>(run: (now: number) => Promise<A>): Effect.Effect<A, LogError> => Effect.flatMap(Clock.currentTimeMillis, (now) => db(() => run(now)));
@@ -224,12 +224,15 @@ const dbAt = <A>(run: (now: number) => Promise<A>): Effect.Effect<A, LogError> =
 function makeLog(sql: Sql): MessageLog["Service"] {
   return {
     addInbox: (channel, eventId, raw) =>
-      dbAt((now) =>
-        sql.transaction(async (tx) => {
-          if (await tx.get("SELECT 1 AS x FROM gw_inbox WHERE channel = ? AND event_id = ?", channel, eventId)) return false;
-          await tx.run("INSERT INTO gw_inbox (channel, event_id, received_at, raw) VALUES (?, ?, ?, ?)", channel, eventId, now, JSON.stringify(raw));
-          return true;
-        }),
+      dbAt(
+        async (now) =>
+          (await sql.get(
+            "INSERT INTO gw_inbox (channel, event_id, received_at, raw) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING RETURNING 1 AS added",
+            channel,
+            eventId,
+            now,
+            JSON.stringify(raw),
+          )) !== undefined,
       ),
 
     unfinishedInbox: db(() => sql.all<InboxRow>("SELECT channel, event_id, raw FROM gw_inbox WHERE state != 'done' ORDER BY received_at, rowid")),
@@ -258,18 +261,13 @@ function makeLog(sql: Sql): MessageLog["Service"] {
 
     undecided: db(() => sql.all<UndecidedEvent>(`${UNDECIDED_SELECT} WHERE e.wake IS NULL ORDER BY e.id`)),
 
-    setWake: (ids, wake) =>
-      db(() =>
-        sql.transaction(async (tx) => {
-          for (const id of ids) await tx.run("UPDATE gw_events SET wake = ? WHERE id = ?", wake, id);
-        }),
-      ),
+    setWake: (ids, wake) => db(() => decide(sql, ids, wake)),
 
     recordWake: (wake, ids, decision) =>
       dbAt((now) =>
         sql.transaction(async (tx) => {
           await tx.run("INSERT OR IGNORE INTO gw_pending_wakes (id, wake, decided_at) VALUES (?, ?, ?)", wake.id, JSON.stringify(wake), now);
-          for (const id of ids) await tx.run("UPDATE gw_events SET wake = ? WHERE id = ?", decision, id);
+          await decide(tx, ids, decision);
         }),
       ),
 
@@ -328,6 +326,10 @@ function makeLog(sql: Sql): MessageLog["Service"] {
   };
 }
 
+/** Set the wake decision of these events, in one statement. */
+const decide = (sql: SqlExecutor, ids: readonly number[], wake: string) =>
+  sql.run("UPDATE gw_events SET wake = ? WHERE id IN (SELECT value FROM json_each(?))", wake, JSON.stringify(ids));
+
 const UNDECIDED_SELECT = `SELECT e.id, e.channel, e.kind, e.at, e.place, pl.name AS place_name, pl.kind AS place_kind, e.thread, e.message,
   e.person, pe.name AS person_name, e.from_me, e.mentions_me, e.text
   FROM gw_events e LEFT JOIN gw_places pl ON pl.address = e.place LEFT JOIN gw_people pe ON pe.address = e.person`;
@@ -355,23 +357,7 @@ async function applyOne(tx: SqlExecutor, channel: string, eventId: string, h: Ha
       );
       return undefined;
     }
-    await tx.run(
-      `INSERT INTO gw_messages (address, channel, place, thread, person, from_me, mentions_me, text, mentions, files, at, send_id, raw)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      h.message,
-      channel,
-      h.place?.address ?? null,
-      thread,
-      h.person?.address ?? null,
-      h.fromMe ? 1 : 0,
-      h.mentionsMe ? 1 : 0,
-      h.text ?? "",
-      h.mentions?.length ? JSON.stringify(h.mentions) : null,
-      h.files?.length ? JSON.stringify(h.files) : null,
-      h.at,
-      h.sendId ?? null,
-      raw,
-    );
+    await insertMessage(tx, channel, h.message, h, { thread, raw, editedAt: null, sendId: h.sendId ?? null });
     // A reply makes its root a thread root.
     if (thread && h.threadRoot && h.threadRoot !== h.message) {
       await tx.run("UPDATE gw_messages SET thread = ? WHERE address = ? AND thread IS NULL", thread, h.threadRoot);
@@ -385,43 +371,28 @@ async function applyOne(tx: SqlExecutor, channel: string, eventId: string, h: Ha
           "UPDATE gw_messages SET text = ?, mentions_me = ?, mentions = ?, files = coalesce(?, files), edited_at = ?, raw = ? WHERE address = ?",
           h.text ?? "",
           h.mentionsMe ? 1 : 0,
-          h.mentions?.length ? JSON.stringify(h.mentions) : null,
-          h.files?.length ? JSON.stringify(h.files) : null,
+          jsonList(h.mentions),
+          jsonList(h.files),
           h.at,
           raw,
           h.message,
         );
       } else {
-        await tx.run(
-          `INSERT INTO gw_messages (address, channel, place, thread, person, from_me, mentions_me, text, mentions, files, at, edited_at, raw)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          h.message,
-          channel,
-          h.place?.address ?? null,
-          thread,
-          h.person?.address ?? null,
-          h.fromMe ? 1 : 0,
-          h.mentionsMe ? 1 : 0,
-          h.text ?? "",
-          h.mentions?.length ? JSON.stringify(h.mentions) : null,
-          h.files?.length ? JSON.stringify(h.files) : null,
-          h.at,
-          h.at,
-          raw,
-        );
+        // An edit of a message the log does not have: the message as it is now.
+        await insertMessage(tx, channel, h.message, h, { thread, raw, editedAt: h.at, sendId: null });
       }
     } else if (h.kind === "delete" && known) {
       await tx.run("UPDATE gw_messages SET deleted_at = ? WHERE address = ?", h.at, h.message);
     } else if (h.kind === "update" && known && raw !== null) {
-      await tx.run("UPDATE gw_messages SET raw = ?, files = coalesce(?, files) WHERE address = ?", raw, h.files?.length ? JSON.stringify(h.files) : null, h.message);
+      await tx.run("UPDATE gw_messages SET raw = ?, files = coalesce(?, files) WHERE address = ?", raw, jsonList(h.files), h.message);
     }
   }
 
   // Own events never notify the bot. Deletes are only logged. Everything else waits for the waker's decision.
   const wake = h.fromMe ? "self" : h.kind === "delete" ? "log" : null;
-  await tx.run(
+  const event = await tx.get<{ id: number }>(
     `INSERT INTO gw_events (channel, inbox_event, kind, at, place, thread, message, person, from_me, mentions_me, text, raw, wake)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
     channel,
     eventId,
     h.kind,
@@ -436,8 +407,39 @@ async function applyOne(tx: SqlExecutor, channel: string, eventId: string, h: Ha
     raw,
     wake,
   );
-  return (await tx.get<{ id: number }>("SELECT last_insert_rowid() AS id"))!.id;
+  return event!.id;
 }
+
+/** A message the log does not have yet. */
+function insertMessage(
+  tx: SqlExecutor,
+  channel: string,
+  address: Address,
+  h: Happening,
+  row: { thread: string | null; raw: string | null; editedAt: number | null; sendId: string | null },
+): Promise<void> {
+  return tx.run(
+    `INSERT INTO gw_messages (address, channel, place, thread, person, from_me, mentions_me, text, mentions, files, at, edited_at, send_id, raw)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    address,
+    channel,
+    h.place?.address ?? null,
+    row.thread,
+    h.person?.address ?? null,
+    h.fromMe ? 1 : 0,
+    h.mentionsMe ? 1 : 0,
+    h.text ?? "",
+    jsonList(h.mentions),
+    jsonList(h.files),
+    h.at,
+    row.editedAt,
+    row.sendId,
+    row.raw,
+  );
+}
+
+/** A list as JSON, or NULL when it is empty. */
+const jsonList = (items: readonly unknown[] | undefined) => (items?.length ? JSON.stringify(items) : null);
 
 async function putPlace(tx: SqlExecutor, channel: string, place: PlaceInfo, now: number): Promise<void> {
   await tx.run(

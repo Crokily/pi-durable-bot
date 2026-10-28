@@ -34,7 +34,7 @@ export interface BotSettings {
   compaction: Compaction;
 }
 
-export const DEFAULT_SETTINGS: BotSettings = {
+const DEFAULT_SETTINGS: BotSettings = {
   debounceMs: 3_000,
   debounceMaxMs: 20_000,
   judgeThreshold: 0.5,

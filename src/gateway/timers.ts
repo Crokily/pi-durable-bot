@@ -28,7 +28,7 @@ export interface Timer {
 }
 
 /** Look at the timers at least this often, so a changed clock or a missed change is noticed. */
-export const CHECK_MS = 30_000;
+const CHECK_MS = 30_000;
 
 /**
  * Timed wakes. The agent sets as many as it likes. While it has none pending, one fallback wake is kept,

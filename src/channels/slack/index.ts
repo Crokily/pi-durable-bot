@@ -62,7 +62,6 @@ class SlackChannel implements ChannelAdapter {
   readonly #secrets: string;
   readonly #env: ChannelEnv;
   #sdk?: GatewaySlackAdapter;
-  #chat?: Chat;
   #botUserId?: string;
   readonly #places = new Map<string, { info: PlaceInfo; at: number }>();
 
@@ -102,11 +101,10 @@ class SlackChannel implements ChannelAdapter {
       await sink.receive(`${type}:${id}`, { source: "socket", type: type as "interactive" | "slash_commands", body: stored } satisfies Raw);
     };
     sdk.onSocketError = (error) => sink.log("event not stored, Slack will deliver it again", { error: String(error) });
-    // Chat holds the adapter and its in-memory state. No handlers: the SDK only translates.
+    // Chat holds the adapter and its in-memory state, and the adapter keeps it. No handlers: the SDK only translates.
     const chat = new Chat({ userName: this.#env.botName, adapters: { slack: sdk }, state: createMemoryState(), logger: "warn" });
     await chat.initialize();
     this.#sdk = sdk;
-    this.#chat = chat;
     this.#botUserId = sdk.botUserId;
     if (!this.#botUserId) throw new Error("Slack did not say who the bot is");
   }

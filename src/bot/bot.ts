@@ -15,6 +15,7 @@ import type { Judge } from "../core/judge.ts";
 import type { Sql } from "../core/sql.ts";
 import type { Delivered, PlaceWake, WakeTarget } from "../core/wake.ts";
 import { Gateway, type TimersHandle } from "../gateway/gateway.ts";
+import type { Timer } from "../gateway/timers.ts";
 import { ControlServer } from "./control.ts";
 import { type BotDefinition, type BotPaths, botPaths } from "./definition.ts";
 import { describeMachine } from "./machine.ts";
@@ -30,7 +31,6 @@ import {
   renderTimerWake,
   workSection,
 } from "./prompt.ts";
-import type { Timer } from "./timers.ts";
 
 const WAKES_SCHEMA = `
 CREATE TABLE IF NOT EXISTS bot_wakes (
@@ -269,10 +269,6 @@ export class Bot implements WakeTarget {
     await this.#gateway.stop();
     await this.#sql.close().catch(() => {});
     this.#print("bot stopped");
-  }
-
-  get definition(): BotDefinition {
-    return this.#definition;
   }
 
   /** Apply a changed bot.json while running. The new definition counts only once every step worked, so a retry redoes all. */

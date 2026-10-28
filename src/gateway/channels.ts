@@ -4,7 +4,7 @@ import { GatewayConfig } from "./config.ts";
 import { ChannelError, message, NoChannelForAddress, UnknownChannel } from "./errors.ts";
 
 /** How long to wait before the next attempt to connect a channel: 5 s more each time, at most a minute. */
-export const reconnectDelay = (attempt: number) => Math.min(60_000, 5_000 * attempt);
+const reconnectDelay = (attempt: number) => Math.min(60_000, 5_000 * attempt);
 
 /**
  * The channel adapters of one bot and their life: connect, backfill what was missed, keep trying a channel that does

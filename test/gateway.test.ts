@@ -50,7 +50,7 @@ describe("Gateway", () => {
     await gateway.start(target, [new MemoryChannel()]);
     await expect(gateway.send("id", "mem:#general", "  ")).rejects.toThrow("text is empty");
     await expect(gateway.send("id", "nope:#x", "hi")).rejects.toThrow('no channel for address "nope:#x". Copy addresses from a wake message or the log.');
-    expect(() => gateway.channel("slack")).toThrow('unknown channel "slack"; channels: mem');
+    await expect(gateway.call("slack", "chat.postMessage", {})).rejects.toThrow('unknown channel "slack"; channels: mem');
     await expect(gateway.addChannel(new MemoryChannel())).rejects.toThrow("channel mem is already running");
     await gateway.stop();
     await sql.close();

@@ -1,6 +1,6 @@
 import { Cause, Clock, Context, Effect, FiberMap, FiberSet, Layer, Option, Result, type Tracer } from "effect";
 import type { PlaceInfo } from "../core/channel.ts";
-import type { Judge, JudgeAnswer, JudgeItem } from "../core/judge.ts";
+import type { Judge, JudgeItem } from "../core/judge.ts";
 import type { PlaceWake, PlaceWakeReason, WakeEvent, WakeTarget } from "../core/wake.ts";
 import { GatewayConfig } from "./config.ts";
 import { DeliverError, failureText, JudgeError, type LogError, message, NoWakeTarget } from "./errors.ts";
@@ -20,10 +20,10 @@ export interface WakerSettings {
 }
 
 /** When the judge fails, it is asked again after these waits. */
-export const JUDGE_RETRY_MS = [2_000, 8_000] as const;
+const JUDGE_RETRY_MS = [2_000, 8_000] as const;
 
 /** How long a group of events waits: until debounceMs after the last event, but never past debounceMaxMs after the first. */
-export function debounceWait(settings: Pick<WakerSettings, "debounceMs" | "debounceMaxMs">, first: number, now: number): number {
+function debounceWait(settings: Pick<WakerSettings, "debounceMs" | "debounceMaxMs">, first: number, now: number): number {
   return Math.max(0, Math.min(settings.debounceMs, first + settings.debounceMaxMs - now));
 }
 

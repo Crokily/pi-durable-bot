@@ -14,8 +14,6 @@ import { type PiTelemetry, Telemetry } from "./telemetry.ts";
 import { tracingLayer, WakeSpans } from "./tracing.ts";
 import { Waker, type WakerHooks } from "./waker.ts";
 
-export type { SendResult } from "./outbox.ts";
-
 const HEARTBEAT_MS = 60_000;
 
 /** The gateway core of one bot as Effect services: log, channels, inbox, waker, outbox, timers. */
@@ -208,11 +206,6 @@ export class Gateway {
   adapterFor(address: Address): ChannelAdapter {
     if (this.#stopping) throw stopped();
     return this.#runtime.runSync(this.#channels.adapterFor(address));
-  }
-
-  channel(id: string): ChannelAdapter {
-    if (this.#stopping) throw stopped();
-    return this.#runtime.runSync(this.#channels.get(id));
   }
 
   // ---- Actions ----

@@ -2,9 +2,9 @@ import type { ContextStatus } from "../agent/agent.ts";
 import type { PersonInfo } from "../core/channel.ts";
 import type { PlaceWake, WakeEvent } from "../core/wake.ts";
 import { LOG_SCHEMA } from "../gateway/log.ts";
+import type { Timer } from "../gateway/timers.ts";
 import type { BotPaths } from "./definition.ts";
 import type { Machine } from "./machine.ts";
-import type { Timer } from "./timers.ts";
 
 // Everything the agent is told. Facts and mechanisms only; the judgment is the agent's.
 
@@ -114,7 +114,7 @@ const TIME_FORMAT = new Intl.DateTimeFormat("en-US", {
 });
 
 /** "2026-10-27 17:04:07 Tuesday (GMT+11)", in the machine's time zone. */
-export function formatTime(ms: number): string {
+function formatTime(ms: number): string {
   const parts = Object.fromEntries(TIME_FORMAT.formatToParts(new Date(ms)).map((part) => [part.type, part.value]));
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} ${parts.weekday} (${parts.timeZoneName})`;
 }

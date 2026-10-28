@@ -5,6 +5,7 @@ import { Console, Effect, Option, Schedule } from "effect";
 import { Command, Flag, Prompt } from "effect/cli";
 import { openModels } from "../agent/models.ts";
 import { terminalPerson } from "../channels/terminal/index.ts";
+import { runningGateway } from "../main.ts";
 import { setUpModel } from "./ai.ts";
 import { createBot, idFor } from "./bots.ts";
 import { chatInteractive } from "./chat.ts";
@@ -100,8 +101,15 @@ export const initCommand = Command.make(
         return;
       }
       const service = yield* Service;
-      yield* Console.log(`Starting the gateway as a background service (${service.kind}). It starts again at login.`);
-      yield* service.install({ system: input.system });
+      if (runningGateway() !== undefined) {
+        yield* Console.log(`The gateway is running; it starts ${name} within a few seconds.`);
+      } else if (service.installed()) {
+        yield* Console.log(`Starting the gateway (${service.kind}).`);
+        yield* service.restart();
+      } else {
+        yield* Console.log(`Starting the gateway as a background service (${service.kind}). It starts again at login.`);
+        yield* service.install({ system: input.system });
+      }
       yield* waitForBot(id);
 
       yield* step(4, `Talk to ${name}`);

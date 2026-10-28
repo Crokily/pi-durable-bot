@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
-import { NodeRuntime, NodeServices } from "@effect/platform-node";
+import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Console, Effect, Layer, Runtime } from "effect";
 import { Command, Flag } from "effect/cli";
-import { POTS_HOME } from "../core/home.ts";
-import { runGateway, runningGateway } from "../main.ts";
+import { POTS_HOME, runningGateway } from "../core/home.ts";
 import { agentCommands } from "./agent.ts";
 import { botCommand } from "./bots.ts";
 import { chatCommand } from "./chat.ts";
@@ -14,7 +14,8 @@ import * as ServiceLayer from "./service.ts";
 import { traceCommand } from "./trace.ts";
 
 // pots: one command for people and for the bots. People set up and run bots (init, chat, service, status); bots and
-// their scripts act in their channels (send, react, call, wake, context, turn-page).
+// their scripts act in their channels (send, react, call, wake, context, turn-page). Each command loads only what it
+// uses: the agent's scripts run pots often, and only pots start needs the gateway and the agent.
 
 const { version } = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { version: string };
 
@@ -25,6 +26,7 @@ const start = Command.make("start", {}, () =>
   Effect.tryPromise({
     try: async () => {
       gatewayRunning = true;
+      const { runGateway } = await import("../main.ts");
       await runGateway();
     },
     catch: (error) => {

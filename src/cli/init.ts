@@ -3,9 +3,8 @@ import { userInfo } from "node:os";
 import { join } from "node:path";
 import { Console, Effect, Option, Schedule } from "effect";
 import { Command, Flag, Prompt } from "effect/cli";
-import { openModels } from "../agent/models.ts";
 import { terminalPerson } from "../channels/terminal/index.ts";
-import { runningGateway } from "../main.ts";
+import { runningGateway } from "../core/home.ts";
 import { setUpModel } from "./ai.ts";
 import { createBot, idFor } from "./bots.ts";
 import { chatInteractive } from "./chat.ts";
@@ -83,7 +82,10 @@ export const initCommand = Command.make(
       const model = Option.isSome(input.model)
         ? input.model.value
         : interactive
-          ? yield* Effect.flatMap(Effect.promise(() => openModels()), setUpModel)
+          ? yield* Effect.flatMap(
+              Effect.promise(async () => (await import("../agent/models.ts")).openModels()),
+              setUpModel,
+            )
           : yield* Effect.fail(userError("pass --model"));
 
       yield* step(3, `In one sentence, what is ${name} for? (optional)`);

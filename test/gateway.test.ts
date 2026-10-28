@@ -173,4 +173,18 @@ describe("Gateway", () => {
     expect(new Set(traces.map((span) => span.trace_id)).size).toBe(1);
     await sql.close();
   });
+
+  it("runs without the export, and says why, when an OTEL_ variable is wrong", async () => {
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = "not a url";
+    try {
+      const { sql, gateway, prints } = await openGateway();
+      await gateway.start(target, [new MemoryChannel()]);
+      expect(await gateway.send("id-1", "mem:#general", "hello")).toMatchObject({ place: "mem:#general" });
+      await gateway.stop();
+      expect(prints).toContain("trace export off");
+      await sql.close();
+    } finally {
+      delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+    }
+  });
 });

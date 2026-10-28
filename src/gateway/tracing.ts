@@ -200,6 +200,15 @@ export function tracingLayer(sql: Sql, bot: string) {
     Layer.provide(OtlpSerialization.layerJson),
     Layer.provide(FetchHttpClient.layer),
     Layer.provide(ConfigProvider.layer(env)),
+    // A wrong OTEL_ variable must not stop the bot: it runs without the export, and says why.
+    Layer.catchCause((cause) =>
+      Layer.effectDiscard(
+        Effect.gen(function* () {
+          const { print } = yield* GatewayConfig;
+          print("trace export off", { error: failureText(Cause.squash(cause)) });
+        }),
+      ),
+    ),
   );
   return store.pipe(Layer.provide(otlp));
 }

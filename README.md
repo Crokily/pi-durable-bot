@@ -259,16 +259,17 @@ git clone https://github.com/Crokily/pi-durable-bot && cd pi-durable-bot
 npm install
 npm run pots -- status    # the pots command, straight from src/ (Node 24 runs TypeScript)
 npm run check             # type check
+npm test                  # tests, including a real gateway with a fake model
 ```
 
-`npm run build` writes the JavaScript that the npm package ships to `dist/`. Set `POTS_HOME` to try things without touching `~/.pots/`. Coding agents: read [AGENTS.md](AGENTS.md).
+`npm run build` writes the JavaScript that the npm package ships to `dist/`. Set `POTS_HOME` to try things without touching `~/.pots/`. Tests, the TLA+ models (`npm run tla`) and traces (`pots trace`, OpenTelemetry): [docs/development.md](docs/development.md). Coding agents: read [AGENTS.md](AGENTS.md).
 
 ## Built on
 
 - [pi-durable](https://github.com/earendil-works/pi) for the durable agent runtime
 - [Chat SDK](https://chat-sdk.dev) for channel adapters
 - [pi](https://github.com/earendil-works/pi)'s model layer for logins, providers and local models
-- [Effect](https://effect.website) for the `pots` command line
+- [Effect](https://effect.website) for the gateway core and the `pots` command line
 - [TypeSafe AI](https://typesafe.ai)'s Jev, one of the judges you can choose
 
 ## License

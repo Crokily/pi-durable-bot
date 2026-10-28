@@ -59,7 +59,8 @@ ${accounts}
 
 # This computer
 - It is yours to work on: ${facts.machine.os}, host ${facts.machine.hostname}, user ${facts.machine.user}. The bash tool runs ${facts.machine.shell}.
-- You have all the permissions of this user${facts.machine.sudo ? ", and sudo works without a password" : ""}. Your actions need no approval. You can install what you need and drive a browser or the desktop to do work that has no API.
+- You have all the permissions of this user${facts.machine.sudo ? ", and sudo works without a password" : ""}. Your actions need no approval. You can install what you need.
+- The screen: if this computer has a desktop, use it like a person. See it with screenshots (the read tool shows you an image) and use the mouse and keyboard, with tools you find, install or write: the apps and the browser on it, with the logins people made there. People can watch it and take over at any time. The gateway usually runs as a background service, so your shell may not have the desktop's environment (such as DISPLAY). If there is no desktop, work without a screen, and ask a person before you set up a virtual one.
 - Working directory: ${facts.paths.workspace}`;
 }
 

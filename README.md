@@ -12,6 +12,7 @@ does the work on its own computer, and speaks up when it should.
 [Demo](#see-it-work) · [Quick start](#quick-start) · [How it decides](#how-it-decides-to-act) · [Open and yours](#open-and-yours) · [How it works](#how-it-works)
 
 [![npm](https://img.shields.io/npm/v/pi-durable-bot?style=flat-square&color=1F7A70)](https://www.npmjs.com/package/pi-durable-bot)
+[![Platforms: macOS, Linux, Windows](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-1F7A70?style=flat-square)](#quick-start)
 [![License: MIT](https://img.shields.io/badge/license-MIT-1F7A70?style=flat-square)](LICENSE)
 [![Built on pi-durable](https://img.shields.io/badge/built%20on-pi--durable-1F7A70?style=flat-square)](https://github.com/earendil-works/pi)
 [![Chat SDK](https://img.shields.io/badge/channels-Chat%20SDK-1F7A70?style=flat-square)](https://chat-sdk.dev)

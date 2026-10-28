@@ -2,6 +2,7 @@ import { Clock, Context, Effect, FiberHandle, Layer, Option, Semaphore } from "e
 import type { Sql } from "../core/sql.ts";
 import { GatewayConfig } from "./config.ts";
 import { BadTime, DeliverError, LogError, message } from "./errors.ts";
+import { Telemetry } from "./telemetry.ts";
 import { WakeSpans } from "./tracing.ts";
 
 const SCHEMA = `
@@ -46,12 +47,13 @@ export class Timers extends Context.Service<
     readonly pending: Effect.Effect<Timer[], LogError>;
   }
 >()("pots/gateway/Timers") {
-  static layer(sql: Sql): Layer.Layer<Timers, LogError, GatewayConfig | WakeSpans> {
+  static layer(sql: Sql): Layer.Layer<Timers, LogError, GatewayConfig | WakeSpans | Telemetry> {
     return Layer.effect(
       Timers,
       Effect.gen(function* () {
         const config = yield* GatewayConfig;
         const wakeSpans = yield* WakeSpans;
+        const telemetry = yield* Telemetry;
         const db = <A>(run: () => Promise<A>) => Effect.tryPromise({ try: run, catch: LogError.from });
         yield* db(() => sql.exec(SCHEMA));
         const loop = yield* FiberHandle.make();
@@ -71,13 +73,13 @@ export class Timers extends Context.Service<
 
         const fire = (timer: Timer) =>
           Effect.gen(function* () {
+            const span = yield* Effect.currentSpan.pipe(Effect.option);
             const submission = yield* Effect.tryPromise({
-              try: () => config.fireTimer(timer),
+              try: () => config.fireTimer(timer, Option.isSome(span) ? telemetry.view(span.value) : undefined),
               catch: (cause) => new DeliverError({ message: message(cause), cause }),
             });
             const now = yield* Clock.currentTimeMillis;
             yield* db(() => sql.run("UPDATE bot_timers SET state = 'fired', fired_at = ? WHERE id = ?", now, timer.id));
-            const span = yield* Effect.currentSpan.pipe(Effect.option);
             if (Option.isSome(span)) wakeSpans.remember(submission, span.value);
             yield* Effect.annotateCurrentSpan({ submission });
             config.print("timer fired", { id: timer.id, setBy: timer.set_by });

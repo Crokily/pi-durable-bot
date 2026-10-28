@@ -34,8 +34,11 @@ export type SendError = BadSend | LogError | ChannelError | NoChannelForAddress;
 export class Outbox extends Context.Service<
   Outbox,
   {
-    /** wakes: the spans of the wakes this send answers; the first one is the parent of the send's span. */
-    send(sendId: string, to: Address, text: string, wakes?: readonly Tracer.AnySpan[]): Effect.Effect<SendResult, SendError>;
+    /**
+     * The send's span is a child of `parent` (the agent's tool call) and links to `wakes`, the wakes the agent works on.
+     * Without a parent, as from the command line, it is a child of the first wake.
+     */
+    send(sendId: string, to: Address, text: string, wakes?: readonly Tracer.AnySpan[], parent?: Tracer.AnySpan): Effect.Effect<SendResult, SendError>;
     readonly hooks: OutboxHooks;
   }
 >()("pots/gateway/Outbox") {
@@ -87,14 +90,16 @@ export class Outbox extends Context.Service<
 
       return Outbox.of({
         hooks,
-        send: (sendId, to, text, wakes = []) =>
-          send(sendId, to, text).pipe(
+        send: (sendId, to, text, wakes = [], parent) => {
+          const [first, ...rest] = parent ? [parent, ...wakes] : wakes;
+          return send(sendId, to, text).pipe(
             Effect.withSpan("send", {
               attributes: { send: sendId, to },
-              ...(wakes[0] ? { parent: wakes[0] } : {}),
-              links: wakes.slice(1).map((span) => ({ span, attributes: {} })),
+              ...(first ? { parent: first } : {}),
+              links: rest.map((span) => ({ span, attributes: {} })),
             }),
-          ),
+          );
+        },
       });
     }),
   );

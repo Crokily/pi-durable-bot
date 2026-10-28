@@ -50,12 +50,16 @@ describe("receive, log, wake, send", { timeout: 60_000 }, () => {
     expect(wakes(model)).toHaveLength(1);
     expect(gateway.sent()).toHaveLength(1);
 
-    // pots trace shows the wake and its send; the trace of the send has the event that woke the bot.
+    // pots trace shows the whole wake: the event, the decision, the agent's run with its model requests, and the send
+    // under the send tool's call.
     await gateway.stop();
-    expect(gateway.pots("trace")).toMatch(/mention\s+test:#general\s+1 event\s+sent 1/);
+    expect(gateway.pots("trace")).toMatch(/mention\s+test:#general\s+1 event\s+sent 1\s+model 2×, 220 tokens/);
     const trace = gateway.pots("trace", reply!.send_id!);
     expect(trace).toMatch(/^wake .*reason=mention/m);
-    expect(trace).toMatch(/└─ send .*result=sent/);
+    expect(trace).toMatch(/^agent run, trace /m);
+    expect(trace).toMatch(/^submission \d+ \(placed\)/m);
+    expect(trace).toMatch(/─ model fake\/coworker, 100 in, 10 out, toolUse/);
+    expect(trace).toMatch(/─ tool send call → done[^\n]*\n[│ ]*└─ send send=tool:\d+ .*result=sent/);
     expect(trace).toContain(`event=${id}`);
   });
 

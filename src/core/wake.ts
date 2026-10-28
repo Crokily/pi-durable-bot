@@ -1,4 +1,5 @@
 // The interface between the gateway core and the bot. Common words only.
+import type { TelemetrySpan } from "@earendil-works/pi-telemetry";
 import type { Address, PersonInfo, PlaceInfo } from "./channel.ts";
 import type { JudgeAnswer } from "./judge.ts";
 
@@ -38,8 +39,11 @@ export interface PlaceWake {
 export interface WakeTarget {
   /** True while the bot's current work is about this place. */
   isWorkingOn(place: Address): boolean;
-  /** Hand the wake to the bot. Durable once it resolves, with the bot's submission ID for the wake. */
-  deliver(wake: PlaceWake): Promise<string>;
+  /**
+   * Hand the wake to the bot. Durable once it resolves, with the bot's submission ID for the wake. caller: the wake's
+   * span, for the agent's telemetry to link its run to.
+   */
+  deliver(wake: PlaceWake, caller?: TelemetrySpan): Promise<string>;
   /** What the bot is responsible for, for the judge. */
   responsibilities(): Promise<string>;
   /** The bot's name, for the judge. */

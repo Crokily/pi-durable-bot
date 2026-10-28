@@ -1,4 +1,4 @@
-import { Cause, Context, Deferred, Effect, FiberHandle, Layer, Queue, Schema } from "effect";
+import { Cause, Context, Deferred, Effect, FiberHandle, Layer, Option, Queue, Schema, type Tracer } from "effect";
 import { Happening } from "../core/channel.ts";
 import { Channels } from "./channels.ts";
 import { GatewayConfig } from "./config.ts";
@@ -7,7 +7,8 @@ import { MessageLog } from "./log.ts";
 import { Waker } from "./waker.ts";
 
 type Item =
-  | { readonly _tag: "event"; readonly channel: string; readonly eventId: string; readonly raw: unknown }
+  /** span: the receive span, so the event's apply is in the same trace. */
+  | { readonly _tag: "event"; readonly channel: string; readonly eventId: string; readonly raw: unknown; readonly span?: Tracer.AnySpan }
   /** Everything queued before it is applied. */
   | { readonly _tag: "mark"; readonly done: Deferred.Deferred<void> };
 
@@ -55,7 +56,7 @@ export class Inbox extends Context.Service<
       const worker = yield* FiberHandle.make();
       let opened = false;
 
-      const apply = (channel: string, eventId: string, raw: unknown) =>
+      const apply = (channel: string, eventId: string, raw: unknown, received: Tracer.AnySpan | undefined) =>
         Effect.gen(function* () {
           const adapter = channels.running(channel);
           if (!adapter) return yield* Effect.fail(ChannelError.from(channel, `channel ${channel} is not running`));
@@ -75,13 +76,14 @@ export class Inbox extends Context.Service<
               Effect.ignore,
             );
           }),
-          Effect.withSpan("inbox.apply", { attributes: { channel, event: eventId } }),
+          // Its own trace with the receive, not the trace of whatever started the worker.
+          Effect.withSpan("inbox.apply", { attributes: { channel, event: eventId }, ...(received ? { parent: received } : { root: true }) }),
         );
 
       // One item at a time. An item that has started is finished before the worker stops.
       const work = Effect.forever(
         Effect.flatMap(Queue.take(queue), (item) =>
-          item._tag === "mark" ? Effect.asVoid(Deferred.succeed(item.done, undefined)) : Effect.uninterruptible(apply(item.channel, item.eventId, item.raw)),
+          item._tag === "mark" ? Effect.asVoid(Deferred.succeed(item.done, undefined)) : Effect.uninterruptible(apply(item.channel, item.eventId, item.raw, item.span)),
         ),
       );
 
@@ -94,7 +96,13 @@ export class Inbox extends Context.Service<
       return Inbox.of({
         receive: (channel, eventId, raw) =>
           log.addInbox(channel, eventId, raw).pipe(
-            Effect.tap((added) => (added ? Queue.offer(queue, { _tag: "event", channel, eventId, raw }) : Effect.void)),
+            Effect.tap((added) =>
+              added
+                ? Effect.flatMap(Effect.option(Effect.currentSpan), (span) =>
+                    Queue.offer(queue, { _tag: "event", channel, eventId, raw, ...(Option.isSome(span) ? { span: span.value } : {}) }),
+                  )
+                : Effect.void,
+            ),
             Effect.tap((added) => Effect.annotateCurrentSpan({ repeat: !added })),
             Effect.asVoid,
             Effect.withSpan("inbox.receive", { attributes: { channel, event: eventId } }),

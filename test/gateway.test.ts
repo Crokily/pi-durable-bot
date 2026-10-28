@@ -86,7 +86,14 @@ describe("Gateway", () => {
     const trace = spans.filter((span) => span.trace_id === wake.trace_id);
     const byId = new Map(trace.map((span) => [span.span_id, span]));
     const path = (span: (typeof trace)[number]): string => (span.parent_id && byId.has(span.parent_id) ? `${path(byId.get(span.parent_id)!)} > ${span.name}` : span.name);
-    expect(trace.map(path).sort()).toEqual(["wake", "wake > send", "wake > send > channel.send", "wake > send > inbox.receive", "wake > wake.deliver"]);
+    expect(trace.map(path).sort()).toEqual([
+      "wake",
+      "wake > send",
+      "wake > send > channel.send",
+      "wake > send > inbox.receive",
+      "wake > send > inbox.receive > inbox.apply",
+      "wake > wake.deliver",
+    ]);
     expect(JSON.parse(wake.attributes)).toMatchObject({ reason: "mention", place: "mem:#general", submission: "submission-1" });
     expect(JSON.parse(trace.find((span) => span.name === "send")!.attributes)).toMatchObject({ send: "tool:1", result: "sent" });
     // The wake links to the span that logged its event.

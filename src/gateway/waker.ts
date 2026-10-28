@@ -5,6 +5,7 @@ import type { PlaceWake, PlaceWakeReason, WakeEvent, WakeTarget } from "../core/
 import { GatewayConfig } from "./config.ts";
 import { DeliverError, failureText, JudgeError, type LogError, message, NoWakeTarget } from "./errors.ts";
 import { type LoggedMessage, MessageLog, type UndecidedEvent } from "./log.ts";
+import { Telemetry } from "./telemetry.ts";
 import { WakeSpans } from "./tracing.ts";
 
 export interface WakerSettings {
@@ -62,6 +63,7 @@ export class Waker extends Context.Service<
       const log = yield* MessageLog;
       const config = yield* GatewayConfig;
       const wakeSpans = yield* WakeSpans;
+      const telemetry = yield* Telemetry;
       const batches = new Map<string, Batch>();
       const timers = yield* FiberMap.make<string>();
       const deciding = yield* FiberSet.make();
@@ -72,13 +74,14 @@ export class Waker extends Context.Service<
       /** Hand a recorded wake to the bot, and forget it once the bot has it. */
       const handOver = (bot: WakeTarget, wake: PlaceWake) =>
         Effect.gen(function* () {
+          const span = yield* Effect.currentSpan.pipe(Effect.option);
+          const caller = Option.isSome(span) ? telemetry.view(span.value) : undefined;
           const submission = yield* Effect.tryPromise({
-            try: () => bot.deliver(wake),
+            try: () => bot.deliver(wake, caller),
             catch: (cause) => new DeliverError({ message: message(cause), cause }),
           }).pipe(Effect.withSpan("wake.deliver", { attributes: { wake: wake.id } }));
           hooks.afterDeliver?.(wake.id);
           yield* log.wakeDelivered(wake.id);
-          const span = yield* Effect.currentSpan.pipe(Effect.option);
           if (Option.isSome(span)) wakeSpans.remember(submission, span.value);
           yield* Effect.annotateCurrentSpan({ reason: wake.reason, wake: wake.id, submission });
           config.print("wake", { reason: wake.reason, place: wake.place.address, events: wake.events.length });
@@ -142,7 +145,9 @@ export class Waker extends Context.Service<
           let lastError: unknown;
           for (const wait of [0, ...JUDGE_RETRY_MS]) {
             if (wait) yield* Effect.sleep(wait);
-            const result = yield* Effect.result(Effect.tryPromise({ try: () => judge.judge(input), catch: (cause) => cause }));
+            const span = yield* Effect.currentSpan.pipe(Effect.option);
+            const trace = Option.isSome(span) ? telemetry.view(span.value) : undefined;
+            const result = yield* Effect.result(Effect.tryPromise({ try: () => judge.judge(input, trace), catch: (cause) => cause }));
             if (Result.isSuccess(result)) {
               yield* Effect.annotateCurrentSpan({ related: result.success.related, respond: result.success.respond });
               return result.success;

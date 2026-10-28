@@ -1,4 +1,5 @@
 import { Clock, Context, Effect, FiberHandle, FiberSet, Layer, ManagedRuntime, Schedule } from "effect";
+import type { TelemetrySpan } from "@earendil-works/pi-telemetry";
 import type { Address, ChannelAdapter, ChannelSink } from "../core/channel.ts";
 import type { Sql } from "../core/sql.ts";
 import type { WakeTarget } from "../core/wake.ts";
@@ -9,6 +10,7 @@ import { Inbox } from "./inbox.ts";
 import { MessageLog } from "./log.ts";
 import { Outbox, type OutboxHooks, type SendResult } from "./outbox.ts";
 import { type Timer, Timers } from "./timers.ts";
+import { type PiTelemetry, Telemetry } from "./telemetry.ts";
 import { tracingLayer, WakeSpans } from "./tracing.ts";
 import { Waker, type WakerHooks } from "./waker.ts";
 
@@ -20,14 +22,17 @@ const HEARTBEAT_MS = 60_000;
 export function gatewayLayer(sql: Sql, options: GatewayOptions) {
   const config = Layer.succeed(GatewayConfig, options);
   const tracing = tracingLayer(sql, options.bot).pipe(Layer.provide(config));
-  const base = Layer.mergeAll(MessageLog.layer(sql), WakeSpans.layer(sql), Channels.layer).pipe(Layer.provideMerge(config), Layer.provideMerge(tracing));
+  const base = Layer.mergeAll(MessageLog.layer(sql), WakeSpans.layer(sql), Channels.layer, Telemetry.layer).pipe(
+    Layer.provideMerge(config),
+    Layer.provideMerge(tracing),
+  );
   const waker = Waker.layer.pipe(Layer.provideMerge(base));
   const inbox = Inbox.layer.pipe(Layer.provideMerge(waker));
   const core = Layer.mergeAll(Outbox.layer, Timers.layer(sql)).pipe(Layer.provideMerge(inbox));
   return Background.layer.pipe(Layer.provideMerge(core));
 }
 
-type Core = Channels | GatewayConfig | Inbox | MessageLog | Outbox | Timers | WakeSpans | Waker;
+type Core = Channels | GatewayConfig | Inbox | MessageLog | Outbox | Telemetry | Timers | WakeSpans | Waker;
 type Services = Core | Background;
 
 /** Tasks of the gateway that run in the background, and effects started by adapters' callbacks. Both stop with it. */
@@ -63,6 +68,8 @@ export class Gateway {
   #started = false;
   #stopping: Promise<void> | undefined;
   readonly timers: TimersHandle;
+  /** pi's telemetry on the gateway's tracer, for the agent: its spans join the gateway's traces. */
+  readonly telemetry: PiTelemetry;
 
   private constructor(
     runtime: ManagedRuntime.ManagedRuntime<Services, LogError>,
@@ -71,6 +78,7 @@ export class Gateway {
       outbox: Outbox["Service"];
       waker: Waker["Service"];
       wakeSpans: WakeSpans["Service"];
+      telemetry: PiTelemetry;
       background: Background["Service"];
     },
     print: GatewayOptions["print"],
@@ -79,6 +87,7 @@ export class Gateway {
     this.#channels = services.channels;
     this.#outbox = services.outbox;
     this.#waker = services.waker;
+    this.telemetry = services.telemetry;
     this.#wakeSpans = services.wakeSpans;
     this.#background = services.background;
     this.#print = print;
@@ -91,7 +100,14 @@ export class Gateway {
     try {
       const services = await runtime.runPromise(
         Effect.gen(function* () {
-          return { channels: yield* Channels, outbox: yield* Outbox, waker: yield* Waker, wakeSpans: yield* WakeSpans, background: yield* Background };
+          return {
+            channels: yield* Channels,
+            outbox: yield* Outbox,
+            waker: yield* Waker,
+            wakeSpans: yield* WakeSpans,
+            telemetry: yield* Telemetry,
+            background: yield* Background,
+          };
         }),
       );
       return new Gateway(runtime, services, options.print);
@@ -188,26 +204,32 @@ export class Gateway {
 
   // ---- Actions ----
 
-  /** wakes: the agent's submission IDs this send answers, so the send joins their trace. */
-  send(sendId: string, to: Address, text: string, wakes: readonly string[] = []): Promise<SendResult> {
-    return this.#run(Effect.flatMap(this.#wakeSpans.find(wakes), (spans) => this.#outbox.send(sendId, to, text, spans)));
+  /**
+   * wakes: the agent's submission IDs this send answers. trace: the agent's tool call, when the send comes from one.
+   * The send's span is in the tool call's trace, or else in the first wake's, and links to the wakes.
+   */
+  send(sendId: string, to: Address, text: string, wakes: readonly string[] = [], trace?: TelemetrySpan): Promise<SendResult> {
+    const parent = this.telemetry.spanOf(trace);
+    return this.#run(Effect.flatMap(this.#wakeSpans.find(wakes), (spans) => this.#outbox.send(sendId, to, text, spans, parent)));
   }
 
-  react(message: Address, emoji: string, remove: boolean): Promise<void> {
+  react(message: Address, emoji: string, remove: boolean, trace?: TelemetrySpan): Promise<void> {
+    const parent = this.telemetry.spanOf(trace);
     return this.#run(
       Effect.gen({ self: this }, function* () {
         const adapter = yield* this.#channels.adapterFor(message);
         yield* Effect.tryPromise({ try: () => adapter.react(message, emoji, remove), catch: (cause) => ChannelError.from(adapter.id, cause) });
-      }).pipe(Effect.withSpan("react", { attributes: { message, emoji, remove } })),
+      }).pipe(Effect.withSpan("react", { attributes: { message, emoji, remove }, ...(parent ? { parent } : {}) })),
     );
   }
 
-  call(channel: string, method: string, params: Record<string, unknown>): Promise<unknown> {
+  call(channel: string, method: string, params: Record<string, unknown>, trace?: TelemetrySpan): Promise<unknown> {
+    const parent = this.telemetry.spanOf(trace);
     return this.#run(
       Effect.gen({ self: this }, function* () {
         const adapter = yield* this.#channels.get(channel);
         return yield* Effect.tryPromise({ try: () => adapter.call(method, params), catch: (cause) => ChannelError.from(adapter.id, cause) });
-      }).pipe(Effect.withSpan("call", { attributes: { channel, method } })),
+      }).pipe(Effect.withSpan("call", { attributes: { channel, method }, ...(parent ? { parent } : {}) })),
     );
   }
 

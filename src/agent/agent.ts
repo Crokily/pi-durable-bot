@@ -106,7 +106,13 @@ export class Agent {
 
   static async open(options: AgentOptions): Promise<Agent> {
     const { actions, models } = options;
-    const storage = await SqliteStorage.open(options.database as never, { prefix: "pi_" });
+    // The connection is the bot's and shared with the gateway, which still writes after the agent has stopped. Closing
+    // the harness closes its storage, not the connection; the bot closes that last.
+    const connection = new Proxy(options.database, {
+      get: (target, property) =>
+        property === "close" ? async () => {} : typeof Reflect.get(target, property) === "function" ? Reflect.get(target, property).bind(target) : Reflect.get(target, property),
+    });
+    const storage = await SqliteStorage.open(connection as never, { prefix: "pi_" });
     await requireChatModel(models, options.model);
     const text = (value: string) => [{ type: "text" as const, text: value }];
     const tools = [

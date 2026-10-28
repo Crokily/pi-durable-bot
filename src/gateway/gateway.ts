@@ -159,6 +159,19 @@ export class Gateway {
     );
   }
 
+  /**
+   * Wake the bot no more: stop the timers and the waker. A decision in progress is finished and delivered first.
+   * Undecided events stay in the log for the next start. Everything else, the bot's actions too, keeps working.
+   */
+  pauseWakes(): Promise<void> {
+    return this.#run(
+      Effect.gen(function* () {
+        yield* (yield* Timers).stop;
+        yield* (yield* Waker).stop;
+      }),
+    );
+  }
+
   /** Stop everything. Calls after this fail with "the gateway is stopped". */
   stop(): Promise<void> {
     this.#stopping ??= this.#stop();

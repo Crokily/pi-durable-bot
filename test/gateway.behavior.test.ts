@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { agentRequests, type FakeModel, startFakeModel, wakeLine, wakes } from "./support/fake-model.ts";
+import { agentRequests, type FakeModel, judgeRequests, startFakeModel, wakeLine, wakes } from "./support/fake-model.ts";
 import { CHANNEL, ME, pause, TestGateway, waitFor } from "./support/gateway.ts";
 
 // The gateway seen from outside, with a real `pots start` process: people write on the test platform, the bot is
@@ -169,6 +169,21 @@ describe("crashes and restarts", { timeout: 90_000 }, () => {
     expect(gateway.sent()).toHaveLength(1);
     expect(gateway.query<{ id: string }>("SELECT id FROM bot_wakes").map((row) => row.id)).toEqual([`mention:test:#general:1`]);
     expect(gateway.query("SELECT * FROM gw_pending_wakes")).toEqual([]);
+  });
+
+  it("finishes the agent's work after a stop that came while the agent and the judge were waiting for the model", async () => {
+    await setUp({ judge: "main", modelDelayMs: 2_000 });
+    gateway.say("general", "alice", `@${ME} please answer`);
+    await waitFor(() => agentRequests(model).length === 1, { what: "the agent's model request" });
+    gateway.say("random", "bob", "the pricing page shows the old prices");
+    await waitFor(() => judgeRequests(model).length === 1, { what: "the judge's model request" });
+
+    // SIGTERM while both wait for the model. The work in progress must not be lost or done twice.
+    await gateway.stop();
+    await gateway.start();
+    await waitFor(() => gateway.sent().length === 2, { timeout: 30_000, what: "both replies" });
+    await pause(3_000);
+    expect(gateway.sent().map((record) => record.place).sort()).toEqual(["general", "random"]);
   });
 
   it("keeps an event that was stored but not decided when the gateway is killed", async () => {

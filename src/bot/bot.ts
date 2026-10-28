@@ -257,11 +257,16 @@ export class Bot implements WakeTarget {
     return bot;
   }
 
+  /**
+   * Stop in this order: no new wakes (a decision in progress is finished and delivered), then the agent (its work in
+   * progress is interrupted and goes on after the next start), then the gateway. The gateway takes the agent's actions
+   * until the agent has stopped, so an action is never refused while the agent still works.
+   */
   async stop(): Promise<void> {
     await this.#control.stop();
-    await this.#timers.stop();
-    await this.#gateway.stop();
+    await this.#gateway.pauseWakes();
     await this.#agent.close();
+    await this.#gateway.stop();
     await this.#sql.close().catch(() => {});
     this.#print("bot stopped");
   }

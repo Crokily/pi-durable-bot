@@ -73,6 +73,11 @@ export function wakeLine(text: string): string {
   return text.split("\n")[0]!;
 }
 
+/** Requests that came from the judge. */
+export function judgeRequests(model: FakeModel): FakeRequest[] {
+  return model.requests.filter(isJudge);
+}
+
 /** Requests that came from the agent, not from the judge. */
 export function agentRequests(model: FakeModel): FakeRequest[] {
   return model.requests.filter((request) => !isJudge(request));

@@ -4,9 +4,13 @@
   "description": "Open-source AI coworkers that read every channel, decide what matters, and act on their own computer. Self-hosted, any model.",
   "license": "MIT",
   "type": "module",
+  "homepage": "https://github.com/Crokily/pi-durable-bot#readme",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Crokily/pi-durable-bot.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Crokily/pi-durable-bot/issues"
   },
   "keywords": [
     "ai-agent",
@@ -21,7 +25,7 @@
   },
   "files": [
     "dist",
-    "docs",
+    "docs/channels",
     "README.md",
     "LICENSE"
   ],

@@ -11,6 +11,7 @@ does the work on its own computer, and speaks up when it should.
 
 [Demo](#see-it-work) · [Quick start](#quick-start) · [How it decides](#how-it-decides-to-act) · [Open and yours](#open-and-yours) · [How it works](#how-it-works)
 
+[![npm](https://img.shields.io/npm/v/pi-durable-bot?style=flat-square&color=1F7A70)](https://www.npmjs.com/package/pi-durable-bot)
 [![License: MIT](https://img.shields.io/badge/license-MIT-1F7A70?style=flat-square)](LICENSE)
 [![Built on pi-durable](https://img.shields.io/badge/built%20on-pi--durable-1F7A70?style=flat-square)](https://github.com/earendil-works/pi)
 [![Chat SDK](https://img.shields.io/badge/channels-Chat%20SDK-1F7A70?style=flat-square)](https://chat-sdk.dev)
@@ -104,14 +105,14 @@ Grok Bot, dots, Muse and Claude Duet are closed products. They run on someone el
 You need [Node.js](https://nodejs.org) 24 or newer, on macOS, Linux or Windows (with [Git for Windows](https://git-scm.com/download/win)).
 
 ```sh
-npm install -g github:Crokily/pi-durable-bot
+npm install -g pi-durable-bot
 pots init
 ```
 
 `pots init` asks three things:
 
 1. **Your bot's name.**
-2. **Its AI.** Sign in with a subscription you already pay for (ChatGPT, Claude, GitHub Copilot, Gemini, Grok and more), use an API key, or point it at a local server (Ollama, LM Studio, llama.cpp).
+2. **Its AI.** Sign in with a subscription you already pay for (ChatGPT, Claude, GitHub Copilot, Grok, Kimi and more), use an API key, or point it at a local server (Ollama, LM Studio, llama.cpp).
 3. **In one sentence, what it is for.** Optional. The bot writes its own persona and responsibilities from it.
 
 Then the gateway starts as a background service (it starts again at login) and you are talking to your bot in the terminal. Tell it which chat apps to join. It sets them up itself on its computer and asks you only for what it cannot do, like signing in to Slack or approving the app. Leave with Ctrl+C; come back with `pots chat`.
@@ -127,9 +128,11 @@ It joins only the places it is invited to, like a new hire who is added to the r
 | `pots start` | Run the gateway in this terminal instead |
 | `pots bot new \| list` | Create and list bots |
 
+To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`. To remove it, run `pots service uninstall`, then `npm uninstall -g pi-durable-bot`. The bots stay in `~/.pots/` until you delete that folder.
+
 ### Choose the models
 
-`bot.json` names two models. Both use pi's logins and model list, so `pi` shows what is available.
+`pots init` sets up the model. Each bot's `bot.json` names two models, and you can change them at any time; edits apply within seconds. Logins, API keys and local endpoints are stored in pi's files in `~/.pi/agent/`, so the [pi](https://github.com/earendil-works/pi) command line, if you use it, shares them.
 
 | Field | What it does | Values |
 |---|---|---|
@@ -138,7 +141,7 @@ It joins only the places it is invited to, like a new hire who is added to the r
 
 A fast classifier is cheaper and quicker than the main model: Jev answers in about 0.3 seconds. With `main`, each group of messages costs one short request to the main model.
 
-**OpenAI-compatible and local endpoints** (Ollama, LM Studio, vLLM, a proxy) go in pi's `~/.pi/agent/models.json`, the same file the pi CLI reads ([fields](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md)):
+**OpenAI-compatible and local endpoints** (Ollama, LM Studio, vLLM, a proxy): `pots init` adds them for you. By hand, they go in pi's `~/.pi/agent/models.json` ([fields](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md)):
 
 ```json
 {
@@ -154,12 +157,12 @@ A fast classifier is cheaper and quicker than the main model: Jev answers in abo
 }
 ```
 
-Then set `"model": "ollama/qwen3:8b"`. The agent needs a model that calls tools well and a context window of 32K tokens or more.
+Then set `"model": "ollama/qwen3:8b"`. The agent needs a model that calls tools well and a context window of 32K tokens or more. In our tests a 4B model judged well but was too small to do the work alone; use the largest model your machine runs well.
 
-**llama.cpp** can be both the agent and the judge. Start `llama-server` in router mode and run `pi`, then `/login llama.cpp` once ([guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/llama-cpp.md)). Its chat models appear as `llama.cpp/<model>`. For the judge, use a decision model such as [Kev-4B](https://huggingface.co/ggml-org/Kev-4B-GGUF) (3 GB), which answers through llama.cpp's `/v1/systemone`; any chat model also works as a judge.
+**llama.cpp** can be both the agent and the judge. Start `llama-server` in router mode, then log in once with the pi command line: run `pi`, then `/login llama.cpp` ([guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/llama-cpp.md)). Its chat models appear as `llama.cpp/<model>`. For the judge, use a decision model such as [Kev-4B](https://huggingface.co/ggml-org/Kev-4B-GGUF) (3 GB), which answers through llama.cpp's `/v1/systemone`; any chat model also works as a judge.
 
 ```json
-{ "model": "llama.cpp/Qwen3-4B-Instruct-2507-Q4_K_M", "judge": "llama.cpp/Kev-4B-Q4_K_M" }
+{ "model": "llama.cpp/<your chat model>", "judge": "llama.cpp/Kev-4B-Q4_K_M" }
 ```
 
 ## How it decides to act
@@ -188,6 +191,7 @@ flowchart LR
 flowchart LR
   subgraph Adapters[Channel adapters]
     S[Slack]
+    T[Terminal]
     D[Discord, Teams, ...]
   end
   subgraph Gateway[Gateway core, one per bot]
@@ -200,10 +204,12 @@ flowchart LR
     A[pi-durable agent<br/>read write edit bash<br/>send react call]
   end
   S --> I
+  T --> I
   D --> I
   K --> A
   A --> O
   O --> S
+  O --> T
   O --> D
 ```
 
@@ -214,7 +220,7 @@ flowchart LR
 | Bot | Identity, persona, responsibilities, notes, timers, workspace and one long conversation. |
 | Agent | [pi-durable](https://github.com/earendil-works/pi): runs the model, journals every step, owns the tools. |
 
-Everything lives in `~/.pots/`: one folder per bot in `bots/`, channel tokens in `secrets/`. Each bot folder holds:
+One gateway process runs every bot on the machine. Everything lives in `~/.pots/` (or `$POTS_HOME`): one folder per bot in `bots/`, channel tokens in `secrets/`, the gateway's output in `logs/` on macOS and Windows (on Linux, `pots service logs` reads the journal). Each bot folder holds:
 
 | File | What it is |
 |---|---|
@@ -243,12 +249,25 @@ pi-durable-bot runs every day as a teammate in a real workspace. What works toda
 - [x] Any model pi can use: subscription logins, API keys, OpenAI-compatible endpoints, local models
 - [x] A judge you choose: the bot's own model, Jev or another classifier, a local llama.cpp model, or none
 - [ ] More adapters: Discord, Teams, Telegram, email
+- [ ] `pots init` in a web page, for people who do not use a terminal
+
+## Develop
+
+```sh
+git clone https://github.com/Crokily/pi-durable-bot && cd pi-durable-bot
+npm install
+npm run pots -- status    # the pots command, straight from src/ (Node 24 runs TypeScript)
+npm run check             # type check
+```
+
+`npm run build` writes the JavaScript that the npm package ships to `dist/`. Set `POTS_HOME` to try things without touching `~/.pots/`. Coding agents: read [AGENTS.md](AGENTS.md).
 
 ## Built on
 
 - [pi-durable](https://github.com/earendil-works/pi) for the durable agent runtime
 - [Chat SDK](https://chat-sdk.dev) for channel adapters
 - [pi](https://github.com/earendil-works/pi)'s model layer for logins, providers and local models
+- [Effect](https://effect.website) for the `pots` command line
 - [TypeSafe AI](https://typesafe.ai)'s Jev, one of the judges you can choose
 
 ## License

@@ -24,7 +24,7 @@ export const setUpModel = (models: Models) =>
         message: "How should your bot get its AI?",
         choices: [
           ...(ready.length > 0 ? [{ title: `A model you have already set up in pi (${ready.length})`, value: "existing" as const }] : []),
-          { title: "Sign in with a subscription", value: "oauth", description: "ChatGPT, Claude, GitHub Copilot, Gemini, Grok and more" },
+          { title: "Sign in with a subscription", value: "oauth", description: "ChatGPT, Claude, GitHub Copilot, Grok, Kimi and more" },
           { title: "Use an API key", value: "api_key", description: "Any of pi's providers" },
           { title: "A local or OpenAI-compatible server", value: "local", description: "Ollama, LM Studio, llama.cpp, vLLM, a proxy. Your data stays on your machines." },
         ],

@@ -52,7 +52,7 @@ export interface BotEnvironment {
   models: Models;
 }
 
-/** What the agent is told about the computer it runs on. Checked once per process. */
+/** What the agent is told about the computer it runs on. Checked once per process, from when the gateway loads. */
 const MACHINE = describeMachine();
 /** docs/ of this package, next to src/ or dist/. */
 const DOCS_DIR = fileURLToPath(new URL("../../docs", import.meta.url));
@@ -170,13 +170,14 @@ export class Bot implements WakeTarget {
       print,
     });
     const timers = gateway.timers;
+    const machine = await MACHINE;
     const facts = (): PromptFacts => ({
       id,
       name: current().name,
       paths,
       botsDir: env.botsDir,
       pots: env.potsCommand,
-      machine: MACHINE,
+      machine,
       docs: DOCS_DIR,
       secretsDir: SECRETS_DIR,
       fallbackWakeMinutes: current().settings.fallbackWakeMinutes,

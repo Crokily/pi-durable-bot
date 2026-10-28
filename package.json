@@ -36,6 +36,8 @@
     "start": "node src/cli/pots.ts start",
     "pots": "node src/cli/pots.ts",
     "check": "tsc --noEmit",
+    "test": "vitest run",
+    "tla": "node scripts/tlc.ts",
     "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
     "prepare": "npm run build"
   },
@@ -46,12 +48,16 @@
     "@earendil-works/pi-ai": "1.4.0",
     "@earendil-works/pi-coding-agent": "1.4.0",
     "@earendil-works/pi-durable": "1.4.0",
+    "@earendil-works/pi-telemetry": "1.4.0",
     "@effect/platform-node": "4.0.7",
     "chat": "4.43.0",
     "effect": "4.0.7"
   },
   "devDependencies": {
+    "@effect/vitest": "4.0.7",
     "@types/node": "26.6.5",
-    "typescript": "7.0.2"
+    "fast-check": "4.10.2",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5"
   }
 }

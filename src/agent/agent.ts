@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { JsonValue } from "@earendil-works/chord";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { BACKGROUND_CONTEXT, withTelemetry } from "@earendil-works/chord/context";
 import { type Message, type Models, Type } from "@earendil-works/pi-ai";
 import { calculateContextTokens, estimateMessageTokens } from "@earendil-works/pi-ai/utils/estimate";
 import {
@@ -19,16 +19,20 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
+import type { TelemetryCarrier, TelemetryContext, TelemetrySpan } from "@earendil-works/pi-telemetry";
 import type { Sql } from "../core/sql.ts";
 import { modelRef, requireModel } from "./models.ts";
 
 const context = BACKGROUND_CONTEXT;
 
-/** What the agent's channel tools do. The bot provides them; the agent knows no platform. */
+/**
+ * What the agent's channel tools do. The bot provides them; the agent knows no platform. trace: the tool call's span,
+ * so the gateway's spans for the action are part of it.
+ */
 export interface AgentActions {
-  send(to: string, text: string, sendId: string): Promise<{ message: string; recovered?: boolean; repeated?: boolean }>;
-  react(message: string, emoji: string, remove: boolean): Promise<void>;
-  call(channel: string, method: string, params: Record<string, unknown>): Promise<unknown>;
+  send(to: string, text: string, sendId: string, trace?: TelemetrySpan): Promise<{ message: string; recovered?: boolean; repeated?: boolean }>;
+  react(message: string, emoji: string, remove: boolean, trace?: TelemetrySpan): Promise<void>;
+  call(channel: string, method: string, params: Record<string, unknown>, trace?: TelemetrySpan): Promise<unknown>;
 }
 
 export type Thinking = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -58,6 +62,8 @@ export interface AgentOptions {
   /** System prompt parts, rendered before each request in this order. */
   sections: readonly { name: string; render: () => Promise<string | undefined> | string | undefined }[];
   actions: AgentActions;
+  /** Where pi-durable's and pi-ai's spans go: submissions, task phases, tool calls, model requests. */
+  telemetry?: TelemetryContext;
   log: (message: string, data?: Record<string, unknown>) => void;
 }
 
@@ -100,7 +106,13 @@ export class Agent {
 
   static async open(options: AgentOptions): Promise<Agent> {
     const { actions, models } = options;
-    const storage = await SqliteStorage.open(options.database as never, { prefix: "pi_" });
+    // The connection is the bot's and shared with the gateway, which still writes after the agent has stopped. Closing
+    // the harness closes its storage, not the connection; the bot closes that last.
+    const connection = new Proxy(options.database, {
+      get: (target, property) =>
+        property === "close" ? async () => {} : typeof Reflect.get(target, property) === "function" ? Reflect.get(target, property).bind(target) : Reflect.get(target, property),
+    });
+    const storage = await SqliteStorage.open(connection as never, { prefix: "pi_" });
     await requireChatModel(models, options.model);
     const text = (value: string) => [{ type: "text" as const, text: value }];
     const tools = [
@@ -113,8 +125,8 @@ export class Agent {
         parameters: Type.Object({ to: Type.String(), text: Type.String() }),
         // A rerun after a crash keeps the task ID, so the outbox finds the first attempt instead of sending again.
         replay: "safe",
-        execute: async (args, api) => {
-          const sent = await actions.send(args.to, args.text, `tool:${api.taskId}`);
+        execute: async (args, api, call) => {
+          const sent = await actions.send(args.to, args.text, `tool:${api.taskId}`, call.telemetry);
           return { output: text(`sent: ${sent.message}${sent.recovered ? " (found after a restart, not sent again)" : ""}`) };
         },
       }),
@@ -123,8 +135,8 @@ export class Agent {
         description: "Add an emoji reaction to a message (message address), for example eyes or white_check_mark. remove: true takes it away.",
         parameters: Type.Object({ message: Type.String(), emoji: Type.String(), remove: Type.Optional(Type.Boolean()) }),
         replay: "safe",
-        execute: async (args) => {
-          await actions.react(args.message, args.emoji, args.remove ?? false);
+        execute: async (args, _api, call) => {
+          await actions.react(args.message, args.emoji, args.remove ?? false, call.telemetry);
           return { output: text("ok") };
         },
       }),
@@ -135,8 +147,8 @@ export class Agent {
           "channel: the channel account (the part of an address before the first colon). method and params: as the platform's API documents them; " +
           "take platform IDs from the raw column of the log. Returns the platform's answer as JSON.",
         parameters: Type.Object({ channel: Type.String(), method: Type.String(), params: Type.Optional(Type.Record(Type.String(), Type.Any())) }),
-        execute: async (args, api) => {
-          const result = JSON.stringify(await actions.call(args.channel, args.method, args.params ?? {}), null, 1) ?? "null";
+        execute: async (args, api, call) => {
+          const result = JSON.stringify(await actions.call(args.channel, args.method, args.params ?? {}, call.telemetry), null, 1) ?? "null";
           if (result.length <= CALL_OUTPUT_CHARS) return { output: text(result) };
           const dir = join(options.workspace, "call-results");
           await mkdir(dir, { recursive: true });
@@ -174,6 +186,7 @@ export class Agent {
           },
         },
         env: () => new NodeExecutionEnv({ cwd: options.workspace, shellEnv: options.shellEnv }),
+        ...(options.telemetry ? { telemetry: options.telemetry } : {}),
         onReport: (error, info) => options.log("pi report", { type: info.type, error: String(error) }),
       },
       context,
@@ -215,9 +228,14 @@ export class Agent {
 
   /**
    * Hand text to the agent. Busy: steer joins the running work after the current tool round; otherwise it waits for
-   * the run to end. Idle: starts a run. The same id is one submission. Returns the submission ID.
+   * the run to end. Idle: starts a run. The same id is one submission. caller: the span of what woke the agent;
+   * pi-durable links the submission to it. Returns the submission ID and its stored trace context, which is the first
+   * one for a submission made before.
    */
-  async submit(input: { id: string; text: string; steer: boolean; data?: JsonValue }): Promise<string> {
+  async submit(input: { id: string; text: string; steer: boolean; data?: JsonValue; caller?: TelemetrySpan | undefined }): Promise<{
+    id: string;
+    trace?: TelemetryCarrier;
+  }> {
     const submission = await this.#root.submit(
       {
         type: "input",
@@ -226,9 +244,10 @@ export class Agent {
         whenBusy: input.steer ? "steer" : "followUp",
         entry: { kind: "bot.wake", ...(input.data === undefined ? {} : { data: input.data }) },
       },
-      context,
+      input.caller ? withTelemetry(input.caller, context) : context,
     );
-    return String(submission.id);
+    const { trace } = await submission.status(context);
+    return { id: String(submission.id), ...(trace ? { trace } : {}) };
   }
 
   /** Why a run with these submissions got no answer, such as a missing login; undefined when they were answered. */

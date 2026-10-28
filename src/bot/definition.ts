@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Compaction, Thinking } from "../agent/agent.ts";
 import type { JudgeSetting } from "../agent/judge.ts";
+import { Effect, Schema } from "effect";
 import type { ChannelConfig } from "../core/channel.ts";
-
 
 /** bot.json: who the bot is and where it is. The agent may edit it; changes apply while running. */
 export interface BotDefinition {
@@ -58,6 +58,7 @@ export function botPaths(dir: string) {
     db: join(dir, "bot.sqlite"),
     socket: controlAddress(dir),
     crashAfterSend: join(dir, "crash-after-send"),
+    crashAfterWake: join(dir, "crash-after-wake"),
     /** A note from pots init: the bot is woken with it at its first start, then the file is removed. */
     firstWake: join(dir, "first-wake.md"),
   };
@@ -79,34 +80,83 @@ function controlAddress(dir: string): string {
 /** A bot ID: lowercase letters, digits, "_" and "-". It names the bot's folder. */
 export const BOT_ID = /^[a-z0-9][a-z0-9_-]*$/;
 
+const PROVIDER_MODEL = /^[^/]+\/.+$/;
+
+/** bot.json as a schema: the checks, the defaults and the types. */
+const Definition = Schema.Struct({
+  name: Schema.Trim.check(Schema.isNonEmpty()),
+  model: Schema.String.check(Schema.isPattern(PROVIDER_MODEL)).pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_MODEL))),
+  thinking: Schema.Literals(["off", "minimal", "low", "medium", "high", "xhigh"]).pipe(Schema.withDecodingDefaultKey(Effect.succeed("medium" as const))),
+  judge: Schema.String.check(Schema.makeFilter((judge) => judge === "main" || judge === "off" || PROVIDER_MODEL.test(judge))).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_JUDGE)),
+  ),
+  channels: Schema.Array(
+    Schema.StructWithRest(Schema.Struct({ id: Schema.String.check(Schema.isPattern(/^[a-z0-9][a-z0-9-]*$/)), type: Schema.String }), [
+      Schema.Record(Schema.String, Schema.Unknown),
+    ]),
+  ),
+  settings: Schema.Struct({
+    debounceMs: Schema.Finite.pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_SETTINGS.debounceMs))),
+    debounceMaxMs: Schema.Finite.pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_SETTINGS.debounceMaxMs))),
+    judgeThreshold: Schema.Finite.pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_SETTINGS.judgeThreshold))),
+    judgeContextMessages: Schema.Finite.pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_SETTINGS.judgeContextMessages))),
+    fallbackWakeMinutes: Schema.Finite.pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_SETTINGS.fallbackWakeMinutes))),
+    compaction: Schema.Struct({
+      reserveTokens: Schema.optionalKey(Schema.Finite),
+      keepRecentTokens: Schema.optionalKey(Schema.Finite),
+      backgroundTokens: Schema.optionalKey(Schema.Finite),
+    }).pipe(Schema.withDecodingDefaultKey(Effect.succeed({}))),
+  }).pipe(Schema.withDecodingDefaultKey(Effect.succeed({}))),
+});
+
+const validate = Schema.toStandardSchemaV1(Definition)["~standard"].validate;
+
+/** The message for the first problem in bot.json, in the words people know from earlier versions. */
+function problem(raw: unknown, issue: { message: string; path?: readonly (PropertyKey | { key: PropertyKey })[] | undefined }): string {
+  const path = (issue.path ?? []).map((part) => (typeof part === "object" ? part.key : part));
+  const channel = (raw as { channels?: { id?: unknown }[] }).channels?.[Number(path[1])];
+  switch (path[0]) {
+    case undefined:
+      return `must be a JSON object: ${issue.message}`;
+    case "name":
+      return `"name" is required`;
+    case "model":
+      return `"model" must be "provider/modelId"`;
+    case "judge":
+      return `"judge" must be "main", "off" or "provider/modelId"`;
+    case "thinking":
+      return `"thinking" must be off, minimal, low, medium, high or xhigh`;
+    case "channels":
+      if (path.length === 1) return `"channels" must be a list`;
+      if (path[2] === "type") return `channel ${String(channel?.id)} needs a "type"`;
+      return `every channel needs an "id" of lowercase letters, digits and dashes`;
+    default:
+      return `${path.join(".")}: ${issue.message}`;
+  }
+}
+
 /** Read and check bot.json. Throws with a readable message when it is wrong. */
 export function readDefinition(file: string): { definition: BotDefinition; text: string } {
   const text = readFileSync(file, "utf8");
-  const raw = JSON.parse(text) as Partial<BotDefinition> & { settings?: Partial<BotSettings> };
-  if (typeof raw.name !== "string" || !raw.name.trim()) throw new Error(`${file}: "name" is required`);
-  if (!Array.isArray(raw.channels)) throw new Error(`${file}: "channels" must be a list`);
+  const raw: unknown = JSON.parse(text);
+  const result = validate(raw);
+  if (result instanceof Promise) throw new Error(`${file}: could not be checked`);
+  if (result.issues) throw new Error(`${file}: ${problem(raw, result.issues[0]!)}`);
+  const decoded = result.value;
   const ids = new Set<string>();
-  for (const channel of raw.channels) {
-    if (!channel || typeof channel.id !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(channel.id)) {
-      throw new Error(`${file}: every channel needs an "id" of lowercase letters, digits and dashes`);
-    }
-    if (typeof channel.type !== "string") throw new Error(`${file}: channel ${channel.id} needs a "type"`);
+  for (const channel of decoded.channels) {
     if (ids.has(channel.id)) throw new Error(`${file}: channel id ${channel.id} is used twice`);
     ids.add(channel.id);
   }
-  const model = raw.model ?? DEFAULT_MODEL;
-  if (!/^[^/]+\/.+$/.test(model)) throw new Error(`${file}: "model" must be "provider/modelId"`);
-  const judge = raw.judge ?? DEFAULT_JUDGE;
-  if (judge !== "main" && judge !== "off" && !/^[^/]+\/.+$/.test(judge)) throw new Error(`${file}: "judge" must be "main", "off" or "provider/modelId"`);
   return {
     text,
     definition: {
-      name: raw.name.trim(),
-      model,
-      thinking: raw.thinking ?? "medium",
-      judge,
-      channels: raw.channels,
-      settings: { ...DEFAULT_SETTINGS, ...raw.settings, compaction: { ...DEFAULT_SETTINGS.compaction, ...raw.settings?.compaction } },
+      name: decoded.name,
+      model: decoded.model,
+      thinking: decoded.thinking,
+      judge: decoded.judge,
+      channels: decoded.channels.map((channel) => ({ ...channel })),
+      settings: { ...decoded.settings, compaction: { ...decoded.settings.compaction } },
     },
   };
 }

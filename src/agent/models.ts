@@ -1,5 +1,7 @@
 import type { AnyModel, Models, Provider } from "@earendil-works/pi-ai";
+import { type LazyStreamObserver, lazyStream } from "@earendil-works/pi-ai/api/lazy";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { TelemetrySpan } from "@earendil-works/pi-telemetry";
 
 /**
  * pi's own model layer, shared with the pi CLI: subscription logins and API keys in `~/.pi/agent/auth.json`,
@@ -15,7 +17,37 @@ export async function openModels(): Promise<Models> {
     new URL("./extensions/llama/provider.js", import.meta.resolve("@earendil-works/pi-coding-agent")).href
   );
   models.registerNativeProvider(llama.createLlamaProvider().provider);
-  return models;
+  return observeRequests(models);
+}
+
+type Observe = (model: Parameters<Models["streamSimple"]>[0], options: { telemetry?: TelemetrySpan; reasoning?: unknown } | undefined, poll: boolean) => LazyStreamObserver;
+
+/**
+ * Model requests as spans (pi.ai.request: provider, model, tokens, cost; no content), under the span the request
+ * options name, which pi-durable sets to the agent's task phase. pi-ai's own Models does this; pi's ModelRuntime does
+ * not yet, so the same observer from pi-ai is added around it. pi-ai does not export it; when it cannot be found, the
+ * models work as they are.
+ */
+async function observeRequests(models: ModelRuntime): Promise<Models> {
+  let observe: Observe;
+  try {
+    ({ observeModelRequest: observe } = (await import(new URL("./telemetry.js", import.meta.resolve("@earendil-works/pi-ai")).href)) as { observeModelRequest: Observe });
+    if (typeof observe !== "function") return models;
+  } catch {
+    return models;
+  }
+  // pi-durable's generations stream, compaction and the judge complete; both go through streamSimple.
+  const streamSimple: Models["streamSimple"] = (model, context, options) =>
+    lazyStream(model, async () => models.streamSimple(model, context, options), observe(model, options, false));
+  const completeSimple: Models["completeSimple"] = (model, context, options) => streamSimple(model, context, options).result();
+  return new Proxy(models, {
+    get(target, property) {
+      if (property === "streamSimple") return streamSimple;
+      if (property === "completeSimple") return completeSimple;
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
 }
 
 /** "provider/modelId" → its parts. The model ID may contain slashes. */

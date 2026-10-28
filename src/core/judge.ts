@@ -1,4 +1,5 @@
 // The interface between the gateway's waker and the judge of events that do not mention the bot. Common words only.
+import type { TelemetrySpan } from "@earendil-works/pi-telemetry";
 
 /** One event or earlier message, as the judge sees it. */
 export interface JudgeItem {
@@ -29,5 +30,6 @@ export interface JudgeAnswer {
  * The judge sees what the bot is responsible for, so it knows what "about me" means.
  */
 export interface Judge {
-  judge(input: JudgeInput): Promise<JudgeAnswer>;
+  /** trace: the gateway's span for this judgment; a model request of the judge is recorded under it. */
+  judge(input: JudgeInput, trace?: TelemetrySpan): Promise<JudgeAnswer>;
 }

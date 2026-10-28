@@ -1,185 +1,311 @@
+import { Clock, Context, Effect, FiberHandle, FiberSet, Layer, ManagedRuntime, Schedule } from "effect";
+import type { TelemetrySpan } from "@earendil-works/pi-telemetry";
 import type { Address, ChannelAdapter, ChannelSink } from "../core/channel.ts";
-import type { Judge } from "../core/judge.ts";
+import type { Sql } from "../core/sql.ts";
 import type { WakeTarget } from "../core/wake.ts";
-import type { MessageLog } from "./log.ts";
-import { Outbox, type SendResult } from "./outbox.ts";
-import { Waker, type WakerSettings } from "./waker.ts";
+import { Channels } from "./channels.ts";
+import { GatewayConfig, type GatewayOptions } from "./config.ts";
+import { ChannelError, type LogError } from "./errors.ts";
+import { Inbox } from "./inbox.ts";
+import { MessageLog } from "./log.ts";
+import { Outbox, type OutboxHooks, type SendResult } from "./outbox.ts";
+import { type Timer, Timers } from "./timers.ts";
+import { type PiTelemetry, Telemetry } from "./telemetry.ts";
+import { tracingLayer, WakeSpans } from "./tracing.ts";
+import { Waker, type WakerHooks } from "./waker.ts";
 
-type Print = (message: string, data?: Record<string, unknown>) => void;
+export type { SendResult } from "./outbox.ts";
 
 const HEARTBEAT_MS = 60_000;
 
+/** The gateway core of one bot as Effect services: log, channels, inbox, waker, outbox, timers. */
+export function gatewayLayer(sql: Sql, options: GatewayOptions) {
+  const config = Layer.succeed(GatewayConfig, options);
+  const tracing = tracingLayer(sql, options.bot).pipe(Layer.provide(config));
+  const base = Layer.mergeAll(MessageLog.layer(sql), WakeSpans.layer(sql), Channels.layer, Telemetry.layer).pipe(
+    Layer.provideMerge(config),
+    Layer.provideMerge(tracing),
+  );
+  const waker = Waker.layer.pipe(Layer.provideMerge(base));
+  const inbox = Inbox.layer.pipe(Layer.provideMerge(waker));
+  const core = Layer.mergeAll(Outbox.layer, Timers.layer(sql)).pipe(Layer.provideMerge(inbox));
+  return Background.layer.pipe(Layer.provideMerge(core));
+}
+
+type Core = Channels | GatewayConfig | Inbox | MessageLog | Outbox | Telemetry | Timers | WakeSpans | Waker;
+type Services = Core | Background;
+
+/** Tasks of the gateway that run in the background, and effects started by adapters' callbacks. Both stop with it. */
+class Background extends Context.Service<
+  Background,
+  {
+    readonly heartbeat: FiberHandle.FiberHandle;
+    readonly run: <A, E>(effect: Effect.Effect<A, E, Core>) => Promise<A>;
+  }
+>()("pots/gateway/Background") {
+  static readonly layer = Layer.effect(
+    Background,
+    Effect.gen(function* () {
+      return Background.of({ heartbeat: yield* FiberHandle.make(), run: yield* FiberSet.makeRuntimePromise<Core>() });
+    }),
+  );
+}
+
 /**
- * The gateway core of one bot, the same for every platform: inbox, message log, waker and outbox.
- * Channel adapters only translate; everything they receive goes through here.
+ * The gateway core of one bot, the same for every platform: inbox, message log, waker, outbox and timers. Channel
+ * adapters only translate; everything they receive goes through here. The core runs on Effect; this class is its
+ * face for the bot, in promises.
  */
 export class Gateway {
-  readonly log: MessageLog;
-  readonly #waker: Waker;
-  readonly #outbox: Outbox;
-  readonly #adapters = new Map<string, ChannelAdapter>();
-  readonly #print: Print;
-  /** Inbox events are applied one at a time, in arrival order, so an edit never overtakes its message. */
-  #queue: Promise<void> = Promise.resolve();
+  readonly #runtime: ManagedRuntime.ManagedRuntime<Services, LogError>;
+  readonly #channels: Channels["Service"];
+  readonly #outbox: Outbox["Service"];
+  readonly #waker: Waker["Service"];
+  readonly #wakeSpans: WakeSpans["Service"];
+  readonly #background: Background["Service"];
+  readonly #print: GatewayOptions["print"];
   #lastAlive: number | undefined;
-  #heartbeat?: NodeJS.Timeout;
   #started = false;
+  #stopping: Promise<void> | undefined;
+  readonly timers: TimersHandle;
+  /** pi's telemetry on the gateway's tracer, for the agent: its spans join the gateway's traces. */
+  readonly telemetry: PiTelemetry;
 
-  constructor(log: MessageLog, judge: () => Judge | undefined, settings: () => WakerSettings, print: Print) {
-    this.log = log;
+  private constructor(
+    runtime: ManagedRuntime.ManagedRuntime<Services, LogError>,
+    services: {
+      channels: Channels["Service"];
+      outbox: Outbox["Service"];
+      waker: Waker["Service"];
+      wakeSpans: WakeSpans["Service"];
+      telemetry: PiTelemetry;
+      background: Background["Service"];
+    },
+    print: GatewayOptions["print"],
+  ) {
+    this.#runtime = runtime;
+    this.#channels = services.channels;
+    this.#outbox = services.outbox;
+    this.#waker = services.waker;
+    this.telemetry = services.telemetry;
+    this.#wakeSpans = services.wakeSpans;
+    this.#background = services.background;
     this.#print = print;
-    this.#waker = new Waker(log, judge, settings, print);
-    this.#outbox = new Outbox(log, (address) => this.adapterFor(address), (channel, eventId, raw) => this.#receive(channel, eventId, raw), print);
+    this.timers = new TimersHandle((effect) => this.#run(effect));
   }
 
-  get outbox(): Outbox {
-    return this.#outbox;
+  /** Open the gateway's tables on the bot's connection. */
+  static async open(sql: Sql, options: GatewayOptions): Promise<Gateway> {
+    const runtime = ManagedRuntime.make(gatewayLayer(sql, options));
+    try {
+      const services = await runtime.runPromise(
+        Effect.gen(function* () {
+          return {
+            channels: yield* Channels,
+            outbox: yield* Outbox,
+            waker: yield* Waker,
+            wakeSpans: yield* WakeSpans,
+            telemetry: yield* Telemetry,
+            background: yield* Background,
+          };
+        }),
+      );
+      return new Gateway(runtime, services, options.print);
+    } catch (error) {
+      await runtime.dispose();
+      throw error;
+    }
+  }
+
+  get outbox(): OutboxHooks {
+    return this.#outbox.hooks;
+  }
+
+  get waker(): WakerHooks {
+    return this.#waker.hooks;
   }
 
   get channels(): ChannelAdapter[] {
-    return [...this.#adapters.values()];
+    return this.#channels.list();
   }
 
   /**
    * Start with the given adapters: finish what the last process left, connect, then backfill what was missed.
    * Undecided events from before go to the waker first, so nothing decided in this run is offered twice.
    */
-  async start(target: WakeTarget, adapters: readonly ChannelAdapter[]): Promise<void> {
-    this.#waker.target = target;
-    const lastAlive = await this.log.getState("last_alive");
-    this.#lastAlive = lastAlive ? Number(lastAlive) : undefined;
+  start(target: WakeTarget, adapters: readonly ChannelAdapter[]): Promise<void> {
+    const self = this;
+    return this.#runtime.runPromise(
+      Effect.gen(function* () {
+        const log = yield* MessageLog;
+        const waker = yield* Waker;
+        const inbox = yield* Inbox;
+        waker.setTarget(target);
+        const lastAlive = yield* log.getState("last_alive");
+        self.#lastAlive = lastAlive ? Number(lastAlive) : undefined;
 
-    let open!: () => void;
-    this.#queue = new Promise<void>((resolve) => (open = resolve));
-    for (const event of await this.log.undecided()) this.#waker.add(event);
-    for (const row of await this.log.unfinishedInbox()) this.#enqueue(row.channel, row.event_id, JSON.parse(row.raw));
-    for (const adapter of adapters) this.#adapters.set(adapter.id, adapter);
-    const connected = await Promise.all(adapters.map((adapter) => this.#connect(adapter)));
-    open();
-    this.#started = true;
+        yield* waker.redeliver;
+        for (const event of yield* log.undecided) yield* waker.add(event);
+        yield* inbox.replay;
+        const connected = yield* self.#channels.connect(adapters, (adapter) => self.#sink(adapter));
+        yield* inbox.open;
+        self.#started = true;
 
-    await this.#beat();
-    this.#heartbeat = setInterval(() => void this.#beat(), HEARTBEAT_MS);
-    await this.#queue;
-    adapters.forEach((adapter, index) => {
-      if (connected[index]) void this.#backfill(adapter);
-      else void this.#keepConnecting(adapter);
-    });
+        yield* self.#beat;
+        yield* FiberHandle.run(self.#background.heartbeat, Effect.repeat(self.#beat, Schedule.spaced(HEARTBEAT_MS)));
+        yield* inbox.drain;
+        for (const [index, adapter] of adapters.entries()) yield* self.#channels.follow(adapter, connected[index]!, (each) => self.#sink(each));
+      }).pipe(Effect.withSpan("gateway.start")),
+    );
   }
 
-  async stop(): Promise<void> {
-    clearInterval(this.#heartbeat);
-    await Promise.allSettled([...this.#adapters.values()].map((adapter) => adapter.stop()));
-    await this.#waker.stop();
-    await this.#queue;
-    if (this.#started) await this.#beat();
+  /**
+   * Wake the bot no more: stop the timers and the waker. A decision in progress is finished and delivered first.
+   * Undecided events stay in the log for the next start. Everything else, the bot's actions too, keeps working.
+   */
+  pauseWakes(): Promise<void> {
+    return this.#run(
+      Effect.gen(function* () {
+        yield* (yield* Timers).stop;
+        yield* (yield* Waker).stop;
+      }),
+    );
+  }
+
+  /** Stop everything. Calls after this fail with "the gateway is stopped". */
+  stop(): Promise<void> {
+    this.#stopping ??= this.#stop();
+    return this.#stopping;
+  }
+
+  async #stop(): Promise<void> {
+    const self = this;
+    try {
+      await this.#runtime.runPromise(
+        Effect.gen(function* () {
+          yield* FiberHandle.clear(self.#background.heartbeat);
+          yield* (yield* Timers).stop;
+          yield* self.#channels.stop;
+          yield* (yield* Inbox).close;
+          yield* (yield* Waker).stop;
+          if (self.#started) yield* self.#beat;
+        }),
+      );
+    } finally {
+      await this.#runtime.dispose();
+    }
   }
 
   /** Add a channel account while running. */
-  async addChannel(adapter: ChannelAdapter): Promise<void> {
-    if (this.#adapters.has(adapter.id)) throw new Error(`channel ${adapter.id} is already running`);
-    this.#adapters.set(adapter.id, adapter);
-    if (await this.#connect(adapter)) void this.#backfill(adapter);
-    else void this.#keepConnecting(adapter);
+  addChannel(adapter: ChannelAdapter): Promise<void> {
+    return this.#run(this.#channels.add(adapter, (each) => this.#sink(each)));
   }
 
-  async removeChannel(id: string): Promise<void> {
-    const adapter = this.#adapters.get(id);
-    if (!adapter) return;
-    this.#adapters.delete(id);
-    await adapter.stop();
+  removeChannel(id: string): Promise<void> {
+    return this.#run(this.#channels.remove(id));
   }
 
   adapterFor(address: Address): ChannelAdapter {
-    for (const adapter of this.#adapters.values()) if (adapter.owns(address)) return adapter;
-    throw new Error(`no channel for address ${JSON.stringify(address)}. Copy addresses from a wake message or the log.`);
+    if (this.#stopping) throw stopped();
+    return this.#runtime.runSync(this.#channels.adapterFor(address));
   }
 
   channel(id: string): ChannelAdapter {
-    const adapter = this.#adapters.get(id);
-    if (!adapter) throw new Error(`unknown channel ${JSON.stringify(id)}; channels: ${[...this.#adapters.keys()].join(", ")}`);
-    return adapter;
+    if (this.#stopping) throw stopped();
+    return this.#runtime.runSync(this.#channels.get(id));
   }
 
   // ---- Actions ----
 
-  send(sendId: string, to: Address, text: string): Promise<SendResult> {
-    return this.#outbox.send(sendId, to, text);
+  /**
+   * wakes: the agent's submission IDs this send answers. trace: the agent's tool call, when the send comes from one.
+   * The send's span is in the tool call's trace, or else in the first wake's, and links to the wakes.
+   */
+  send(sendId: string, to: Address, text: string, wakes: readonly string[] = [], trace?: TelemetrySpan): Promise<SendResult> {
+    const parent = this.telemetry.spanOf(trace);
+    return this.#run(Effect.flatMap(this.#wakeSpans.find(wakes), (spans) => this.#outbox.send(sendId, to, text, spans, parent)));
   }
 
-  async react(message: Address, emoji: string, remove: boolean): Promise<void> {
-    await this.adapterFor(message).react(message, emoji, remove);
+  react(message: Address, emoji: string, remove: boolean, trace?: TelemetrySpan): Promise<void> {
+    const parent = this.telemetry.spanOf(trace);
+    return this.#run(
+      Effect.gen({ self: this }, function* () {
+        const adapter = yield* this.#channels.adapterFor(message);
+        yield* Effect.tryPromise({ try: () => adapter.react(message, emoji, remove), catch: (cause) => ChannelError.from(adapter.id, cause) });
+      }).pipe(Effect.withSpan("react", { attributes: { message, emoji, remove }, ...(parent ? { parent } : {}) })),
+    );
   }
 
-  call(channel: string, method: string, params: Record<string, unknown>): Promise<unknown> {
-    return this.channel(channel).call(method, params);
+  call(channel: string, method: string, params: Record<string, unknown>, trace?: TelemetrySpan): Promise<unknown> {
+    const parent = this.telemetry.spanOf(trace);
+    return this.#run(
+      Effect.gen({ self: this }, function* () {
+        const adapter = yield* this.#channels.get(channel);
+        return yield* Effect.tryPromise({ try: () => adapter.call(method, params), catch: (cause) => ChannelError.from(adapter.id, cause) });
+      }).pipe(Effect.withSpan("call", { attributes: { channel, method }, ...(parent ? { parent } : {}) })),
+    );
+  }
+
+  /** Run an effect for the bot. Failures reach it as Error objects, also when the gateway stops in the middle. */
+  async #run<A, E>(effect: Effect.Effect<A, E, Services>): Promise<A> {
+    if (this.#stopping) throw stopped();
+    try {
+      return await this.#runtime.runPromise(effect);
+    } catch (error) {
+      throw error instanceof Error ? error : this.#stopping ? stopped() : new Error(String(error));
+    }
   }
 
   // ---- Receive ----
 
   #sink(adapter: ChannelAdapter): ChannelSink {
     return {
-      receive: (eventId, raw) => this.#receive(adapter.id, eventId, raw),
-      newestMessage: (place) => this.log.newestMessage(place),
-      threads: (place) => this.log.threads(place),
+      receive: (eventId, raw) => this.#background.run(Inbox.use((inbox) => inbox.receive(adapter.id, eventId, raw))),
+      newestMessage: (place) => this.#background.run(MessageLog.use((log) => log.newestMessage(place))),
+      threads: (place) => this.#background.run(MessageLog.use((log) => log.threads(place))),
       lastAlive: () => this.#lastAlive,
       log: (message, data) => this.#print(`${adapter.id}: ${message}`, data),
     };
   }
 
-  async #connect(adapter: ChannelAdapter): Promise<boolean> {
-    try {
-      await adapter.start(this.#sink(adapter));
-      this.#print("channel connected", { channel: adapter.id, me: adapter.me?.address });
-      return true;
-    } catch (error) {
-      this.#print("channel connect failed", { channel: adapter.id, error: String(error) });
-      await adapter.stop().catch(() => {});
-      return false;
-    }
+  get #beat(): Effect.Effect<void, never, Services> {
+    return MessageLog.use((log) => Effect.flatMap(Clock.currentTimeMillis, (now) => log.setState("last_alive", String(now)))).pipe(
+      Effect.catch((error) => Effect.sync(() => this.#print("heartbeat failed", { error: error.message }))),
+    );
+  }
+}
+
+const stopped = () => new Error("the gateway is stopped");
+
+/** The bot's timers, in promises. */
+export class TimersHandle {
+  readonly #run: <A, E>(effect: Effect.Effect<A, E, Services>) => Promise<A>;
+
+  constructor(run: <A, E>(effect: Effect.Effect<A, E, Services>) => Promise<A>) {
+    this.#run = run;
   }
 
-  /** Retry a channel that failed to connect, in the background, until it connects or is removed. */
-  async #keepConnecting(adapter: ChannelAdapter): Promise<void> {
-    for (let attempt = 1; this.#adapters.get(adapter.id) === adapter; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, Math.min(60_000, 5_000 * attempt)));
-      if (this.#adapters.get(adapter.id) !== adapter) return;
-      if (await this.#connect(adapter)) {
-        await this.#backfill(adapter);
-        return;
-      }
-    }
+  start(): Promise<void> {
+    return this.#run(Timers.use((timers) => timers.start));
   }
 
-  async #backfill(adapter: ChannelAdapter): Promise<void> {
-    try {
-      await adapter.backfill(this.#sink(adapter));
-    } catch (error) {
-      this.#print("backfill failed", { channel: adapter.id, error: String(error) });
-    }
+  stop(): Promise<void> {
+    return this.#run(Timers.use((timers) => timers.stop));
   }
 
-  /** Store before the adapter acknowledges. A known event ID is a repeat and is dropped. */
-  async #receive(channel: string, eventId: string, raw: unknown): Promise<void> {
-    if (!(await this.log.addInbox(channel, eventId, raw))) return;
-    this.#enqueue(channel, eventId, raw);
+  add(dueAt: number, note: string): Promise<Timer> {
+    return this.#run(Timers.use((timers) => timers.add(dueAt, note)));
   }
 
-  #enqueue(channel: string, eventId: string, raw: unknown): void {
-    this.#queue = this.#queue.then(async () => {
-      try {
-        const adapter = this.#adapters.get(channel);
-        if (!adapter) throw new Error(`channel ${channel} is not running`);
-        const happenings = await adapter.translate(raw);
-        for (const event of await this.log.apply(channel, eventId, happenings)) this.#waker.add(event);
-      } catch (error) {
-        this.#print("event failed", { channel, eventId, error: String(error) });
-        await this.log.failInbox(channel, eventId, String(error)).catch(() => {});
-      }
-    });
+  cancel(id: number): Promise<boolean> {
+    return this.#run(Timers.use((timers) => timers.cancel(id)));
   }
 
-  async #beat(): Promise<void> {
-    await this.log.setState("last_alive", String(Date.now())).catch((error) => this.#print("heartbeat failed", { error: String(error) }));
+  resetFallback(): Promise<void> {
+    return this.#run(Timers.use((timers) => timers.resetFallback));
+  }
+
+  pending(): Promise<Timer[]> {
+    return this.#run(Timers.use((timers) => timers.pending));
   }
 }

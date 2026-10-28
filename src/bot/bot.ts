@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { delimiter, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Models } from "@earendil-works/pi-ai";
+import type { TelemetrySpan } from "@earendil-works/pi-telemetry";
 import { Agent, openDatabase } from "../agent/agent.ts";
 import { createJudge } from "../agent/judge.ts";
 import { loadChannel } from "../channels/load.ts";
@@ -12,9 +13,8 @@ import type { Address, ChannelAdapter, ChannelConfig } from "../core/channel.ts"
 import { SECRETS_DIR } from "../core/home.ts";
 import type { Judge } from "../core/judge.ts";
 import type { Sql } from "../core/sql.ts";
-import type { PlaceWake, WakeTarget } from "../core/wake.ts";
-import { Gateway } from "../gateway/gateway.ts";
-import { MessageLog } from "../gateway/log.ts";
+import type { Delivered, PlaceWake, WakeTarget } from "../core/wake.ts";
+import { Gateway, type TimersHandle } from "../gateway/gateway.ts";
 import { ControlServer } from "./control.ts";
 import { type BotDefinition, type BotPaths, botPaths } from "./definition.ts";
 import { describeMachine } from "./machine.ts";
@@ -30,7 +30,7 @@ import {
   renderTimerWake,
   workSection,
 } from "./prompt.ts";
-import { type Timer, Timers } from "./timers.ts";
+import type { Timer } from "./timers.ts";
 
 const WAKES_SCHEMA = `
 CREATE TABLE IF NOT EXISTS bot_wakes (
@@ -71,7 +71,7 @@ export class Bot implements WakeTarget {
   readonly #print: Print;
   readonly #sql: Sql & { close(): Promise<void> };
   readonly #gateway: Gateway;
-  readonly #timers: Timers;
+  readonly #timers: TimersHandle;
   readonly #agent: Agent;
   /** Undefined when bot.json says "judge": "off". */
   #judge: Judge | undefined;
@@ -91,7 +91,7 @@ export class Bot implements WakeTarget {
     print: Print;
     sql: Sql & { close(): Promise<void> };
     gateway: Gateway;
-    timers: Timers;
+    timers: TimersHandle;
     agent: Agent;
     judge: Judge | undefined;
   }) {
@@ -151,7 +151,6 @@ export class Bot implements WakeTarget {
     print: Print,
     opened: (agent: Agent) => void,
   ): Promise<Bot> {
-    const log = await MessageLog.open(sql);
     await sql.exec(WAKES_SCHEMA);
 
     let bot: Bot | undefined;
@@ -162,8 +161,15 @@ export class Bot implements WakeTarget {
     const current = () => (bot ? bot.#definition : definition);
     const settings = () => current().settings;
     const judge = createJudge(definition.judge, env.models, () => current().model);
-    const gateway = new Gateway(log, () => (bot ? bot.#judge : judge), settings, print);
-    const timers = await Timers.open(sql, () => settings().fallbackWakeMinutes, (timer) => self().#deliverTimer(timer), print);
+    const gateway = await Gateway.open(sql, {
+      bot: id,
+      judge: () => (bot ? bot.#judge : judge),
+      settings,
+      fallbackWakeMinutes: () => settings().fallbackWakeMinutes,
+      fireTimer: (timer, caller) => self().#deliverTimer(timer, caller),
+      print,
+    });
+    const timers = gateway.timers;
     const facts = (): PromptFacts => ({
       id,
       name: current().name,
@@ -197,11 +203,15 @@ export class Bot implements WakeTarget {
         { name: "memory", render: () => memorySection(facts()) },
       ],
       actions: {
-        send: (to, text, sendId) => self().send(to, text, sendId),
-        react: (message, emoji, remove) => self().react(message, emoji, remove),
-        call: (channel, method, params) => self().call(channel, method, params),
+        send: (to, text, sendId, trace) => self().send(to, text, sendId, trace),
+        react: (message, emoji, remove, trace) => self().react(message, emoji, remove, trace),
+        call: (channel, method, params, trace) => self().call(channel, method, params, trace),
       },
+      telemetry: gateway.telemetry,
       log: print,
+    }).catch(async (error: unknown) => {
+      await gateway.stop().catch(() => {});
+      throw error;
     });
     opened(agent);
 
@@ -214,14 +224,23 @@ export class Bot implements WakeTarget {
       print("crash test: dying after the platform send", { sendId });
       process.kill(process.pid, "SIGKILL");
     };
+    // The same for a wake: the process dies right after the bot took it, before the gateway records that. The next
+    // start must deliver the same wake again, which the agent counts once, instead of deciding its events anew.
+    gateway.waker.afterDeliver = (wakeId) => {
+      if (!existsSync(paths.crashAfterWake)) return;
+      unlinkSync(paths.crashAfterWake);
+      print("crash test: dying after the wake", { wakeId });
+      process.kill(process.pid, "SIGKILL");
+    };
     for (const row of await sql.all<{ submission: string; place: string }>(
       "SELECT submission, place FROM bot_wakes WHERE submission IS NOT NULL AND place IS NOT NULL ORDER BY at DESC LIMIT 1000",
     )) {
       bot.#submissionPlaces.set(row.submission, row.place);
     }
-    const adapters = await Promise.all(definition.channels.map((channel) => bot!.#loadChannel(channel)));
-    await gateway.start(bot, adapters);
+    let adapters: ChannelAdapter[] = [];
     try {
+      adapters = await Promise.all(definition.channels.map((channel) => bot!.#loadChannel(channel)));
+      await gateway.start(bot, adapters);
       agent.resume();
       await timers.start();
       if (existsSync(paths.firstWake)) {
@@ -238,11 +257,16 @@ export class Bot implements WakeTarget {
     return bot;
   }
 
+  /**
+   * Stop in this order: no new wakes (a decision in progress is finished and delivered), then the agent (its work in
+   * progress is interrupted and goes on after the next start), then the gateway. The gateway takes the agent's actions
+   * until the agent has stopped, so an action is never refused while the agent still works.
+   */
   async stop(): Promise<void> {
     await this.#control.stop();
-    await this.#timers.stop();
-    await this.#gateway.stop();
+    await this.#gateway.pauseWakes();
     await this.#agent.close();
+    await this.#gateway.stop();
     await this.#sql.close().catch(() => {});
     this.#print("bot stopped");
   }
@@ -292,22 +316,22 @@ export class Bot implements WakeTarget {
     return inputs.some((submission) => this.#submissionPlaces.get(submission) === place);
   }
 
-  async deliver(wake: PlaceWake): Promise<void> {
+  async deliver(wake: PlaceWake, caller?: TelemetrySpan): Promise<Delivered> {
     const text = renderPlaceWake(wake, await this.#agent.contextStatus());
-    await this.#submit(wake.id, wake.reason, wake.place.address, text, wake.reason === "steer");
+    return this.#submit(wake.id, wake.reason, wake.place.address, text, wake.reason === "steer", caller);
   }
 
   responsibilities(): Promise<string> {
     return readFile(this.paths.responsibilities, "utf8").catch(() => "");
   }
 
-  async #deliverTimer(timer: Timer): Promise<void> {
+  async #deliverTimer(timer: Timer, caller?: TelemetrySpan): Promise<Delivered> {
     const text = renderTimerWake(timer, await this.#agent.contextStatus(), this.#definition.settings.fallbackWakeMinutes);
-    await this.#submit(`timer:${timer.id}`, timer.set_by === "fallback" ? "fallback" : "timer", undefined, text, false);
+    return this.#submit(`timer:${timer.id}`, timer.set_by === "fallback" ? "fallback" : "timer", undefined, text, false, caller);
   }
 
-  async #submit(id: string, reason: string, place: Address | undefined, text: string, steer: boolean): Promise<void> {
-    const submission = await this.#agent.submit({ id, text, steer, data: { reason, ...(place ? { place } : {}) } });
+  async #submit(id: string, reason: string, place: Address | undefined, text: string, steer: boolean, caller?: TelemetrySpan): Promise<Delivered> {
+    const { id: submission, trace } = await this.#agent.submit({ id, text, steer, data: { reason, ...(place ? { place } : {}) }, caller });
     if (place) this.#submissionPlaces.set(submission, place);
     await this.#sql.run(
       "INSERT OR IGNORE INTO bot_wakes (id, at, reason, place, text, submission) VALUES (?, ?, ?, ?, ?, ?)",
@@ -318,23 +342,26 @@ export class Bot implements WakeTarget {
       text,
       submission,
     );
+    return { submission, run: trace };
   }
 
   // ---- Actions, for the agent's tools and the command line ----
 
-  async send(to: Address, text: string, sendId: string) {
-    const sent = await this.#gateway.send(sendId, to, text);
+  /** trace: the agent's tool call, when the action comes from one. */
+  async send(to: Address, text: string, sendId: string, trace?: TelemetrySpan) {
+    // The wakes the agent works on now: the send links to them.
+    const sent = await this.#gateway.send(sendId, to, text, this.#agent.runInputs ?? [], trace);
     this.#touch(sent.place);
     return sent;
   }
 
-  async react(message: Address, emoji: string, remove: boolean): Promise<void> {
-    await this.#gateway.react(message, emoji, remove);
+  async react(message: Address, emoji: string, remove: boolean, trace?: TelemetrySpan): Promise<void> {
+    await this.#gateway.react(message, emoji, remove, trace);
     this.#touch(this.#gateway.adapterFor(message).placeOf(message));
   }
 
-  call(channel: string, method: string, params: Record<string, unknown>): Promise<unknown> {
-    return this.#gateway.call(channel, method, params);
+  call(channel: string, method: string, params: Record<string, unknown>, trace?: TelemetrySpan): Promise<unknown> {
+    return this.#gateway.call(channel, method, params, trace);
   }
 
   #touch(place: Address | undefined): void {

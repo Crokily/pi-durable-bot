@@ -15,9 +15,9 @@ export function createJudge(setting: JudgeSetting, models: Models, mainModel: ()
   if (setting === "off") return undefined;
   if (setting === "main") return chatJudge(models, mainModel);
   return {
-    async judge(input) {
+    async judge(input, trace) {
       const classifier = await requireModel(models, setting, (provider, id) => models.getModelOfType("classifier", provider, id));
-      const result = await models.classify(classifier, { state: judgeState(input), questions: judgeQuestions(input.name) });
+      const result = await models.classify(classifier, { state: judgeState(input), questions: judgeQuestions(input.name) }, trace ? { telemetry: trace } : {});
       if (result.stopReason !== "stop") throw new Error(result.errorMessage ?? result.stopReason);
       return { related: probability(result.answers.related), respond: probability(result.answers.respond) };
     },
@@ -29,7 +29,7 @@ For each question, give the probability from 0 to 1 that the answer is yes. Answ
 
 function chatJudge(models: Models, mainModel: () => string): Judge {
   return {
-    async judge(input) {
+    async judge(input, trace) {
       const model = await requireModel(models, mainModel(), (provider, id) => models.getModel(provider, id));
       // A short judgment: the lowest thinking level the model has.
       const levels = getSupportedThinkingLevels(model);
@@ -38,7 +38,7 @@ function chatJudge(models: Models, mainModel: () => string): Judge {
       const reply = await models.completeSimple(
         model,
         { systemPrompt: CHAT_JUDGE_PROMPT, messages: [{ role: "user", content, timestamp: Date.now() }] },
-        reasoning ? { reasoning } : {},
+        { ...(reasoning ? { reasoning } : {}), ...(trace ? { telemetry: trace } : {}) },
       );
       if (reply.stopReason === "error" || reply.stopReason === "aborted") throw new Error(reply.errorMessage ?? reply.stopReason);
       const text = reply.content.map((block) => (block.type === "text" ? block.text : "")).join("");

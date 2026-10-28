@@ -1,5 +1,8 @@
+import { Clock, Context, Effect, Layer } from "effect";
 import type { Address, Happening, PersonInfo, PlaceInfo, PlaceKind } from "../core/channel.ts";
 import type { Sql, SqlExecutor } from "../core/sql.ts";
+import type { PlaceWake } from "../core/wake.ts";
+import { LogError } from "./errors.ts";
 
 /**
  * The gateway's tables: the inbox, the message log and the outbox. They share the bot's SQLite file with
@@ -84,6 +87,12 @@ CREATE TABLE IF NOT EXISTS gw_outbox (
   sent_at INTEGER
 );
 
+CREATE TABLE IF NOT EXISTS gw_pending_wakes (
+  id TEXT PRIMARY KEY,
+  wake TEXT NOT NULL,
+  decided_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS gw_state (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -103,6 +112,7 @@ export const LOG_SCHEMA = `Times are Unix ms. Columns that hold an address (plac
 - gw_people(address, channel, name, real_name)
 - gw_outbox(send_id, to_address, text, state, message, created_at, sent_at): what you sent with send.
 - gw_inbox(channel, event_id, received_at, raw, state, error): the raw events as received.
+- gw_spans(span_id, trace_id, parent_id, name, start_at, end_at, status, error, attributes, links): what the gateway did, the last 7 days. One trace per wake: name wake (attributes reason, place, events, submission), its sends (name send, attributes send, to, result). pots trace shows them.
 Text search: LIKE, for example text LIKE '%invoice%'.`;
 
 /** A new logged event that needs a wake decision. */
@@ -136,133 +146,186 @@ export interface LoggedMessage {
   deleted_at: number | null;
 }
 
-export class MessageLog {
-  readonly sql: Sql;
+export interface InboxRow {
+  channel: string;
+  event_id: string;
+  raw: string;
+}
 
-  private constructor(sql: Sql) {
-    this.sql = sql;
+export interface OutboxRecord {
+  send_id: string;
+  to_address: string;
+  state: string;
+  message: string | null;
+  created_at: number;
+}
+
+/**
+ * The gateway's tables, as effects. The statements run on the connection the bot shares with pi-durable; times come
+ * from the Clock, so tests control them.
+ */
+export class MessageLog extends Context.Service<
+  MessageLog,
+  {
+    // Inbox
+    /** False when the event ID is already known. */
+    addInbox(channel: string, eventId: string, raw: unknown): Effect.Effect<boolean, LogError>;
+    readonly unfinishedInbox: Effect.Effect<InboxRow[], LogError>;
+    failInbox(channel: string, eventId: string, error: string): Effect.Effect<void, LogError>;
+    /**
+     * Write the happenings of one inbox event to the log and mark the event done, in one transaction.
+     * Returns the new events that still need a wake decision.
+     */
+    apply(channel: string, eventId: string, happenings: readonly Happening[]): Effect.Effect<UndecidedEvent[], LogError>;
+    readonly undecided: Effect.Effect<UndecidedEvent[], LogError>;
+    setWake(ids: readonly number[], wake: string): Effect.Effect<void, LogError>;
+    /**
+     * Decide events for a wake: their decision and the wake itself, in one transaction, before the bot gets the wake.
+     * After a crash the same wake, with the same ID, is delivered again instead of deciding the events anew.
+     */
+    recordWake(wake: PlaceWake, ids: readonly number[], decision: string): Effect.Effect<void, LogError>;
+    /** The bot has the wake. */
+    wakeDelivered(id: string): Effect.Effect<void, LogError>;
+    /** Wakes decided and not yet known to be delivered, oldest first. */
+    readonly pendingWakes: Effect.Effect<PlaceWake[], LogError>;
+    // Reads for backfill and the judge
+    newestMessage(place: Address): Effect.Effect<Address | undefined, LogError>;
+    threads(place: Address): Effect.Effect<Address[], LogError>;
+    /** Messages in a place before an event, oldest first. */
+    messagesBefore(place: Address, at: number, limit: number): Effect.Effect<LoggedMessage[], LogError>;
+    message(address: Address): Effect.Effect<LoggedMessage | undefined, LogError>;
+    // Outbox
+    outbox(sendId: string): Effect.Effect<OutboxRecord | undefined, LogError>;
+    outboxStart(sendId: string, to: Address, text: string): Effect.Effect<void, LogError>;
+    outboxDone(sendId: string, message: Address): Effect.Effect<void, LogError>;
+    // State
+    getState(key: string): Effect.Effect<string | undefined, LogError>;
+    setState(key: string, value: string): Effect.Effect<void, LogError>;
   }
-
-  static async open(sql: Sql): Promise<MessageLog> {
-    await sql.exec(SCHEMA);
-    return new MessageLog(sql);
-  }
-
-  // ---- Inbox ----
-
-  /** False when the event ID is already known. */
-  async addInbox(channel: string, eventId: string, raw: unknown): Promise<boolean> {
-    return this.sql.transaction(async (tx) => {
-      if (await tx.get("SELECT 1 AS x FROM gw_inbox WHERE channel = ? AND event_id = ?", channel, eventId)) return false;
-      await tx.run("INSERT INTO gw_inbox (channel, event_id, received_at, raw) VALUES (?, ?, ?, ?)", channel, eventId, Date.now(), JSON.stringify(raw));
-      return true;
-    });
-  }
-
-  async unfinishedInbox(): Promise<{ channel: string; event_id: string; raw: string }[]> {
-    return this.sql.all("SELECT channel, event_id, raw FROM gw_inbox WHERE state != 'done' ORDER BY received_at, rowid");
-  }
-
-  async failInbox(channel: string, eventId: string, error: string): Promise<void> {
-    await this.sql.run("UPDATE gw_inbox SET state = 'error', error = ? WHERE channel = ? AND event_id = ?", error, channel, eventId);
-  }
-
-  /**
-   * Write the happenings of one inbox event to the log and mark the event done, in one transaction.
-   * Returns the new events that still need a wake decision.
-   */
-  async apply(channel: string, eventId: string, happenings: readonly Happening[]): Promise<UndecidedEvent[]> {
-    const ids = await this.sql.transaction(async (tx) => {
-      const ids: number[] = [];
-      for (const happening of happenings) {
-        const id = await applyOne(tx, channel, eventId, happening);
-        if (id !== undefined) ids.push(id);
-      }
-      await tx.run("UPDATE gw_inbox SET state = 'done', error = NULL WHERE channel = ? AND event_id = ?", channel, eventId);
-      return ids;
-    });
-    const undecided: UndecidedEvent[] = [];
-    for (const id of ids) {
-      const row = await this.sql.get<UndecidedEvent>(`${UNDECIDED_SELECT} WHERE e.id = ? AND e.wake IS NULL`, id);
-      if (row) undecided.push(row);
-    }
-    return undecided;
-  }
-
-  async undecided(): Promise<UndecidedEvent[]> {
-    return this.sql.all(`${UNDECIDED_SELECT} WHERE e.wake IS NULL ORDER BY e.id`);
-  }
-
-  async setWake(ids: readonly number[], wake: string): Promise<void> {
-    await this.sql.transaction(async (tx) => {
-      for (const id of ids) await tx.run("UPDATE gw_events SET wake = ? WHERE id = ?", wake, id);
-    });
-  }
-
-  // ---- Reads for backfill and the judge ----
-
-  async newestMessage(place: Address): Promise<Address | undefined> {
-    const row = await this.sql.get<{ address: string }>("SELECT address FROM gw_messages WHERE place = ? ORDER BY at DESC LIMIT 1", place);
-    return row?.address;
-  }
-
-  async threads(place: Address): Promise<Address[]> {
-    const rows = await this.sql.all<{ thread: string }>(
-      "SELECT thread FROM gw_messages WHERE place = ? AND thread IS NOT NULL GROUP BY thread ORDER BY max(at) DESC",
-      place,
-    );
-    return rows.map((row) => row.thread);
-  }
-
-  /** Messages in a place before an event, oldest first. */
-  async messagesBefore(place: Address, at: number, limit: number): Promise<LoggedMessage[]> {
-    const rows = await this.sql.all<LoggedMessage>(
-      `SELECT m.address, m.place, m.thread, m.person, p.name AS person_name, m.from_me, m.text, m.at, m.edited_at, m.deleted_at
-       FROM gw_messages m LEFT JOIN gw_people p ON p.address = m.person
-       WHERE m.place = ? AND m.at < ? ORDER BY m.at DESC LIMIT ?`,
-      place,
-      at,
-      limit,
-    );
-    return rows.reverse();
-  }
-
-  async message(address: Address): Promise<LoggedMessage | undefined> {
-    return this.sql.get<LoggedMessage>(
-      `SELECT m.address, m.place, m.thread, m.person, p.name AS person_name, m.from_me, m.text, m.at, m.edited_at, m.deleted_at
-       FROM gw_messages m LEFT JOIN gw_people p ON p.address = m.person WHERE m.address = ?`,
-      address,
+>()("pots/gateway/MessageLog") {
+  /** Create the tables when they are missing. */
+  static layer(sql: Sql): Layer.Layer<MessageLog, LogError> {
+    return Layer.effect(
+      MessageLog,
+      Effect.gen(function* () {
+        yield* db(() => sql.exec(SCHEMA));
+        return MessageLog.of(makeLog(sql));
+      }),
     );
   }
+}
 
-  async place(address: Address): Promise<PlaceInfo | undefined> {
-    const row = await this.sql.get<{ address: string; name: string | null; kind: PlaceKind }>("SELECT address, name, kind FROM gw_places WHERE address = ?", address);
-    return row && { address: row.address, kind: row.kind, ...(row.name ? { name: row.name } : {}) };
-  }
+/** A statement on the shared connection. */
+const db = <A>(run: () => Promise<A>): Effect.Effect<A, LogError> => Effect.tryPromise({ try: run, catch: LogError.from });
 
-  // ---- Outbox ----
+/** A statement that needs the current time. */
+const dbAt = <A>(run: (now: number) => Promise<A>): Effect.Effect<A, LogError> => Effect.flatMap(Clock.currentTimeMillis, (now) => db(() => run(now)));
 
-  async outbox(sendId: string): Promise<{ send_id: string; to_address: string; state: string; message: string | null; created_at: number } | undefined> {
-    return this.sql.get("SELECT send_id, to_address, state, message, created_at FROM gw_outbox WHERE send_id = ?", sendId);
-  }
+function makeLog(sql: Sql): MessageLog["Service"] {
+  return {
+    addInbox: (channel, eventId, raw) =>
+      dbAt((now) =>
+        sql.transaction(async (tx) => {
+          if (await tx.get("SELECT 1 AS x FROM gw_inbox WHERE channel = ? AND event_id = ?", channel, eventId)) return false;
+          await tx.run("INSERT INTO gw_inbox (channel, event_id, received_at, raw) VALUES (?, ?, ?, ?)", channel, eventId, now, JSON.stringify(raw));
+          return true;
+        }),
+      ),
 
-  async outboxStart(sendId: string, to: Address, text: string): Promise<void> {
-    await this.sql.run("INSERT INTO gw_outbox (send_id, to_address, text, state, created_at) VALUES (?, ?, ?, 'sending', ?)", sendId, to, text, Date.now());
-  }
+    unfinishedInbox: db(() => sql.all<InboxRow>("SELECT channel, event_id, raw FROM gw_inbox WHERE state != 'done' ORDER BY received_at, rowid")),
 
-  async outboxDone(sendId: string, message: Address): Promise<void> {
-    await this.sql.run("UPDATE gw_outbox SET state = 'sent', message = ?, sent_at = ? WHERE send_id = ?", message, Date.now(), sendId);
-  }
+    failInbox: (channel, eventId, error) =>
+      db(() => sql.run("UPDATE gw_inbox SET state = 'error', error = ? WHERE channel = ? AND event_id = ?", error, channel, eventId)),
 
-  // ---- State ----
+    apply: (channel, eventId, happenings) =>
+      dbAt(async (now) => {
+        const ids = await sql.transaction(async (tx) => {
+          const ids: number[] = [];
+          for (const happening of happenings) {
+            const id = await applyOne(tx, channel, eventId, happening, now);
+            if (id !== undefined) ids.push(id);
+          }
+          await tx.run("UPDATE gw_inbox SET state = 'done', error = NULL WHERE channel = ? AND event_id = ?", channel, eventId);
+          return ids;
+        });
+        const undecided: UndecidedEvent[] = [];
+        for (const id of ids) {
+          const row = await sql.get<UndecidedEvent>(`${UNDECIDED_SELECT} WHERE e.id = ? AND e.wake IS NULL`, id);
+          if (row) undecided.push(row);
+        }
+        return undecided;
+      }),
 
-  async getState(key: string): Promise<string | undefined> {
-    return (await this.sql.get<{ value: string }>("SELECT value FROM gw_state WHERE key = ?", key))?.value;
-  }
+    undecided: db(() => sql.all<UndecidedEvent>(`${UNDECIDED_SELECT} WHERE e.wake IS NULL ORDER BY e.id`)),
 
-  async setState(key: string, value: string): Promise<void> {
-    await this.sql.run("INSERT INTO gw_state (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", key, value);
-  }
+    setWake: (ids, wake) =>
+      db(() =>
+        sql.transaction(async (tx) => {
+          for (const id of ids) await tx.run("UPDATE gw_events SET wake = ? WHERE id = ?", wake, id);
+        }),
+      ),
+
+    recordWake: (wake, ids, decision) =>
+      dbAt((now) =>
+        sql.transaction(async (tx) => {
+          await tx.run("INSERT OR IGNORE INTO gw_pending_wakes (id, wake, decided_at) VALUES (?, ?, ?)", wake.id, JSON.stringify(wake), now);
+          for (const id of ids) await tx.run("UPDATE gw_events SET wake = ? WHERE id = ?", decision, id);
+        }),
+      ),
+
+    wakeDelivered: (id) => db(() => sql.run("DELETE FROM gw_pending_wakes WHERE id = ?", id)),
+
+    pendingWakes: db(async () =>
+      (await sql.all<{ wake: string }>("SELECT wake FROM gw_pending_wakes ORDER BY decided_at, rowid")).map((row) => JSON.parse(row.wake) as PlaceWake),
+    ),
+
+    newestMessage: (place) =>
+      db(async () => (await sql.get<{ address: string }>("SELECT address FROM gw_messages WHERE place = ? ORDER BY at DESC LIMIT 1", place))?.address),
+
+    threads: (place) =>
+      db(async () => {
+        const rows = await sql.all<{ thread: string }>(
+          "SELECT thread FROM gw_messages WHERE place = ? AND thread IS NOT NULL GROUP BY thread ORDER BY max(at) DESC",
+          place,
+        );
+        return rows.map((row) => row.thread);
+      }),
+
+    messagesBefore: (place, at, limit) =>
+      db(async () => {
+        const rows = await sql.all<LoggedMessage>(
+          `SELECT m.address, m.place, m.thread, m.person, p.name AS person_name, m.from_me, m.text, m.at, m.edited_at, m.deleted_at
+           FROM gw_messages m LEFT JOIN gw_people p ON p.address = m.person
+           WHERE m.place = ? AND m.at < ? ORDER BY m.at DESC LIMIT ?`,
+          place,
+          at,
+          limit,
+        );
+        return rows.reverse();
+      }),
+
+    message: (address) =>
+      db(() =>
+        sql.get<LoggedMessage>(
+          `SELECT m.address, m.place, m.thread, m.person, p.name AS person_name, m.from_me, m.text, m.at, m.edited_at, m.deleted_at
+           FROM gw_messages m LEFT JOIN gw_people p ON p.address = m.person WHERE m.address = ?`,
+          address,
+        ),
+      ),
+
+    outbox: (sendId) => db(() => sql.get<OutboxRecord>("SELECT send_id, to_address, state, message, created_at FROM gw_outbox WHERE send_id = ?", sendId)),
+
+    outboxStart: (sendId, to, text) =>
+      dbAt((now) => sql.run("INSERT INTO gw_outbox (send_id, to_address, text, state, created_at) VALUES (?, ?, ?, 'sending', ?)", sendId, to, text, now)),
+
+    outboxDone: (sendId, message) =>
+      dbAt((now) => sql.run("UPDATE gw_outbox SET state = 'sent', message = ?, sent_at = ? WHERE send_id = ?", message, now, sendId)),
+
+    getState: (key) => db(async () => (await sql.get<{ value: string }>("SELECT value FROM gw_state WHERE key = ?", key))?.value),
+
+    setState: (key, value) =>
+      db(() => sql.run("INSERT INTO gw_state (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", key, value)),
+  };
 }
 
 const UNDECIDED_SELECT = `SELECT e.id, e.channel, e.kind, e.at, e.place, pl.name AS place_name, pl.kind AS place_kind, e.thread, e.message,
@@ -273,8 +336,7 @@ const UNDECIDED_SELECT = `SELECT e.id, e.channel, e.kind, e.at, e.place, pl.name
  * Apply one happening. Returns the new event row ID, or undefined when it adds nothing (a message already logged,
  * for example the same message from a live event and from backfill).
  */
-async function applyOne(tx: SqlExecutor, channel: string, eventId: string, h: Happening): Promise<number | undefined> {
-  const now = Date.now();
+async function applyOne(tx: SqlExecutor, channel: string, eventId: string, h: Happening, now: number): Promise<number | undefined> {
   if (h.place) await putPlace(tx, channel, h.place, now);
   if (h.person) await putPerson(tx, channel, h.person, now);
   const raw = h.raw === undefined ? null : JSON.stringify(h.raw);

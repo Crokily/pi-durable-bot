@@ -5,4 +5,4 @@
 3. Code gives mechanisms: receive, log, wake, send, schedule. Judgment belongs to the agent: whether to speak, where, when, and when to turn the page. Do not add a rule you would not tell a human coworker.
 4. Prefer code mode over new tools. The agent has `read`, `write`, `edit`, `bash`, `send`, `react` and `call`, and writes the rest itself.
 5. Never commit tokens, keys, personal data or runtime data. Runtime data lives in `~/.pots/`: bots in `bots/`, secrets in `secrets/`.
-6. Run `npm run check` before you commit.
+6. Run `npm run check` and `npm test` before you commit. When you change the inbox, the waker, the outbox or the timers, also run `npm run tla` and keep `spec/` in step with the code. See [docs/development.md](docs/development.md).

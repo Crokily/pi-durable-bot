@@ -83,25 +83,28 @@ export class Timers extends Context.Service<
             config.print("timer fired", { id: timer.id, setBy: timer.set_by });
           }).pipe(Effect.withSpan("wake", { root: true, attributes: { reason: timer.set_by === "fallback" ? "fallback" : "timer", timer: timer.id } }));
 
+        /** Fire what is due. False when a wake could not be handed to the bot; it stays pending. */
         const fireDue = Effect.gen(function* () {
           for (const timer of yield* pending) {
             if (stopped || timer.due_at > (yield* Clock.currentTimeMillis)) break;
             yield* fire(timer);
           }
           yield* ensureFallback;
+          return true;
         }).pipe(
-          Effect.catch((error) => Effect.sync(() => config.print("timer failed", { error: error.message }))),
+          Effect.catch((error) => Effect.sync(() => config.print("timer failed", { error: error.message })).pipe(Effect.as(false))),
           lock.withPermits(1),
           Effect.uninterruptible,
         );
 
-        // Sleep until the next timer is due (or CHECK_MS), fire what is due, again.
+        // Sleep until the next timer is due (or CHECK_MS), fire what is due, again. After a failure, wait CHECK_MS
+        // before the next try, so a bot that cannot take wakes is not asked again at once, over and over.
         const run = Effect.forever(
           Effect.gen(function* () {
             const next = (yield* pending)[0];
             const now = yield* Clock.currentTimeMillis;
             yield* Effect.sleep(next ? Math.max(0, Math.min(CHECK_MS, next.due_at - now)) : CHECK_MS);
-            yield* fireDue;
+            if (!(yield* fireDue)) yield* Effect.sleep(CHECK_MS);
           }).pipe(Effect.catch((error) => Effect.sync(() => config.print("timer schedule failed", { error: error.message })).pipe(Effect.andThen(Effect.sleep(CHECK_MS))))),
         );
 

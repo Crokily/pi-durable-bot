@@ -224,12 +224,15 @@ const dbAt = <A>(run: (now: number) => Promise<A>): Effect.Effect<A, LogError> =
 function makeLog(sql: Sql): MessageLog["Service"] {
   return {
     addInbox: (channel, eventId, raw) =>
-      dbAt((now) =>
-        sql.transaction(async (tx) => {
-          if (await tx.get("SELECT 1 AS x FROM gw_inbox WHERE channel = ? AND event_id = ?", channel, eventId)) return false;
-          await tx.run("INSERT INTO gw_inbox (channel, event_id, received_at, raw) VALUES (?, ?, ?, ?)", channel, eventId, now, JSON.stringify(raw));
-          return true;
-        }),
+      dbAt(
+        async (now) =>
+          (await sql.get(
+            "INSERT INTO gw_inbox (channel, event_id, received_at, raw) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING RETURNING 1 AS added",
+            channel,
+            eventId,
+            now,
+            JSON.stringify(raw),
+          )) !== undefined,
       ),
 
     unfinishedInbox: db(() => sql.all<InboxRow>("SELECT channel, event_id, raw FROM gw_inbox WHERE state != 'done' ORDER BY received_at, rowid")),
@@ -258,18 +261,13 @@ function makeLog(sql: Sql): MessageLog["Service"] {
 
     undecided: db(() => sql.all<UndecidedEvent>(`${UNDECIDED_SELECT} WHERE e.wake IS NULL ORDER BY e.id`)),
 
-    setWake: (ids, wake) =>
-      db(() =>
-        sql.transaction(async (tx) => {
-          for (const id of ids) await tx.run("UPDATE gw_events SET wake = ? WHERE id = ?", wake, id);
-        }),
-      ),
+    setWake: (ids, wake) => db(() => decide(sql, ids, wake)),
 
     recordWake: (wake, ids, decision) =>
       dbAt((now) =>
         sql.transaction(async (tx) => {
           await tx.run("INSERT OR IGNORE INTO gw_pending_wakes (id, wake, decided_at) VALUES (?, ?, ?)", wake.id, JSON.stringify(wake), now);
-          for (const id of ids) await tx.run("UPDATE gw_events SET wake = ? WHERE id = ?", decision, id);
+          await decide(tx, ids, decision);
         }),
       ),
 
@@ -327,6 +325,10 @@ function makeLog(sql: Sql): MessageLog["Service"] {
       db(() => sql.run("INSERT INTO gw_state (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", key, value)),
   };
 }
+
+/** Set the wake decision of these events, in one statement. */
+const decide = (sql: SqlExecutor, ids: readonly number[], wake: string) =>
+  sql.run("UPDATE gw_events SET wake = ? WHERE id IN (SELECT value FROM json_each(?))", wake, JSON.stringify(ids));
 
 const UNDECIDED_SELECT = `SELECT e.id, e.channel, e.kind, e.at, e.place, pl.name AS place_name, pl.kind AS place_kind, e.thread, e.message,
   e.person, pe.name AS person_name, e.from_me, e.mentions_me, e.text
@@ -419,9 +421,9 @@ async function applyOne(tx: SqlExecutor, channel: string, eventId: string, h: Ha
 
   // Own events never notify the bot. Deletes are only logged. Everything else waits for the waker's decision.
   const wake = h.fromMe ? "self" : h.kind === "delete" ? "log" : null;
-  await tx.run(
+  const event = await tx.get<{ id: number }>(
     `INSERT INTO gw_events (channel, inbox_event, kind, at, place, thread, message, person, from_me, mentions_me, text, raw, wake)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
     channel,
     eventId,
     h.kind,
@@ -436,7 +438,7 @@ async function applyOne(tx: SqlExecutor, channel: string, eventId: string, h: Ha
     raw,
     wake,
   );
-  return (await tx.get<{ id: number }>("SELECT last_insert_rowid() AS id"))!.id;
+  return event!.id;
 }
 
 async function putPlace(tx: SqlExecutor, channel: string, place: PlaceInfo, now: number): Promise<void> {

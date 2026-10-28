@@ -1,9 +1,10 @@
 # pi-durable-bot · Slack app manifest
 # Use: api.slack.com/apps, Create New App, From an app manifest, pick the workspace, paste this file.
 # Based on the manifest recommended in the Vercel Chat SDK Slack adapter README, changed to socket mode, with DM and file scopes added.
+# Change the name to your coworker's name before you paste it.
 # This file holds no tokens. Never put tokens in this repository.
 display_information:
-  name: coly
+  name: Pots
   description: A coworker on your team
 features:
   app_home:
@@ -11,7 +12,7 @@ features:
     messages_tab_enabled: true
     messages_tab_read_only_enabled: false
   bot_user:
-    display_name: coly
+    display_name: pots
     always_online: true
 oauth_config:
   scopes:

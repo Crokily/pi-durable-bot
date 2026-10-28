@@ -1,7 +1,8 @@
-# pi-durable-bot agent rules
+# Rules for coding agents
 
-1. 先读 `docs/plan.md`。它是唯一的开发方案。
-2. 要改动方案，先问用户。不要自己写额外的设计文档、交接文档或报告。
-3. 令牌和 key 在 `~/.config/pi-durable-bot/`。不要打印、复制或提交它们的内容。
-4. 本仓库将在 GitHub 上公开。不要放令牌、key、个人信息或运行数据。
-5. 可以在本地提交，作为检查点。推送只在用户明确要求时进行。
+1. Read `README.md` first. It explains what the bot is and how the layers fit together.
+2. Keep the layers apart. Platform concepts (Slack `ts`, channel types, subtypes) stay inside `src/channels/<platform>/`. The other layers speak only in channel, place, thread, message and person, and addresses are opaque strings.
+3. Code gives mechanisms: receive, log, wake, send, schedule. Judgment belongs to the agent: whether to speak, where, when, and when to turn the page. Do not add a rule you would not tell a human coworker.
+4. Prefer code mode over new tools. The agent has `read`, `write`, `edit`, `bash`, `send`, `react` and `call`, and writes the rest itself.
+5. Never commit tokens, keys, personal data or runtime data. Secrets live in `~/.config/pi-durable-bot/`; bot data lives in `~/.local/share/pi-durable-bot/`.
+6. Run `npm run check` before you commit.

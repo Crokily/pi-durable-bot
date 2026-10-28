@@ -9,3 +9,6 @@ data/
 # local scratch files
 scratch/
 .claude/
+
+# private notes for this checkout
+CLAUDE.local.md

@@ -12,6 +12,7 @@ import {
   defineTool,
   Harness,
   type ModelRef,
+  type SubmissionId,
   section,
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
@@ -228,6 +229,16 @@ export class Agent {
       context,
     );
     return String(submission.id);
+  }
+
+  /** Why a run with these submissions got no answer, such as a missing login; undefined when they were answered. */
+  async runError(inputs: readonly string[]): Promise<string | undefined> {
+    for (const id of inputs) {
+      const submission = await this.#harness.submission(Number(id) as SubmissionId, context);
+      const record = (submission ? await submission.status(context) : undefined) as { status: string; reason?: string; detail?: unknown } | undefined;
+      if (record?.status === "unanswered" && record.reason === "model_error") return String(record.detail ?? "the model request failed");
+    }
+    return undefined;
   }
 
   /** The submissions the current run works on, or undefined while idle. */

@@ -2,14 +2,14 @@
 //   node scripts/transcript.ts <bot id> [count]
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { DATA_DIR } from "../src/bot/definition.ts";
+import { BOTS_DIR } from "../src/core/home.ts";
 
 const [bot, count = "30"] = process.argv.slice(2);
 if (!bot) {
   console.error("usage: node scripts/transcript.ts <bot id> [count]");
   process.exit(2);
 }
-const db = new DatabaseSync(join(DATA_DIR, bot, "bot.sqlite"), { readOnly: true });
+const db = new DatabaseSync(join(BOTS_DIR, bot, "bot.sqlite"), { readOnly: true });
 const rows = db.prepare("SELECT id, record FROM pi_entries ORDER BY id DESC LIMIT ?").all(Number(count)) as { id: number; record: string }[];
 
 const short = (value: unknown, max = 600) => {

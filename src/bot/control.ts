@@ -2,11 +2,14 @@ import { existsSync, unlinkSync } from "node:fs";
 import { chmod } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 
+/** Windows uses a named pipe, which is not a file. */
+const pipe = process.platform === "win32";
+
 export type Route = (body: Record<string, unknown>) => Promise<unknown>;
 
 /**
- * The bot's local command line endpoint: HTTP on a Unix socket in the bot folder, readable only by its owner.
- * The `pb` command talks to it. Tokens stay in this process.
+ * The bot's local command line endpoint: HTTP on a Unix socket in the bot folder, readable only by its owner, or on a
+ * named pipe on Windows. The `pots` command talks to it. Tokens stay in this process.
  */
 export class ControlServer {
   readonly #path: string;
@@ -19,7 +22,7 @@ export class ControlServer {
   }
 
   async start(): Promise<void> {
-    if (existsSync(this.#path)) unlinkSync(this.#path);
+    if (!pipe && existsSync(this.#path)) unlinkSync(this.#path);
     const server = createServer((request, response) => {
       void (async () => {
         let status = 200;
@@ -43,7 +46,7 @@ export class ControlServer {
       server.once("error", reject);
       server.listen(this.#path, () => resolve());
     });
-    await chmod(this.#path, 0o600);
+    if (!pipe) await chmod(this.#path, 0o600);
     this.#server = server;
   }
 
@@ -52,7 +55,7 @@ export class ControlServer {
     if (!server) return;
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    if (existsSync(this.#path)) unlinkSync(this.#path);
+    if (!pipe && existsSync(this.#path)) unlinkSync(this.#path);
   }
 }
 

@@ -1,12 +1,11 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Compaction, Thinking } from "../agent/agent.ts";
 import type { JudgeSetting } from "../agent/judge.ts";
 import type { ChannelConfig } from "../core/channel.ts";
 
-export const DATA_DIR = process.env.PI_DURABLE_BOT_DATA_DIR ?? join(homedir(), ".local/share/pi-durable-bot");
-export const CONFIG_DIR = process.env.PI_DURABLE_BOT_CONFIG_DIR ?? join(homedir(), ".config/pi-durable-bot");
 
 /** bot.json: who the bot is and where it is. The agent may edit it; changes apply while running. */
 export interface BotDefinition {
@@ -57,12 +56,28 @@ export function botPaths(dir: string) {
     notes: join(dir, "notes.md"),
     workspace: join(dir, "workspace"),
     db: join(dir, "bot.sqlite"),
-    socket: join(dir, "control.sock"),
+    socket: controlAddress(dir),
     crashAfterSend: join(dir, "crash-after-send"),
+    /** A note from pots init: the bot is woken with it at its first start, then the file is removed. */
+    firstWake: join(dir, "first-wake.md"),
   };
 }
 
 export type BotPaths = ReturnType<typeof botPaths>;
+
+/**
+ * The control endpoint of a bot: a Unix socket in its folder, or a named pipe on Windows. A Unix socket path must be
+ * short (104 bytes on macOS), so a deep folder gets its socket in the temporary directory instead.
+ */
+function controlAddress(dir: string): string {
+  const name = `pots-${createHash("sha256").update(process.platform === "win32" ? dir.toLowerCase() : dir).digest("hex").slice(0, 16)}`;
+  if (process.platform === "win32") return `\\\\.\\pipe\\${name}`;
+  const socket = join(dir, "control.sock");
+  return Buffer.byteLength(socket) < 100 ? socket : join(tmpdir(), `${name}.sock`);
+}
+
+/** A bot ID: lowercase letters, digits, "_" and "-". It names the bot's folder. */
+export const BOT_ID = /^[a-z0-9][a-z0-9_-]*$/;
 
 /** Read and check bot.json. Throws with a readable message when it is wrong. */
 export function readDefinition(file: string): { definition: BotDefinition; text: string } {

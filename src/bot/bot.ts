@@ -2,11 +2,14 @@ import { randomUUID } from "node:crypto";
 import { existsSync, unlinkSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
+import { delimiter, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Models } from "@earendil-works/pi-ai";
 import { Agent, openDatabase } from "../agent/agent.ts";
 import { createJudge } from "../agent/judge.ts";
 import { loadChannel } from "../channels/load.ts";
 import type { Address, ChannelAdapter, ChannelConfig } from "../core/channel.ts";
+import { SECRETS_DIR } from "../core/home.ts";
 import type { Judge } from "../core/judge.ts";
 import type { Sql } from "../core/sql.ts";
 import type { PlaceWake, WakeTarget } from "../core/wake.ts";
@@ -14,6 +17,7 @@ import { Gateway } from "../gateway/gateway.ts";
 import { MessageLog } from "../gateway/log.ts";
 import { ControlServer } from "./control.ts";
 import { type BotDefinition, type BotPaths, botPaths } from "./definition.ts";
+import { describeMachine } from "./machine.ts";
 import {
   folderSection,
   identitySection,
@@ -40,12 +44,18 @@ CREATE TABLE IF NOT EXISTS bot_wakes (
 `;
 
 export interface BotEnvironment {
-  dataDir: string;
-  /** Directory with the pb command. */
-  binDir: string;
+  /** The folder with every bot's folder. */
+  botsDir: string;
+  /** The `pots` command for the agent's shell, scripts and scheduled jobs. */
+  potsCommand: string;
   /** pi's model layer, shared by all bots of the process. */
   models: Models;
 }
+
+/** What the agent is told about the computer it runs on. Checked once per process. */
+const MACHINE = describeMachine();
+/** docs/ of this package, next to src/ or dist/. */
+const DOCS_DIR = fileURLToPath(new URL("../../docs", import.meta.url));
 
 type Print = (message: string, data?: Record<string, unknown>) => void;
 
@@ -68,6 +78,8 @@ export class Bot implements WakeTarget {
   readonly #control: ControlServer;
   /** Which place each wake submission is about, for "is the bot working on this place". */
   readonly #submissionPlaces = new Map<string, Address>();
+  /** How the last failed run ended, for pots status and pots chat. */
+  #lastError: { at: number; error: string } | undefined;
   /** Places the agent sent or reacted to in its current busy period. */
   readonly #touched = new Set<Address>();
 
@@ -94,9 +106,19 @@ export class Bot implements WakeTarget {
     this.#agent = init.agent;
     this.#judge = init.judge;
     this.#control = new ControlServer(init.paths.socket, this.#routes());
+    let working: readonly string[] = [];
     this.#agent.onRunChange((inputs) => {
       if (!inputs) this.#touched.clear();
       this.#print(inputs ? "agent working" : "agent idle", inputs ? { inputs } : {});
+      if (inputs) {
+        working = inputs;
+        return;
+      }
+      void this.#agent.runError(working).then((error) => {
+        if (!error) return;
+        this.#lastError = { at: Date.now(), error };
+        this.#print("agent run failed", { error });
+      });
     });
   }
 
@@ -146,9 +168,11 @@ export class Bot implements WakeTarget {
       id,
       name: current().name,
       paths,
-      dataDir: env.dataDir,
-      pb: `${env.binDir}/pb`,
-      node: process.execPath,
+      botsDir: env.botsDir,
+      pots: env.potsCommand,
+      machine: MACHINE,
+      docs: DOCS_DIR,
+      secretsDir: SECRETS_DIR,
       fallbackWakeMinutes: current().settings.fallbackWakeMinutes,
       accounts: gateway.channels.map((channel) => ({ channel: channel.id, ...(channel.me ? { me: channel.me } : {}) })),
     });
@@ -161,9 +185,8 @@ export class Bot implements WakeTarget {
       workspace: paths.workspace,
       shellEnv: {
         ...process.env,
-        PI_DURABLE_BOT_ID: id,
-        PI_DURABLE_BOT_NODE: process.execPath,
-        PATH: `${env.binDir}:${process.env.PATH ?? ""}`,
+        POTS_BOT: id,
+        PATH: `${dirname(env.potsCommand)}${delimiter}${process.env.PATH ?? ""}`,
         HOME: process.env.HOME ?? homedir(),
       },
       sections: [
@@ -201,6 +224,10 @@ export class Bot implements WakeTarget {
     try {
       agent.resume();
       await timers.start();
+      if (existsSync(paths.firstWake)) {
+        await timers.add(Date.now(), await readFile(paths.firstWake, "utf8"));
+        unlinkSync(paths.firstWake);
+      }
       await bot.#control.start();
     } catch (error) {
       await timers.stop();
@@ -355,6 +382,7 @@ export class Bot implements WakeTarget {
         model: this.#definition.model,
         judge: this.#definition.judge,
         busy: this.#agent.runInputs !== undefined,
+        ...(this.#lastError ? { lastError: this.#lastError } : {}),
         channels: this.#gateway.channels.map((channel) => ({ id: channel.id, me: channel.me?.address })),
       }),
     };

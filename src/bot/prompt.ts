@@ -3,6 +3,7 @@ import type { PersonInfo } from "../core/channel.ts";
 import type { PlaceWake, WakeEvent } from "../core/wake.ts";
 import { LOG_SCHEMA } from "../gateway/log.ts";
 import type { BotPaths } from "./definition.ts";
+import type { Machine } from "./machine.ts";
 import type { Timer } from "./timers.ts";
 
 // Everything the agent is told. Facts and mechanisms only; the judgment is the agent's.
@@ -11,10 +12,14 @@ export interface PromptFacts {
   id: string;
   name: string;
   paths: BotPaths;
-  dataDir: string;
-  pb: string;
-  /** The node binary, for running pb where PATH has no node (cron). */
-  node: string;
+  /** The folder with every bot's folder. */
+  botsDir: string;
+  /** Full path of the pots command. */
+  pots: string;
+  machine: Machine;
+  /** The package's docs folder. */
+  docs: string;
+  secretsDir: string;
   fallbackWakeMinutes: number;
   /** This bot's own person address in each channel account. */
   accounts: readonly { channel: string; me?: PersonInfo }[];
@@ -42,16 +47,20 @@ ${accounts}
 
 # Tools and command line
 - Tools: read, write, edit, bash, and send, react, call.
-- The command line ${facts.pb} does the same channel actions, and also handles timed wakes, turning the page and context use. Your scripts and scheduled jobs can use it too:
-  pb send <address> <text, or - to read stdin> [--id <send ID>]   a send ID is sent only once; use the same ID when you redo
-  pb react <message address> <emoji> [--remove]
-  pb call <channel> <method> [JSON params, or -]
-  pb wake --in 30m | --at "2026-10-28 09:00" [--note <text>]   timed wake; with no time it is now
-  pb wake --list | --cancel <id>
-  pb context
-  pb turn-page --note <text>
-  Outside your own bash (for example in cron), write it in full: PI_DURABLE_BOT_NODE=${facts.node} ${facts.pb} --bot ${facts.id} <command>
-- You have sudo and full permissions on this machine. Your actions need no approval. Working directory: ${facts.paths.workspace}`;
+- The command line pots does the same channel actions, and also handles timed wakes, turning the page and context use. Your scripts and scheduled jobs can use it too:
+  pots send <address> <text, or - to read stdin> [--id <send ID>]   a send ID is sent only once; use the same ID when you redo
+  pots react <message address> <emoji> [--remove]
+  pots call <channel> <method> [JSON params, or -]
+  pots wake --in 30m | --at "2026-10-28 09:00" [--note <text>]   timed wake; with no time it is now
+  pots wake --list | --cancel <id>
+  pots context
+  pots turn-page --note <text>
+  Outside your own bash (for example in cron), write it in full: ${facts.pots} <command> --bot ${facts.id}
+
+# This computer
+- It is yours to work on: ${facts.machine.os}, host ${facts.machine.hostname}, user ${facts.machine.user}. The bash tool runs ${facts.machine.shell}.
+- You have all the permissions of this user${facts.machine.sudo ? ", and sudo works without a password" : ""}. Your actions need no approval. You can install what you need and drive a browser or the desktop to do work that has no API.
+- Working directory: ${facts.paths.workspace}`;
 }
 
 export function logSection(facts: PromptFacts): string {
@@ -74,18 +83,19 @@ export function folderSection(facts: PromptFacts): string {
 - responsibilities.md: what you are responsible for. The judge uses it to decide whether an event that does not mention you is about you. When your responsibilities change, update it.
 - notes.md: your notes. After you turn the page, you find what you need again from them and the message log.
 - workspace/: your working directory.
-- Other bots are in ${facts.dataDir}, one subfolder per bot. You can change their definitions. A new folder with a bot.json is a new bot.`;
+- Channel types: slack, terminal (the person who set you up, in their terminal), test. How to connect a new chat app yourself is in ${facts.docs}/channels/; put its tokens in ${facts.secretsDir}, readable only by this user.
+- Other bots are in ${facts.botsDir}, one subfolder per bot. You can change their definitions. A new folder with a bot.json is a new bot.`;
 }
 
 export function memorySection(facts: PromptFacts): string {
   return `# Context and turning the page
 - You have one long-lived conversation. Events from all channels go into it.
-- Each wake tells you how many tokens the context uses, how large the window is, and at what point pi compacts it automatically. You can also check at any time with pb context.
-- Automatic compaction turns the old conversation into a summary written by pi, and details are lost. You decide when to turn the page. To turn the page: first write what you will need into ${facts.paths.notes}, then run pb turn-page --note "<a message to yourself in the new context>". The first message of the new context is that message and the full notes. After you turn the page you cannot see the old conversation; the message log stays.
+- Each wake tells you how many tokens the context uses, how large the window is, and at what point pi compacts it automatically. You can also check at any time with pots context.
+- Automatic compaction turns the old conversation into a summary written by pi, and details are lost. You decide when to turn the page. To turn the page: first write what you will need into ${facts.paths.notes}, then run pots turn-page --note "<a message to yourself in the new context>". The first message of the new context is that message and the full notes. After you turn the page you cannot see the old conversation; the message log stays.
 - Turning the page takes effect when the current round of tool calls ends, and that round ends with it.
 
 # Timed wakes
-- Use pb wake to set timed wakes. You can have several at once, and you choose the times: look in now and then at what people are talking about, or do something you promised when its time comes.
+- Use pots wake to set timed wakes. You can have several at once, and you choose the times: look in now and then at what people are talking about, or do something you promised when its time comes.
 - When you have no timed wake, a fallback check-in comes every ${facts.fallbackWakeMinutes} minutes.`;
 }
 

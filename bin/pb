@@ -1,4 +1,0 @@
-#!/bin/sh
-# The bot's command line. See src/cli/pb.ts.
-here=$(dirname "$(readlink -f "$0")")
-exec "${PI_DURABLE_BOT_NODE:-node}" "$here/../src/cli/pb.ts" "$@"

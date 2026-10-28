@@ -1,26 +1,13 @@
 #!/usr/bin/env bash
-# Copy the tracked files of this checkout to the app directory, install dependencies,
-# install the systemd unit, and (re)start the service. Uses sudo for systemctl and the unit file.
+# Install this checkout as the machine's pots command (a copy, not a link, so later edits do not reach the running
+# gateway), then (re)start the service. Extra arguments go to pots service install, for example --system.
 set -euo pipefail
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
-app=${PI_DURABLE_BOT_APP_DIR:-$HOME/.local/lib/pi-durable-bot}
-node=$(mise which node 2>/dev/null || readlink -f "$(command -v node)")
-unit=/etc/systemd/system/pi-durable-bot.service
-
-mkdir -p "$app"
-rm -rf "$app/src" "$app/scripts" "$app/deploy" "$app/bin" "$app/config"
-(cd "$repo" && git ls-files -z | tar --null -T - -cf -) | tar -C "$app" -xf -
-(cd "$app" && npm ci --omit=dev --no-audit --no-fund)
-
-sed -e "s|@USER@|$(id -un)|" -e "s|@APP@|$app|" -e "s|@NODE@|$node|" -e "s|@NODE_BIN@|$(dirname "$node")|" \
-  "$repo/deploy/pi-durable-bot.service" | sudo tee "$unit" >/dev/null
-# pb for the agent's own scripts and cron jobs, with this node.
-mkdir -p "$HOME/.local/bin"
-printf '#!/bin/sh\nPI_DURABLE_BOT_NODE=%s exec %s/bin/pb "$@"\n' "$node" "$app" > "$HOME/.local/bin/pb"
-chmod +x "$HOME/.local/bin/pb"
-
-sudo systemctl daemon-reload
-sudo systemctl enable pi-durable-bot.service
-sudo systemctl restart pi-durable-bot.service
-systemctl --no-pager status pi-durable-bot.service | head -n 5
+cd "$repo"
+npm run build
+tarball=$(npm pack --silent)
+trap 'rm -f "$repo/$tarball"' EXIT
+npm install -g --no-audit --no-fund "$repo/$tarball"
+pots service install "$@"
+pots status

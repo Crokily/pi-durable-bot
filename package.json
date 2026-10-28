@@ -1,16 +1,39 @@
 {
   "name": "pi-durable-bot",
   "version": "0.1.0",
-  "private": true,
-  "type": "module",
+  "description": "Open-source AI coworkers that read every channel, decide what matters, and act on their own computer. Self-hosted, any model.",
   "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Crokily/pi-durable-bot.git"
+  },
+  "keywords": [
+    "ai-agent",
+    "ai-coworker",
+    "slack-bot",
+    "self-hosted",
+    "pi-durable",
+    "chat-sdk"
+  ],
+  "bin": {
+    "pots": "dist/cli/pots.js"
+  },
+  "files": [
+    "dist",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
   "engines": {
     "node": ">=24"
   },
   "scripts": {
-    "start": "node src/main.ts",
-    "pb": "node src/cli/pb.ts",
-    "check": "tsc --noEmit"
+    "start": "node src/cli/pots.ts start",
+    "pots": "node src/cli/pots.ts",
+    "check": "tsc --noEmit",
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
+    "prepare": "npm run build"
   },
   "dependencies": {
     "@chat-adapter/slack": "4.43.0",
@@ -19,7 +42,9 @@
     "@earendil-works/pi-ai": "1.4.0",
     "@earendil-works/pi-coding-agent": "1.4.0",
     "@earendil-works/pi-durable": "1.4.0",
-    "chat": "4.43.0"
+    "@effect/platform-node": "4.0.7",
+    "chat": "4.43.0",
+    "effect": "4.0.7"
   },
   "devDependencies": {
     "@types/node": "26.6.5",

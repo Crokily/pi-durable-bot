@@ -9,10 +9,10 @@
 //   node scripts/slack-test.ts cleanup <channel ID> [--dry-run] [--before <ts>] [--keep <ts>]...
 //       delete the user's and the bot's messages (older than ts, except kept ones); join and leave notices stay
 import { join } from "node:path";
-import { CONFIG_DIR } from "../src/bot/definition.ts";
+import { SECRETS_DIR } from "../src/core/home.ts";
 import { readSecrets } from "../src/core/env-file.ts";
 
-const secrets = readSecrets(join(CONFIG_DIR, "slack.env"), ["SLACK_BOT_TOKEN", "SLACK_USER_TOKEN"]);
+const secrets = readSecrets(join(SECRETS_DIR, "slack.env"), ["SLACK_BOT_TOKEN", "SLACK_USER_TOKEN"]);
 type Who = "user" | "bot";
 
 async function api(who: Who, method: string, params: Record<string, string | number | boolean | undefined>): Promise<Record<string, any>> {

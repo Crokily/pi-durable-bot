@@ -34,6 +34,8 @@ export interface WakerHooks {
 
 interface Batch {
   readonly events: UndecidedEvent[];
+  /** The IDs of the events, so an event given twice is in the group once. */
+  readonly ids: Set<number>;
   /** The span that logged each event, for the wake's links. */
   readonly spans: Tracer.AnySpan[];
   readonly first: number;
@@ -247,9 +249,10 @@ export class Waker extends Context.Service<
             const now = yield* Clock.currentTimeMillis;
             const span = yield* Effect.currentSpan.pipe(Effect.option);
             let batch = batches.get(key);
-            if (batch?.events.some((queued) => queued.id === event.id)) return;
-            if (batch) batch.events.push(event);
-            else batches.set(key, (batch = { events: [event], spans: [], first: now }));
+            if (batch?.ids.has(event.id)) return;
+            if (!batch) batches.set(key, (batch = { events: [], ids: new Set(), spans: [], first: now }));
+            batch.events.push(event);
+            batch.ids.add(event.id);
             if (Option.isSome(span)) batch.spans.push(span.value);
             const wait = debounceWait(config.settings(), batch.first, now);
             yield* FiberMap.run(timers, key, Effect.andThen(Effect.sleep(wait), flush(key)));

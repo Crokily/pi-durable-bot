@@ -357,23 +357,7 @@ async function applyOne(tx: SqlExecutor, channel: string, eventId: string, h: Ha
       );
       return undefined;
     }
-    await tx.run(
-      `INSERT INTO gw_messages (address, channel, place, thread, person, from_me, mentions_me, text, mentions, files, at, send_id, raw)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      h.message,
-      channel,
-      h.place?.address ?? null,
-      thread,
-      h.person?.address ?? null,
-      h.fromMe ? 1 : 0,
-      h.mentionsMe ? 1 : 0,
-      h.text ?? "",
-      h.mentions?.length ? JSON.stringify(h.mentions) : null,
-      h.files?.length ? JSON.stringify(h.files) : null,
-      h.at,
-      h.sendId ?? null,
-      raw,
-    );
+    await insertMessage(tx, channel, h.message, h, { thread, raw, editedAt: null, sendId: h.sendId ?? null });
     // A reply makes its root a thread root.
     if (thread && h.threadRoot && h.threadRoot !== h.message) {
       await tx.run("UPDATE gw_messages SET thread = ? WHERE address = ? AND thread IS NULL", thread, h.threadRoot);
@@ -387,35 +371,20 @@ async function applyOne(tx: SqlExecutor, channel: string, eventId: string, h: Ha
           "UPDATE gw_messages SET text = ?, mentions_me = ?, mentions = ?, files = coalesce(?, files), edited_at = ?, raw = ? WHERE address = ?",
           h.text ?? "",
           h.mentionsMe ? 1 : 0,
-          h.mentions?.length ? JSON.stringify(h.mentions) : null,
-          h.files?.length ? JSON.stringify(h.files) : null,
+          jsonList(h.mentions),
+          jsonList(h.files),
           h.at,
           raw,
           h.message,
         );
       } else {
-        await tx.run(
-          `INSERT INTO gw_messages (address, channel, place, thread, person, from_me, mentions_me, text, mentions, files, at, edited_at, raw)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          h.message,
-          channel,
-          h.place?.address ?? null,
-          thread,
-          h.person?.address ?? null,
-          h.fromMe ? 1 : 0,
-          h.mentionsMe ? 1 : 0,
-          h.text ?? "",
-          h.mentions?.length ? JSON.stringify(h.mentions) : null,
-          h.files?.length ? JSON.stringify(h.files) : null,
-          h.at,
-          h.at,
-          raw,
-        );
+        // An edit of a message the log does not have: the message as it is now.
+        await insertMessage(tx, channel, h.message, h, { thread, raw, editedAt: h.at, sendId: null });
       }
     } else if (h.kind === "delete" && known) {
       await tx.run("UPDATE gw_messages SET deleted_at = ? WHERE address = ?", h.at, h.message);
     } else if (h.kind === "update" && known && raw !== null) {
-      await tx.run("UPDATE gw_messages SET raw = ?, files = coalesce(?, files) WHERE address = ?", raw, h.files?.length ? JSON.stringify(h.files) : null, h.message);
+      await tx.run("UPDATE gw_messages SET raw = ?, files = coalesce(?, files) WHERE address = ?", raw, jsonList(h.files), h.message);
     }
   }
 
@@ -440,6 +409,37 @@ async function applyOne(tx: SqlExecutor, channel: string, eventId: string, h: Ha
   );
   return event!.id;
 }
+
+/** A message the log does not have yet. */
+function insertMessage(
+  tx: SqlExecutor,
+  channel: string,
+  address: Address,
+  h: Happening,
+  row: { thread: string | null; raw: string | null; editedAt: number | null; sendId: string | null },
+): Promise<void> {
+  return tx.run(
+    `INSERT INTO gw_messages (address, channel, place, thread, person, from_me, mentions_me, text, mentions, files, at, edited_at, send_id, raw)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    address,
+    channel,
+    h.place?.address ?? null,
+    row.thread,
+    h.person?.address ?? null,
+    h.fromMe ? 1 : 0,
+    h.mentionsMe ? 1 : 0,
+    h.text ?? "",
+    jsonList(h.mentions),
+    jsonList(h.files),
+    h.at,
+    row.editedAt,
+    row.sendId,
+    row.raw,
+  );
+}
+
+/** A list as JSON, or NULL when it is empty. */
+const jsonList = (items: readonly unknown[] | undefined) => (items?.length ? JSON.stringify(items) : null);
 
 async function putPlace(tx: SqlExecutor, channel: string, place: PlaceInfo, now: number): Promise<void> {
   await tx.run(

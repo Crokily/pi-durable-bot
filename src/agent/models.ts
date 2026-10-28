@@ -1,7 +1,10 @@
 import type { AnyModel, Models, Provider } from "@earendil-works/pi-ai";
 import { type LazyStreamObserver, lazyStream } from "@earendil-works/pi-ai/api/lazy";
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { TelemetrySpan } from "@earendil-works/pi-telemetry";
+
+/** A module of pi-coding-agent that its package does not export. */
+const piModule = (path: string) => new URL(path, import.meta.resolve("@earendil-works/pi-coding-agent")).href;
 
 /**
  * pi's own model layer, shared with the pi CLI: subscription logins and API keys in `~/.pi/agent/auth.json`,
@@ -10,12 +13,13 @@ import type { TelemetrySpan } from "@earendil-works/pi-telemetry";
  * One per process; all bots share it.
  */
 export async function openModels(): Promise<Models> {
-  const models = await ModelRuntime.create();
-  // pi registers llama.cpp from a built-in extension that the package does not export. It brings the router's chat
-  // models and its classifiers (decision models through /v1/systemone, chat models through next-token probabilities).
-  const llama: { createLlamaProvider(): { provider: Provider } } = await import(
-    new URL("./extensions/llama/provider.js", import.meta.resolve("@earendil-works/pi-coding-agent")).href
-  );
+  // The model layer from its own module: the package's index also loads pi's terminal interface (Markdown, syntax
+  // highlighting, diagrams), which takes about as long to load as the rest of the gateway.
+  const { ModelRuntime: Runtime } = (await import(piModule("./core/model-runtime.js"))) as { ModelRuntime: typeof ModelRuntime };
+  const models = await Runtime.create();
+  // pi registers llama.cpp from a built-in extension. It brings the router's chat models and its classifiers (decision
+  // models through /v1/systemone, chat models through next-token probabilities).
+  const llama: { createLlamaProvider(): { provider: Provider } } = await import(piModule("./extensions/llama/provider.js"));
   models.registerNativeProvider(llama.createLlamaProvider().provider);
   return observeRequests(models);
 }

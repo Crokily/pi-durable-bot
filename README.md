@@ -59,7 +59,7 @@ Being woken is not the same as speaking. Each time, the agent reads the log and 
 
 ### 💻 Its own computer
 
-It has a real machine with a shell, a browser it can drive, files and the internet. It does not wait for a plugin. It writes the script it needs, runs it, fixes it, and keeps the useful ones. That covers research, spreadsheets, reports, monitoring a web page, filling a form, or booking a flight, and also code.
+It has a real machine with a shell, files, the internet, and a screen it uses like a person: the browser and the apps on it, with the mouse and keyboard. It does not wait for a plugin. It writes the script it needs, runs it, fixes it, and keeps the useful ones. That covers research, spreadsheets, reports, monitoring a web page, filling a form, or booking a flight, and also code.
 
 This is **code mode**: the agent gets a few general tools (`read`, `write`, `edit`, `bash`) plus three channel actions (`send`, `react`, `call`), and builds the rest itself.
 
@@ -116,7 +116,7 @@ pots init
 2. **Its AI.** Sign in with a subscription you already pay for (ChatGPT, Claude, GitHub Copilot, Grok, Kimi and more), use an API key, or point it at a local server (Ollama, LM Studio, llama.cpp).
 3. **In one sentence, what it is for.** Optional. The bot writes its own persona and responsibilities from it.
 
-Then the gateway starts as a background service (it starts again at login) and you are talking to your bot in the terminal. Tell it which chat apps to join. It sets them up itself on its computer and asks you only for what it cannot do, like signing in to Slack or approving the app. Leave with Ctrl+C; come back with `pots chat`.
+Then the gateway starts as a background service (it starts again at login) and you are talking to your bot in the terminal. It first checks that it can use the computer's screen and walks you through any permission it needs, such as Screen Recording and Accessibility on a Mac. On a server with no desktop, it works without a screen and asks you before it sets one up. Tell it which chat apps to join. It sets them up itself on its computer and asks you only for what it cannot do, like signing in to Slack or approving the app. Leave with Ctrl+C; come back with `pots chat`.
 
 It joins only the places it is invited to, like a new hire who is added to the right channels.
 
@@ -248,6 +248,7 @@ pi-durable-bot runs every day as a teammate in a real workspace. What works toda
 - [x] Several bots per machine
 - [x] `pots init`: name, AI and one sentence, then the bot sets up its own chat apps from the terminal
 - [x] macOS, Linux and Windows, as a background service of the user
+- [x] The screen, mouse and keyboard of its computer, used like a person (computer use), or no screen on a server
 - [x] Any model pi can use: subscription logins, API keys, OpenAI-compatible endpoints, local models
 - [x] A judge you choose: the bot's own model, Jev or another classifier, a local llama.cpp model, or none
 - [ ] More adapters: Discord, Teams, Telegram, email

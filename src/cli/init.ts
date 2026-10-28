@@ -31,7 +31,8 @@ function firstWake(user: string, address: string, about: string | undefined): st
     about
       ? `They described you in one sentence: "${about}". Write persona.md and responsibilities.md from it, and refine them as you learn more.`
       : "They did not say what you are for yet. Ask them, then write persona.md and responsibilities.md.",
-    `Say hello there. Then find out which chat apps you should work in, for example Slack, and connect them yourself with this computer. Ask ${user} only for what you cannot do yourself, such as signing in or approving an install.`,
+    `Say hello there. Then check that you can see and use this computer's screen. If something that only ${user} can do stands in the way, such as a permission the system asks for, help them do it now, step by step. If there is no desktop, tell them, and work without one.`,
+    `Then find out which chat apps you should work in, for example Slack, and connect them yourself with this computer. Ask ${user} only for what you cannot do yourself, such as signing in or approving an install.`,
   ].join("\n");
 }
 
@@ -64,7 +65,7 @@ export const initCommand = Command.make(
       if (!input.yes) {
         const accepted = yield* ask(
           Prompt.Confirm({
-            message: `Your bot gets full control of this computer as ${user}: it runs commands, installs software and uses the browser, with no approval step. A computer or VM of its own is best. Continue?`,
+            message: `Your bot gets full control of this computer as ${user}: it runs commands, installs software and uses the screen, mouse and keyboard, with no approval step. A computer or VM of its own is best. Continue?`,
             initial: false,
           }),
           "pass --yes to accept that the bot gets full control of this computer",
@@ -113,7 +114,7 @@ export const initCommand = Command.make(
       yield* waitForBot(id);
 
       yield* step(4, `Talk to ${name}`);
-      yield* Console.log(`${name} sets up the chat apps you want with this computer, and asks you only for what it cannot do itself.`);
+      yield* Console.log(`${name} first checks that it can use this computer's screen and helps you with any permission it needs. Then it sets up the chat apps you want, and asks you only for what it cannot do itself.`);
       yield* Console.log(`Leave with Ctrl+C; come back any time with pots chat. ${name} keeps working when you leave.`);
       if (!input.noChat && interactive) yield* chatInteractive(id);
     }),

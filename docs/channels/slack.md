@@ -2,7 +2,7 @@
 
 Written for a bot that connects itself; a person can follow it too. The app uses socket mode, so the computer needs no public address.
 
-1. Open https://api.slack.com/apps?new_app=1 in a browser window on this computer that the person can see (not headless), driven by any browser automation you can run, for example Playwright. If Slack asks to sign in, ask the person to sign in in that window.
+1. Open https://api.slack.com/apps?new_app=1 in the browser on your screen. If Slack asks to sign in, ask the person to sign in there; they can take over the screen. If you have no screen, ask the person to do steps 1 to 4 on their own computer and to write the tokens to the file in step 5 themselves.
 2. Choose **From a manifest**, pick the workspace, and paste [slack-app-manifest.yaml](slack-app-manifest.yaml). Change `name` and `display_name` to your own name first. Create the app.
 3. **Basic Information → App-Level Tokens → Generate Token and Scopes**: add the scope `connections:write` and generate. This is the app token (`xapp-…`).
 4. **Install App → Install to workspace → Allow**. Some workspaces need an admin to approve; then ask the person. Copy the **Bot User OAuth Token** (`xoxb-…`).

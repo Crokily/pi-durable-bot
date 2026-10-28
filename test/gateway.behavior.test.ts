@@ -9,8 +9,8 @@ import { CHANNEL, ME, pause, TestGateway, waitFor } from "./support/gateway.ts";
 let model: FakeModel;
 let gateway: TestGateway;
 
-async function setUp(options: { judge?: string; settings?: Record<string, unknown> } = {}): Promise<void> {
-  model = await startFakeModel();
+async function setUp(options: { judge?: string; settings?: Record<string, unknown>; modelDelayMs?: number } = {}): Promise<void> {
+  model = await startFakeModel(undefined, { delayMs: options.modelDelayMs ?? 0 });
   gateway = new TestGateway({ model, ...options });
   await gateway.start();
 }
@@ -149,6 +149,22 @@ describe("crashes and restarts", { timeout: 90_000 }, () => {
     await waitFor(() => agentRequests(model).at(-1)?.messages.at(-1)?.content.includes("not sent again") === true, { what: "the tool answer" });
     await pause(1_000);
     expect(gateway.sent()).toHaveLength(1);
+  });
+
+  it("wakes the bot once when the gateway dies right after the bot took the wake", async () => {
+    // A slow model keeps the agent's run going after the restart, so a wake decided anew would steer it.
+    await setUp({ modelDelayMs: 2_000 });
+    gateway.crashAfterNextWake();
+    const id = gateway.say("general", "alice", `@${ME} please answer`);
+    await gateway.exited();
+    expect(event(`general/${id}`)?.wake).toBe("mention");
+
+    await gateway.start();
+    await waitFor(() => gateway.sent().length === 1, { what: "the reply" });
+    await pause(3_000);
+    expect(gateway.sent()).toHaveLength(1);
+    expect(gateway.query<{ id: string }>("SELECT id FROM bot_wakes").map((row) => row.id)).toEqual([`mention:test:#general:1`]);
+    expect(gateway.query("SELECT * FROM gw_pending_wakes")).toEqual([]);
   });
 
   it("keeps an event that was stored but not decided when the gateway is killed", async () => {

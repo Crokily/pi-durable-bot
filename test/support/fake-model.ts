@@ -21,7 +21,8 @@ export interface FakeModel {
   close(): Promise<void>;
 }
 
-export async function startFakeModel(script: (request: FakeRequest) => FakeReply = coworker): Promise<FakeModel> {
+/** delayMs: wait this long before each answer, like a slow model. */
+export async function startFakeModel(script: (request: FakeRequest) => FakeReply = coworker, options: { delayMs?: number } = {}): Promise<FakeModel> {
   const requests: FakeRequest[] = [];
   let calls = 0;
   const server = createServer((req, res) => {
@@ -33,6 +34,7 @@ export async function startFakeModel(script: (request: FakeRequest) => FakeReply
       const body = JSON.parse(await readBody(req)) as { stream?: boolean; messages: OpenAiMessage[]; tools?: { function: { name: string } }[] };
       const request = toRequest(body);
       requests.push(request);
+      if (options.delayMs) await new Promise((resolve) => setTimeout(resolve, options.delayMs));
       const reply = script(request);
       const id = `fake-${++calls}`;
       const delta = "text" in reply

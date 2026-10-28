@@ -1,6 +1,7 @@
 import { Clock, Context, Effect, Layer } from "effect";
 import type { Address, Happening, PersonInfo, PlaceInfo, PlaceKind } from "../core/channel.ts";
 import type { Sql, SqlExecutor } from "../core/sql.ts";
+import type { PlaceWake } from "../core/wake.ts";
 import { LogError } from "./errors.ts";
 
 /**
@@ -84,6 +85,12 @@ CREATE TABLE IF NOT EXISTS gw_outbox (
   message TEXT,
   created_at INTEGER NOT NULL,
   sent_at INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS gw_pending_wakes (
+  id TEXT PRIMARY KEY,
+  wake TEXT NOT NULL,
+  decided_at INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS gw_state (
@@ -172,6 +179,15 @@ export class MessageLog extends Context.Service<
     apply(channel: string, eventId: string, happenings: readonly Happening[]): Effect.Effect<UndecidedEvent[], LogError>;
     readonly undecided: Effect.Effect<UndecidedEvent[], LogError>;
     setWake(ids: readonly number[], wake: string): Effect.Effect<void, LogError>;
+    /**
+     * Decide events for a wake: their decision and the wake itself, in one transaction, before the bot gets the wake.
+     * After a crash the same wake, with the same ID, is delivered again instead of deciding the events anew.
+     */
+    recordWake(wake: PlaceWake, ids: readonly number[], decision: string): Effect.Effect<void, LogError>;
+    /** The bot has the wake. */
+    wakeDelivered(id: string): Effect.Effect<void, LogError>;
+    /** Wakes decided and not yet known to be delivered, oldest first. */
+    readonly pendingWakes: Effect.Effect<PlaceWake[], LogError>;
     // Reads for backfill and the judge
     newestMessage(place: Address): Effect.Effect<Address | undefined, LogError>;
     threads(place: Address): Effect.Effect<Address[], LogError>;
@@ -248,6 +264,20 @@ function makeLog(sql: Sql): MessageLog["Service"] {
           for (const id of ids) await tx.run("UPDATE gw_events SET wake = ? WHERE id = ?", wake, id);
         }),
       ),
+
+    recordWake: (wake, ids, decision) =>
+      dbAt((now) =>
+        sql.transaction(async (tx) => {
+          await tx.run("INSERT OR IGNORE INTO gw_pending_wakes (id, wake, decided_at) VALUES (?, ?, ?)", wake.id, JSON.stringify(wake), now);
+          for (const id of ids) await tx.run("UPDATE gw_events SET wake = ? WHERE id = ?", decision, id);
+        }),
+      ),
+
+    wakeDelivered: (id) => db(() => sql.run("DELETE FROM gw_pending_wakes WHERE id = ?", id)),
+
+    pendingWakes: db(async () =>
+      (await sql.all<{ wake: string }>("SELECT wake FROM gw_pending_wakes ORDER BY decided_at, rowid")).map((row) => JSON.parse(row.wake) as PlaceWake),
+    ),
 
     newestMessage: (place) =>
       db(async () => (await sql.get<{ address: string }>("SELECT address FROM gw_messages WHERE place = ? ORDER BY at DESC LIMIT 1", place))?.address),

@@ -26,6 +26,11 @@ export function debounceWait(settings: Pick<WakerSettings, "debounceMs" | "debou
   return Math.max(0, Math.min(settings.debounceMs, first + settings.debounceMaxMs - now));
 }
 
+export interface WakerHooks {
+  /** Test hook: runs after the bot took a wake and before the waker records that. */
+  afterDeliver?: (wakeId: string) => void;
+}
+
 interface Batch {
   readonly events: UndecidedEvent[];
   /** The span that logged each event, for the wake's links. */
@@ -44,6 +49,9 @@ export class Waker extends Context.Service<
   {
     setTarget(target: WakeTarget): void;
     add(event: UndecidedEvent): Effect.Effect<void>;
+    /** Deliver again, with the same IDs, the wakes a crash left undelivered: after the debounce, like new events. */
+    readonly redeliver: Effect.Effect<void, LogError>;
+    readonly hooks: WakerHooks;
     /** Stop the timers and wait for decisions in progress. Undecided events stay undecided in the log and come back on the next start. */
     readonly stop: Effect.Effect<void>;
   }
@@ -59,6 +67,22 @@ export class Waker extends Context.Service<
       const deciding = yield* FiberSet.make();
       let target: WakeTarget | undefined;
       let stopped = false;
+      const hooks: WakerHooks = {};
+
+      /** Hand a recorded wake to the bot, and forget it once the bot has it. */
+      const handOver = (bot: WakeTarget, wake: PlaceWake) =>
+        Effect.gen(function* () {
+          const submission = yield* Effect.tryPromise({
+            try: () => bot.deliver(wake),
+            catch: (cause) => new DeliverError({ message: message(cause), cause }),
+          }).pipe(Effect.withSpan("wake.deliver", { attributes: { wake: wake.id } }));
+          hooks.afterDeliver?.(wake.id);
+          yield* log.wakeDelivered(wake.id);
+          const span = yield* Effect.currentSpan.pipe(Effect.option);
+          if (Option.isSome(span)) wakeSpans.remember(submission, span.value);
+          yield* Effect.annotateCurrentSpan({ reason: wake.reason, wake: wake.id, submission });
+          config.print("wake", { reason: wake.reason, place: wake.place.address, events: wake.events.length });
+        });
 
       const decide = (events: UndecidedEvent[], links: readonly Tracer.AnySpan[]) =>
         Effect.gen(function* () {
@@ -76,15 +100,8 @@ export class Waker extends Context.Service<
           const deliver = (reason: PlaceWakeReason, decision: string, judged?: PlaceWake["judged"]) =>
             Effect.gen(function* () {
               const wake: PlaceWake = { id: id(reason), reason, place, events: wakeEvents, ...(judged ? { judged } : {}) };
-              const submission = yield* Effect.tryPromise({
-                try: () => bot.deliver(wake),
-                catch: (cause) => new DeliverError({ message: message(cause), cause }),
-              }).pipe(Effect.withSpan("wake.deliver", { attributes: { wake: wake.id } }));
-              yield* log.setWake(ids, decision);
-              const span = yield* Effect.currentSpan.pipe(Effect.option);
-              if (Option.isSome(span)) wakeSpans.remember(submission, span.value);
-              yield* Effect.annotateCurrentSpan({ reason, wake: wake.id, submission });
-              config.print("wake", { reason, place: place.address, events: ids.length });
+              yield* log.recordWake(wake, ids, decision);
+              yield* handOver(bot, wake);
             });
 
           if (bot.isWorkingOn(place.address)) return yield* deliver("steer", "steer");
@@ -185,7 +202,30 @@ export class Waker extends Context.Service<
           }),
         );
 
+      const redeliver = Effect.gen(function* () {
+        for (const wake of yield* log.pendingWakes) {
+          yield* FiberSet.run(
+            deciding,
+            Effect.gen(function* () {
+              yield* Effect.sleep(config.settings().debounceMs);
+              if (stopped) return;
+              if (!target) return yield* Effect.fail(new NoWakeTarget({ message: "no wake target" }));
+              yield* handOver(target, wake);
+            }).pipe(
+              Effect.withSpan("wake", { root: true, attributes: { place: wake.place.address, events: wake.events.map((event) => event.id).join(","), again: true } }),
+              Effect.catchCause((cause) =>
+                Cause.hasInterruptsOnly(cause)
+                  ? Effect.void
+                  : Effect.sync(() => config.print("wake decision failed", { place: wake.place.address, error: failureText(Cause.squash(cause)) })),
+              ),
+            ),
+          );
+        }
+      });
+
       return Waker.of({
+        hooks,
+        redeliver,
         setTarget: (next) => {
           target = next;
           stopped = false;

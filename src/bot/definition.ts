@@ -58,6 +58,7 @@ export function botPaths(dir: string) {
     db: join(dir, "bot.sqlite"),
     socket: controlAddress(dir),
     crashAfterSend: join(dir, "crash-after-send"),
+    crashAfterWake: join(dir, "crash-after-wake"),
     /** A note from pots init: the bot is woken with it at its first start, then the file is removed. */
     firstWake: join(dir, "first-wake.md"),
   };

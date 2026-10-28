@@ -148,6 +148,11 @@ export class TestGateway {
     return execFileSync(process.execPath, [POTS, ...args], { env: { ...process.env, POTS_HOME: this.home, NO_COLOR: "1" }, encoding: "utf8" });
   }
 
+  /** Make the gateway die right after the bot takes its next wake, before the gateway records that. */
+  crashAfterNextWake(): void {
+    writeFileSync(join(this.botDir, "crash-after-wake"), "");
+  }
+
   /** Make the gateway die right after the platform accepts its next send, before it records the send. */
   crashAfterNextSend(): void {
     writeFileSync(join(this.botDir, "crash-after-send"), "");

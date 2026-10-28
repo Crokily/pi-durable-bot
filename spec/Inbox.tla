@@ -30,15 +30,16 @@ VARIABLES
     row,         \* the gw_events row ID of each event, 0 before it is logged
     nextRow,
     decided,     \* events whose gw_events.wake is set
+    pending,     \* gw_pending_wakes: wakes decided, not yet known to be delivered, as [id, events]
     wakes,       \* wake IDs the agent got; pi-durable keeps one submission per ID
     woken,       \* in how many different wakes each event reached the agent
     \* In memory: lost in a crash
     queue,       \* inbox events waiting to be applied, in order
     batch,       \* the waker's events that wait for a decision
-    deciding,    \* decisions in progress: [events, reason, step]
+    deciding,    \* wakes in progress: [events, reason, id, step]
     crashes
 
-vars == <<acked, repeats, receiving, inbox, received, logged, row, nextRow, decided, wakes, woken, queue, batch, deciding, crashes>>
+vars == <<acked, repeats, receiving, inbox, received, logged, row, nextRow, decided, pending, wakes, woken, queue, batch, deciding, crashes>>
 
 Init ==
     /\ acked = {}
@@ -50,6 +51,7 @@ Init ==
     /\ row = [e \in Events |-> 0]
     /\ nextRow = 1
     /\ decided = {}
+    /\ pending = {}
     /\ wakes = {}
     /\ woken = [e \in Events |-> 0]
     /\ queue = <<>>
@@ -64,7 +66,7 @@ Deliver(e) ==
     /\ e \in acked => repeats[e] < MaxRepeats
     /\ repeats' = IF e \in acked THEN [repeats EXCEPT ![e] = @ + 1] ELSE repeats
     /\ receiving' = [receiving EXCEPT ![e] = "storing"]
-    /\ UNCHANGED <<acked, inbox, received, logged, row, nextRow, decided, wakes, woken, queue, batch, deciding, crashes>>
+    /\ UNCHANGED <<acked, inbox, received, logged, row, nextRow, decided, pending, wakes, woken, queue, batch, deciding, crashes>>
 
 \* gateway #receive: log.addInbox, then queue it. A known event ID is dropped.
 Store(e) ==
@@ -75,14 +77,14 @@ Store(e) ==
                /\ queue' = Append(queue, e)
           ELSE UNCHANGED <<inbox, received, queue>>
     /\ receiving' = [receiving EXCEPT ![e] = "stored"]
-    /\ UNCHANGED <<acked, repeats, logged, row, nextRow, decided, wakes, woken, batch, deciding, crashes>>
+    /\ UNCHANGED <<acked, repeats, logged, row, nextRow, decided, pending, wakes, woken, batch, deciding, crashes>>
 
 \* sink.receive resolved: the adapter acknowledges the event.
 Ack(e) ==
     /\ receiving[e] = "stored"
     /\ acked' = acked \cup {e}
     /\ receiving' = [receiving EXCEPT ![e] = "no"]
-    /\ UNCHANGED <<repeats, inbox, received, logged, row, nextRow, decided, wakes, woken, queue, batch, deciding, crashes>>
+    /\ UNCHANGED <<repeats, inbox, received, logged, row, nextRow, decided, pending, wakes, woken, queue, batch, deciding, crashes>>
 
 \* log.apply, one inbox event at a time: write the event and mark the inbox row done in one transaction, then give the
 \* new event to the waker.
@@ -95,53 +97,62 @@ Apply ==
         /\ nextRow' = nextRow + 1
         /\ batch' = batch \cup {e}
     /\ queue' = Tail(queue)
-    /\ UNCHANGED <<acked, repeats, receiving, received, decided, wakes, woken, deciding, crashes>>
+    /\ UNCHANGED <<acked, repeats, receiving, received, decided, pending, wakes, woken, deciding, crashes>>
 
-\* The waker's timer fires: the whole batch is decided.
+\* The waker's timer fires: the whole batch is decided, with a reason.
 Flush ==
     /\ batch # {}
-    /\ \E r \in Reasons : deciding' = deciding \cup {[events |-> batch, reason |-> r, step |-> "deliver"]}
+    /\ \E r \in Reasons : deciding' = deciding \cup {[events |-> batch, reason |-> r, id |-> <<>>, step |-> "record"]}
     /\ batch' = {}
-    /\ UNCHANGED <<acked, repeats, receiving, inbox, received, logged, row, nextRow, decided, wakes, woken, queue, crashes>>
+    /\ UNCHANGED <<acked, repeats, receiving, inbox, received, logged, row, nextRow, decided, pending, wakes, woken, queue, crashes>>
 
 \* The wake ID is "<reason>:<place>:<row ID of the last event>".
 WakeId(d) == <<d.reason, CHOOSE n \in {row[e] : e \in d.events} : \A e \in d.events : row[e] <= n>>
+
+\* log.recordWake: the events' decision and the wake, with its ID, in one transaction, before the bot hears of it.
+RecordWake(d) ==
+    /\ d \in deciding
+    /\ d.step = "record"
+    /\ decided' = decided \cup d.events
+    /\ pending' = pending \cup {[id |-> WakeId(d), events |-> d.events]}
+    /\ deciding' = (deciding \ {d}) \cup {[d EXCEPT !.id = WakeId(d), !.step = "deliver"]}
+    /\ UNCHANGED <<acked, repeats, receiving, inbox, received, logged, row, nextRow, wakes, woken, queue, batch, crashes>>
 
 \* target.deliver: the agent gets the wake. The same wake ID is one submission.
 DeliverWake(d) ==
     /\ d \in deciding
     /\ d.step = "deliver"
-    /\ IF WakeId(d) \in wakes
+    /\ IF d.id \in wakes
           THEN UNCHANGED <<wakes, woken>>
-          ELSE /\ wakes' = wakes \cup {WakeId(d)}
+          ELSE /\ wakes' = wakes \cup {d.id}
                /\ woken' = [e \in Events |-> IF e \in d.events THEN woken[e] + 1 ELSE woken[e]]
-    /\ deciding' = (deciding \ {d}) \cup {[d EXCEPT !.step = "record"]}
-    /\ UNCHANGED <<acked, repeats, receiving, inbox, received, logged, row, nextRow, decided, queue, batch, crashes>>
+    /\ deciding' = (deciding \ {d}) \cup {[d EXCEPT !.step = "forget"]}
+    /\ UNCHANGED <<acked, repeats, receiving, inbox, received, logged, row, nextRow, decided, pending, queue, batch, crashes>>
 
-\* log.setWake.
-RecordWake(d) ==
+\* log.wakeDelivered: the bot has it.
+ForgetWake(d) ==
     /\ d \in deciding
-    /\ d.step = "record"
-    /\ decided' = decided \cup d.events
+    /\ d.step = "forget"
+    /\ pending' = {p \in pending : p.id # d.id}
     /\ deciding' = deciding \ {d}
-    /\ UNCHANGED <<acked, repeats, receiving, inbox, received, logged, row, nextRow, wakes, woken, queue, batch, crashes>>
+    /\ UNCHANGED <<acked, repeats, receiving, inbox, received, logged, row, nextRow, decided, wakes, woken, queue, batch, crashes>>
 
-\* The process dies between any two steps. Gateway.start: undecided events go to the waker, then the inbox events that
-\* were not applied are queued again, in the order they came.
+\* The process dies between any two steps. Gateway.start: the pending wakes are delivered again with their IDs, the
+\* undecided events go to the waker, then the inbox events that were not applied are queued again, in order.
 CrashAndRestart ==
     /\ crashes < MaxCrashes
     /\ crashes' = crashes + 1
     /\ receiving' = [e \in Events |-> "no"]
     /\ batch' = {e \in Events : row[e] > 0 /\ e \notin decided}
     /\ queue' = SelectSeq(received, LAMBDA e : inbox[e] = "new")
-    /\ deciding' = {}
-    /\ UNCHANGED <<acked, repeats, inbox, received, logged, row, nextRow, decided, wakes, woken>>
+    /\ deciding' = {[events |-> p.events, reason |-> "again", id |-> p.id, step |-> "deliver"] : p \in pending}
+    /\ UNCHANGED <<acked, repeats, inbox, received, logged, row, nextRow, decided, pending, wakes, woken>>
 
 Next ==
     \/ \E e \in Events : Deliver(e) \/ Store(e) \/ Ack(e)
     \/ Apply
     \/ Flush
-    \/ \E d \in deciding : DeliverWake(d) \/ RecordWake(d)
+    \/ \E d \in deciding : RecordWake(d) \/ DeliverWake(d) \/ ForgetWake(d)
     \/ CrashAndRestart
 
 \* The platform keeps delivering an event until it is acknowledged, and the gateway keeps working.
@@ -150,7 +161,7 @@ Fairness ==
     /\ \A e \in Events : WF_vars(Store(e)) /\ WF_vars(Ack(e))
     /\ WF_vars(Apply)
     /\ WF_vars(Flush)
-    /\ WF_vars(\E d \in deciding : DeliverWake(d) \/ RecordWake(d))
+    /\ WF_vars(\E d \in deciding : RecordWake(d) \/ DeliverWake(d) \/ ForgetWake(d))
 
 Spec == Init /\ [][Next]_vars /\ Fairness
 
@@ -171,13 +182,12 @@ LoggedOnce == \A e \in Events : logged[e] <= 1
 \* Only logged events are decided.
 DecidedAreLogged == \A e \in decided : row[e] > 0
 
-\* Not true today, so not in Inbox.cfg. TLC finds it in 9 steps: e1 wakes the agent as "mention", the process dies before
-\* log.setWake, and after the restart the agent works on that place again, so e1 is decided as "steer". The wake ID
-\* "<reason>:<place>:<last row>" differs, pi-durable sees a new submission, and the agent gets e1 a second time.
-\* A new event that joins the group after the restart does the same through the last row ID.
+\* No event reaches the agent in two wakes, also when the process dies after the agent got a wake and before the gateway
+\* knew. (Before gw_pending_wakes it could: the events were decided anew after the restart, with another reason or
+\* with a new event in the group, so the wake had another ID.)
 WokenOnce == \A e \in Events : woken[e] <= 1
 
-\* Nothing acknowledged is lost: every acknowledged event is decided in the end.
-NothingLost == \A e \in Events : (e \in acked) ~> (e \in decided)
+\* Nothing acknowledged is lost: every acknowledged event is decided, and reaches the agent, in the end.
+NothingLost == \A e \in Events : (e \in acked) ~> (e \in decided /\ woken[e] = 1)
 
 =============================================================================

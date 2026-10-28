@@ -222,6 +222,14 @@ export class Bot implements WakeTarget {
       print("crash test: dying after the platform send", { sendId });
       process.kill(process.pid, "SIGKILL");
     };
+    // The same for a wake: the process dies right after the bot took it, before the gateway records that. The next
+    // start must deliver the same wake again, which the agent counts once, instead of deciding its events anew.
+    gateway.waker.afterDeliver = (wakeId) => {
+      if (!existsSync(paths.crashAfterWake)) return;
+      unlinkSync(paths.crashAfterWake);
+      print("crash test: dying after the wake", { wakeId });
+      process.kill(process.pid, "SIGKILL");
+    };
     for (const row of await sql.all<{ submission: string; place: string }>(
       "SELECT submission, place FROM bot_wakes WHERE submission IS NOT NULL AND place IS NOT NULL ORDER BY at DESC LIMIT 1000",
     )) {

@@ -10,7 +10,7 @@ import { MessageLog } from "./log.ts";
 import { Outbox, type OutboxHooks, type SendResult } from "./outbox.ts";
 import { type Timer, Timers } from "./timers.ts";
 import { tracingLayer, WakeSpans } from "./tracing.ts";
-import { Waker } from "./waker.ts";
+import { Waker, type WakerHooks } from "./waker.ts";
 
 export type { SendResult } from "./outbox.ts";
 
@@ -55,6 +55,7 @@ export class Gateway {
   readonly #runtime: ManagedRuntime.ManagedRuntime<Services, LogError>;
   readonly #channels: Channels["Service"];
   readonly #outbox: Outbox["Service"];
+  readonly #waker: Waker["Service"];
   readonly #wakeSpans: WakeSpans["Service"];
   readonly #background: Background["Service"];
   readonly #print: GatewayOptions["print"];
@@ -65,12 +66,19 @@ export class Gateway {
 
   private constructor(
     runtime: ManagedRuntime.ManagedRuntime<Services, LogError>,
-    services: { channels: Channels["Service"]; outbox: Outbox["Service"]; wakeSpans: WakeSpans["Service"]; background: Background["Service"] },
+    services: {
+      channels: Channels["Service"];
+      outbox: Outbox["Service"];
+      waker: Waker["Service"];
+      wakeSpans: WakeSpans["Service"];
+      background: Background["Service"];
+    },
     print: GatewayOptions["print"],
   ) {
     this.#runtime = runtime;
     this.#channels = services.channels;
     this.#outbox = services.outbox;
+    this.#waker = services.waker;
     this.#wakeSpans = services.wakeSpans;
     this.#background = services.background;
     this.#print = print;
@@ -83,7 +91,7 @@ export class Gateway {
     try {
       const services = await runtime.runPromise(
         Effect.gen(function* () {
-          return { channels: yield* Channels, outbox: yield* Outbox, wakeSpans: yield* WakeSpans, background: yield* Background };
+          return { channels: yield* Channels, outbox: yield* Outbox, waker: yield* Waker, wakeSpans: yield* WakeSpans, background: yield* Background };
         }),
       );
       return new Gateway(runtime, services, options.print);
@@ -95,6 +103,10 @@ export class Gateway {
 
   get outbox(): OutboxHooks {
     return this.#outbox.hooks;
+  }
+
+  get waker(): WakerHooks {
+    return this.#waker.hooks;
   }
 
   get channels(): ChannelAdapter[] {
@@ -116,6 +128,7 @@ export class Gateway {
         const lastAlive = yield* log.getState("last_alive");
         self.#lastAlive = lastAlive ? Number(lastAlive) : undefined;
 
+        yield* waker.redeliver;
         for (const event of yield* log.undecided) yield* waker.add(event);
         yield* inbox.replay;
         const connected = yield* self.#channels.connect(adapters, (adapter) => self.#sink(adapter));

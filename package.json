@@ -1,6 +1,6 @@
 {
   "name": "pi-durable-bot",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Open-source AI coworkers that read every channel, decide what matters, and act on their own computer. Self-hosted, any model.",
   "license": "MIT",
   "type": "module",

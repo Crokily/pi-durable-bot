@@ -12,3 +12,7 @@ scratch/
 
 # private notes for this checkout
 CLAUDE.local.md
+
+# TLA+ tools (tla2tools.jar) and TLC output
+.tla/
+spec/states/

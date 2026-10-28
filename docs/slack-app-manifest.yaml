@@ -1,10 +1,10 @@
 # pi-durable-bot · Slack app manifest
-# 用法：api.slack.com/apps → Create New App → From an app manifest → 选工作区 → 粘贴本文件。
-# 基于 Vercel Chat SDK Slack adapter README 的推荐 manifest，改为 socket mode，并补上私信、文件权限。
-# 本文件不含任何令牌。令牌不要写进本仓库，也不要贴进聊天。
+# Use: api.slack.com/apps, Create New App, From an app manifest, pick the workspace, paste this file.
+# Based on the manifest recommended in the Vercel Chat SDK Slack adapter README, changed to socket mode, with DM and file scopes added.
+# This file holds no tokens. Never put tokens in this repository.
 display_information:
   name: coly
-  description: Crokily 团队里的同事
+  description: A coworker on your team
 features:
   app_home:
     home_tab_enabled: false

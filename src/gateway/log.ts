@@ -103,7 +103,7 @@ export const LOG_SCHEMA = `Times are Unix ms. Columns that hold an address (plac
 - gw_people(address, channel, name, real_name)
 - gw_outbox(send_id, to_address, text, state, message, created_at, sent_at): what you sent with send.
 - gw_inbox(channel, event_id, received_at, raw, state, error): the raw events as received.
-Text search: LIKE, for example text LIKE '%发票%'.`;
+Text search: LIKE, for example text LIKE '%invoice%'.`;
 
 /** A new logged event that needs a wake decision. */
 export interface UndecidedEvent {

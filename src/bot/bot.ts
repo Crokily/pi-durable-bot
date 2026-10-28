@@ -260,11 +260,18 @@ export class Bot implements WakeTarget {
    * until the agent has stopped, so an action is never refused while the agent still works.
    */
   async stop(): Promise<void> {
-    await this.#control.stop();
-    await this.#gateway.pauseWakes();
-    await this.#agent.close();
-    await this.#gateway.stop();
-    await this.#sql.close().catch(() => {});
+    try {
+      await this.#control.stop();
+      await this.#gateway.pauseWakes();
+      await this.#agent.close();
+    } finally {
+      // Also when a step above failed: a bot that is stopped must not keep its channels or its file open.
+      try {
+        await this.#gateway.stop();
+      } finally {
+        await this.#sql.close().catch(() => {});
+      }
+    }
     this.#print("bot stopped");
   }
 

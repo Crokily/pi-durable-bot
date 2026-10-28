@@ -14,6 +14,7 @@ import { SECRETS_DIR } from "../core/home.ts";
 import type { Judge } from "../core/judge.ts";
 import type { Sql } from "../core/sql.ts";
 import type { Delivered, PlaceWake, WakeTarget } from "../core/wake.ts";
+import type { Print } from "../gateway/config.ts";
 import { Gateway, type TimersHandle } from "../gateway/gateway.ts";
 import type { Timer } from "../gateway/timers.ts";
 import { ControlServer } from "./control.ts";
@@ -56,8 +57,6 @@ export interface BotEnvironment {
 const MACHINE = describeMachine();
 /** docs/ of this package, next to src/ or dist/. */
 const DOCS_DIR = fileURLToPath(new URL("../../docs", import.meta.url));
-
-type Print = (message: string, data?: Record<string, unknown>) => void;
 
 /**
  * One bot: a person with a name, persona, responsibilities, memory, timed wakes, a workspace and one long

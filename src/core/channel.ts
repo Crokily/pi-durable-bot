@@ -1,5 +1,6 @@
 // The interface between the gateway core and the channel adapters.
 // Only the five common words: channel, place, thread, message, person. No platform concepts.
+import { Schema } from "effect";
 
 /**
  * An opaque string that points to a place, a thread, a message or a person. It includes the channel account.
@@ -8,56 +9,62 @@
 export type Address = string;
 
 /** A channel, a DM or a group chat. "dm" is a one-to-one direct message; a DM with more people is a "group". */
-export type PlaceKind = "channel" | "dm" | "group";
+export const PlaceKind = Schema.Literals(["channel", "dm", "group"]);
+export type PlaceKind = typeof PlaceKind.Type;
 
-export interface PlaceInfo {
-  readonly address: Address;
-  readonly name?: string;
-  readonly kind: PlaceKind;
-}
+export const PlaceInfo = Schema.Struct({
+  address: Schema.String,
+  name: Schema.optional(Schema.String),
+  kind: PlaceKind,
+});
+export type PlaceInfo = typeof PlaceInfo.Type;
 
-export interface PersonInfo {
-  readonly address: Address;
-  readonly name?: string;
-  readonly realName?: string;
-}
+export const PersonInfo = Schema.Struct({
+  address: Schema.String,
+  name: Schema.optional(Schema.String),
+  realName: Schema.optional(Schema.String),
+});
+export type PersonInfo = typeof PersonInfo.Type;
 
-export interface FileInfo {
-  readonly name?: string;
-  readonly type?: string;
-  readonly url?: string;
-}
+export const FileInfo = Schema.Struct({
+  name: Schema.optional(Schema.String),
+  type: Schema.optional(Schema.String),
+  url: Schema.optional(Schema.String),
+});
+export type FileInfo = typeof FileInfo.Type;
 
 /**
- * One thing that happened in a channel, in common words. The adapter makes these from the raw events it stored.
+ * One thing that happened in a channel, in common words. The adapter makes these from the raw events it stored, and
+ * the gateway checks them against this schema before it logs them.
  * kind: "message", "edit", "delete", "reaction_added", "reaction_removed", "join", "leave", "update", or another plain word.
  */
-export interface Happening {
-  readonly kind: string;
+export const Happening = Schema.Struct({
+  kind: Schema.NonEmptyString,
   /** Unix ms. */
-  readonly at: number;
-  readonly place?: PlaceInfo;
+  at: Schema.Finite,
+  place: Schema.optional(PlaceInfo),
   /** The thread the message is in. */
-  readonly thread?: Address;
+  thread: Schema.optional(Schema.String),
   /** The message that starts the thread, when the adapter knows it. */
-  readonly threadRoot?: Address;
+  threadRoot: Schema.optional(Schema.String),
   /** The message this is, or is about. */
-  readonly message?: Address;
+  message: Schema.optional(Schema.String),
   /** Who did it. */
-  readonly person?: PersonInfo;
+  person: Schema.optional(PersonInfo),
   /** Done by this channel account itself. */
-  readonly fromMe: boolean;
-  readonly mentionsMe?: boolean;
+  fromMe: Schema.Boolean,
+  mentionsMe: Schema.optional(Schema.Boolean),
   /** Message text for "message" and "edit"; the emoji for reactions. */
-  readonly text?: string;
+  text: Schema.optional(Schema.String),
   /** People mentioned in the text. */
-  readonly mentions?: readonly Address[];
-  readonly files?: readonly FileInfo[];
+  mentions: Schema.optional(Schema.Array(Schema.String)),
+  files: Schema.optional(Schema.Array(FileInfo)),
   /** Set on messages this bot sent through the outbox. */
-  readonly sendId?: string;
+  sendId: Schema.optional(Schema.String),
   /** The platform data this happening comes from. Kept in the log next to the common fields. */
-  readonly raw?: unknown;
-}
+  raw: Schema.optional(Schema.Unknown),
+});
+export type Happening = typeof Happening.Type;
 
 /** What the gateway gives an adapter. */
 export interface ChannelSink {

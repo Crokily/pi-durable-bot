@@ -13,8 +13,7 @@ import { SECRETS_DIR } from "../core/home.ts";
 import type { Judge } from "../core/judge.ts";
 import type { Sql } from "../core/sql.ts";
 import type { PlaceWake, WakeTarget } from "../core/wake.ts";
-import { Gateway } from "../gateway/gateway.ts";
-import { MessageLog } from "../gateway/log.ts";
+import { Gateway, type TimersHandle } from "../gateway/gateway.ts";
 import { ControlServer } from "./control.ts";
 import { type BotDefinition, type BotPaths, botPaths } from "./definition.ts";
 import { describeMachine } from "./machine.ts";
@@ -30,7 +29,7 @@ import {
   renderTimerWake,
   workSection,
 } from "./prompt.ts";
-import { type Timer, Timers } from "./timers.ts";
+import type { Timer } from "./timers.ts";
 
 const WAKES_SCHEMA = `
 CREATE TABLE IF NOT EXISTS bot_wakes (
@@ -71,7 +70,7 @@ export class Bot implements WakeTarget {
   readonly #print: Print;
   readonly #sql: Sql & { close(): Promise<void> };
   readonly #gateway: Gateway;
-  readonly #timers: Timers;
+  readonly #timers: TimersHandle;
   readonly #agent: Agent;
   /** Undefined when bot.json says "judge": "off". */
   #judge: Judge | undefined;
@@ -91,7 +90,7 @@ export class Bot implements WakeTarget {
     print: Print;
     sql: Sql & { close(): Promise<void> };
     gateway: Gateway;
-    timers: Timers;
+    timers: TimersHandle;
     agent: Agent;
     judge: Judge | undefined;
   }) {
@@ -151,7 +150,6 @@ export class Bot implements WakeTarget {
     print: Print,
     opened: (agent: Agent) => void,
   ): Promise<Bot> {
-    const log = await MessageLog.open(sql);
     await sql.exec(WAKES_SCHEMA);
 
     let bot: Bot | undefined;
@@ -162,8 +160,14 @@ export class Bot implements WakeTarget {
     const current = () => (bot ? bot.#definition : definition);
     const settings = () => current().settings;
     const judge = createJudge(definition.judge, env.models, () => current().model);
-    const gateway = new Gateway(log, () => (bot ? bot.#judge : judge), settings, print);
-    const timers = await Timers.open(sql, () => settings().fallbackWakeMinutes, (timer) => self().#deliverTimer(timer), print);
+    const gateway = await Gateway.open(sql, {
+      judge: () => (bot ? bot.#judge : judge),
+      settings,
+      fallbackWakeMinutes: () => settings().fallbackWakeMinutes,
+      fireTimer: (timer) => self().#deliverTimer(timer),
+      print,
+    });
+    const timers = gateway.timers;
     const facts = (): PromptFacts => ({
       id,
       name: current().name,
@@ -202,6 +206,9 @@ export class Bot implements WakeTarget {
         call: (channel, method, params) => self().call(channel, method, params),
       },
       log: print,
+    }).catch(async (error: unknown) => {
+      await gateway.stop().catch(() => {});
+      throw error;
     });
     opened(agent);
 
@@ -292,21 +299,22 @@ export class Bot implements WakeTarget {
     return inputs.some((submission) => this.#submissionPlaces.get(submission) === place);
   }
 
-  async deliver(wake: PlaceWake): Promise<void> {
+  async deliver(wake: PlaceWake): Promise<string> {
     const text = renderPlaceWake(wake, await this.#agent.contextStatus());
-    await this.#submit(wake.id, wake.reason, wake.place.address, text, wake.reason === "steer");
+    return this.#submit(wake.id, wake.reason, wake.place.address, text, wake.reason === "steer");
   }
 
   responsibilities(): Promise<string> {
     return readFile(this.paths.responsibilities, "utf8").catch(() => "");
   }
 
-  async #deliverTimer(timer: Timer): Promise<void> {
+  async #deliverTimer(timer: Timer): Promise<string> {
     const text = renderTimerWake(timer, await this.#agent.contextStatus(), this.#definition.settings.fallbackWakeMinutes);
-    await this.#submit(`timer:${timer.id}`, timer.set_by === "fallback" ? "fallback" : "timer", undefined, text, false);
+    return this.#submit(`timer:${timer.id}`, timer.set_by === "fallback" ? "fallback" : "timer", undefined, text, false);
   }
 
-  async #submit(id: string, reason: string, place: Address | undefined, text: string, steer: boolean): Promise<void> {
+  /** Returns the submission ID. */
+  async #submit(id: string, reason: string, place: Address | undefined, text: string, steer: boolean): Promise<string> {
     const submission = await this.#agent.submit({ id, text, steer, data: { reason, ...(place ? { place } : {}) } });
     if (place) this.#submissionPlaces.set(submission, place);
     await this.#sql.run(
@@ -318,12 +326,14 @@ export class Bot implements WakeTarget {
       text,
       submission,
     );
+    return submission;
   }
 
   // ---- Actions, for the agent's tools and the command line ----
 
   async send(to: Address, text: string, sendId: string) {
-    const sent = await this.#gateway.send(sendId, to, text);
+    // The wakes the agent works on now: the send joins their trace.
+    const sent = await this.#gateway.send(sendId, to, text, this.#agent.runInputs ?? []);
     this.#touch(sent.place);
     return sent;
   }

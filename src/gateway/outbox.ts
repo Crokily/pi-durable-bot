@@ -1,5 +1,10 @@
+import { Context, Effect, Layer, type Tracer } from "effect";
 import type { Address, ChannelAdapter } from "../core/channel.ts";
-import type { MessageLog } from "./log.ts";
+import { Channels } from "./channels.ts";
+import { GatewayConfig } from "./config.ts";
+import { BadSend, ChannelError, type LogError, type NoChannelForAddress } from "./errors.ts";
+import { Inbox } from "./inbox.ts";
+import { MessageLog } from "./log.ts";
 
 export interface SendResult {
   readonly message: Address;
@@ -11,6 +16,13 @@ export interface SendResult {
   readonly repeated?: boolean;
 }
 
+export interface OutboxHooks {
+  /** Test hook: runs after the platform accepted a send and before the outbox records it. */
+  afterPlatformSend?: (sendId: string) => void;
+}
+
+export type SendError = BadSend | LogError | ChannelError | NoChannelForAddress;
+
 /**
  * Sends once per send ID, across crashes:
  * - the outbox says sent → return that message;
@@ -19,59 +31,79 @@ export interface SendResult {
  * - otherwise record "sending", send, record "sent".
  * A sent message goes into the inbox as an event, so the log gets it the same way as every other message.
  */
-export class Outbox {
-  readonly #log: MessageLog;
-  readonly #adapterFor: (address: Address) => ChannelAdapter;
-  readonly #receive: (channel: string, eventId: string, raw: unknown) => Promise<void>;
-  readonly #print: (message: string, data?: Record<string, unknown>) => void;
-  /** Test hook: runs after the platform accepted a send and before the outbox records it. */
-  afterPlatformSend?: (sendId: string) => void;
-
-  constructor(
-    log: MessageLog,
-    adapterFor: (address: Address) => ChannelAdapter,
-    receive: (channel: string, eventId: string, raw: unknown) => Promise<void>,
-    print: (message: string, data?: Record<string, unknown>) => void,
-  ) {
-    this.#log = log;
-    this.#adapterFor = adapterFor;
-    this.#receive = receive;
-    this.#print = print;
+export class Outbox extends Context.Service<
+  Outbox,
+  {
+    /** wakes: the spans of the wakes this send answers; the first one is the parent of the send's span. */
+    send(sendId: string, to: Address, text: string, wakes?: readonly Tracer.AnySpan[]): Effect.Effect<SendResult, SendError>;
+    readonly hooks: OutboxHooks;
   }
+>()("pots/gateway/Outbox") {
+  static readonly layer = Layer.effect(
+    Outbox,
+    Effect.gen(function* () {
+      const log = yield* MessageLog;
+      const channels = yield* Channels;
+      const inbox = yield* Inbox;
+      const { print } = yield* GatewayConfig;
+      const hooks: OutboxHooks = {};
 
-  async send(sendId: string, to: Address, text: string): Promise<SendResult> {
-    if (!text.trim()) throw new Error("text is empty");
-    if (!sendId.trim()) throw new Error("send ID is empty");
-    const record = await this.#log.outbox(sendId);
-    if (record?.state === "sent") return { message: record.message!, ...placeOf(this.#adapterFor, record.message!), repeated: true };
-    const adapter = this.#adapterFor(record?.to_address ?? to);
-    if (record) {
-      const found = await adapter.findSent(record.to_address, sendId, record.created_at);
-      if (found) {
-        await this.#receive(adapter.id, `sent:${sendId}`, found.raw);
-        await this.#log.outboxDone(sendId, found.message);
-        this.#print("send recovered", { sendId });
-        return { message: found.message, place: found.place, recovered: true };
-      }
-    } else {
-      await this.begin(sendId, to, text);
-    }
-    const sent = await adapter.send(record?.to_address ?? to, text, sendId);
-    this.afterPlatformSend?.(sendId);
-    await this.#receive(adapter.id, `sent:${sendId}`, sent.raw);
-    await this.#log.outboxDone(sendId, sent.message);
-    return { message: sent.message, place: sent.place };
-  }
+      const platform = <A>(adapter: ChannelAdapter, run: () => Promise<A>) =>
+        Effect.tryPromise({ try: run, catch: (cause) => ChannelError.from(adapter.id, cause) });
 
-  /** Record the intent to send. Split out so a test can crash between this and the platform's answer. */
-  begin(sendId: string, to: Address, text: string): Promise<void> {
-    return this.#log.outboxStart(sendId, to, text);
-  }
+      const send = (sendId: string, to: Address, text: string) =>
+        Effect.gen(function* () {
+          if (!text.trim()) return yield* Effect.fail(new BadSend({ message: "text is empty" }));
+          if (!sendId.trim()) return yield* Effect.fail(new BadSend({ message: "send ID is empty" }));
+          const record = yield* log.outbox(sendId);
+          if (record?.state === "sent") {
+            yield* Effect.annotateCurrentSpan({ result: "repeated", message: record.message! });
+            return { message: record.message!, ...placeOf(channels.list(), record.message!), repeated: true };
+          }
+          const adapter = yield* channels.adapterFor(record?.to_address ?? to);
+          if (record) {
+            const found = yield* platform(adapter, () => adapter.findSent(record.to_address, sendId, record.created_at)).pipe(
+              Effect.withSpan("channel.findSent", { attributes: { channel: adapter.id } }),
+            );
+            if (found) {
+              yield* inbox.receive(adapter.id, `sent:${sendId}`, found.raw);
+              yield* log.outboxDone(sendId, found.message);
+              print("send recovered", { sendId });
+              yield* Effect.annotateCurrentSpan({ result: "recovered", message: found.message });
+              return { message: found.message, place: found.place, recovered: true };
+            }
+          } else {
+            yield* log.outboxStart(sendId, to, text);
+          }
+          const sent = yield* platform(adapter, () => adapter.send(record?.to_address ?? to, text, sendId)).pipe(
+            Effect.withSpan("channel.send", { attributes: { channel: adapter.id } }),
+          );
+          hooks.afterPlatformSend?.(sendId);
+          yield* inbox.receive(adapter.id, `sent:${sendId}`, sent.raw);
+          yield* log.outboxDone(sendId, sent.message);
+          yield* Effect.annotateCurrentSpan({ result: "sent", message: sent.message });
+          return { message: sent.message, place: sent.place };
+        });
+
+      return Outbox.of({
+        hooks,
+        send: (sendId, to, text, wakes = []) =>
+          send(sendId, to, text).pipe(
+            Effect.withSpan("send", {
+              attributes: { send: sendId, to },
+              ...(wakes[0] ? { parent: wakes[0] } : {}),
+              links: wakes.slice(1).map((span) => ({ span, attributes: {} })),
+            }),
+          ),
+      });
+    }),
+  );
 }
 
-function placeOf(adapterFor: (address: Address) => ChannelAdapter, message: Address): { place?: Address } {
+function placeOf(adapters: readonly ChannelAdapter[], message: Address): { place?: Address } {
+  const adapter = adapters.find((candidate) => candidate.owns(message));
   try {
-    const place = adapterFor(message).placeOf(message);
+    const place = adapter?.placeOf(message);
     return place ? { place } : {};
   } catch {
     return {};

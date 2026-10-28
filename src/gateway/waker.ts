@@ -1,7 +1,11 @@
+import { Clock, Context, Effect, FiberMap, FiberSet, Layer, Option, Result, type Tracer } from "effect";
 import type { PlaceInfo } from "../core/channel.ts";
 import type { Judge, JudgeAnswer, JudgeItem } from "../core/judge.ts";
 import type { PlaceWake, PlaceWakeReason, WakeEvent, WakeTarget } from "../core/wake.ts";
-import type { LoggedMessage, MessageLog, UndecidedEvent } from "./log.ts";
+import { GatewayConfig } from "./config.ts";
+import { DeliverError, JudgeError, type LogError, message, NoWakeTarget } from "./errors.ts";
+import { type LoggedMessage, MessageLog, type UndecidedEvent } from "./log.ts";
+import { WakeSpans } from "./tracing.ts";
 
 export interface WakerSettings {
   /** Wait this long after the last event in a place before deciding. */
@@ -14,13 +18,20 @@ export interface WakerSettings {
   readonly judgeContextMessages: number;
 }
 
-interface Batch {
-  readonly events: UndecidedEvent[];
-  readonly first: number;
-  timer: NodeJS.Timeout;
+/** When the judge fails, it is asked again after these waits. */
+export const JUDGE_RETRY_MS = [2_000, 8_000] as const;
+
+/** How long a group of events waits: until debounceMs after the last event, but never past debounceMaxMs after the first. */
+export function debounceWait(settings: Pick<WakerSettings, "debounceMs" | "debounceMaxMs">, first: number, now: number): number {
+  return Math.max(0, Math.min(settings.debounceMs, first + settings.debounceMaxMs - now));
 }
 
-type Log = (message: string, data?: Record<string, unknown>) => void;
+interface Batch {
+  readonly events: UndecidedEvent[];
+  /** The span that logged each event, for the wake's links. */
+  readonly spans: Tracer.AnySpan[];
+  readonly first: number;
+}
 
 /**
  * Decides when new events wake the bot. Per place, it waits until people stop (debounce), then:
@@ -28,143 +39,172 @@ type Log = (message: string, data?: Record<string, unknown>) => void;
  * 2. an event @-mentions the bot, or the place is a one-to-one DM → wake;
  * 3. otherwise the judge decides; with no judge, every event wakes the bot.
  */
-export class Waker {
-  readonly #batches = new Map<string, Batch>();
-  readonly #deciding = new Set<Promise<void>>();
-  readonly #log: MessageLog;
-  readonly #judge: () => Judge | undefined;
-  readonly #settings: () => WakerSettings;
-  readonly #print: Log;
-  target?: WakeTarget;
-
-  constructor(log: MessageLog, judge: () => Judge | undefined, settings: () => WakerSettings, print: Log) {
-    this.#log = log;
-    this.#judge = judge;
-    this.#settings = settings;
-    this.#print = print;
+export class Waker extends Context.Service<
+  Waker,
+  {
+    setTarget(target: WakeTarget): void;
+    add(event: UndecidedEvent): Effect.Effect<void>;
+    /** Stop the timers and wait for decisions in progress. Undecided events stay undecided in the log and come back on the next start. */
+    readonly stop: Effect.Effect<void>;
   }
+>()("pots/gateway/Waker") {
+  static readonly layer = Layer.effect(
+    Waker,
+    Effect.gen(function* () {
+      const log = yield* MessageLog;
+      const config = yield* GatewayConfig;
+      const wakeSpans = yield* WakeSpans;
+      const batches = new Map<string, Batch>();
+      const timers = yield* FiberMap.make<string>();
+      const deciding = yield* FiberSet.make();
+      let target: WakeTarget | undefined;
+      let stopped = false;
 
-  add(event: UndecidedEvent): void {
-    const key = event.place ?? `${event.channel}:`;
-    const now = Date.now();
-    const settings = this.#settings();
-    const batch = this.#batches.get(key);
-    if (batch?.events.some((queued) => queued.id === event.id)) return;
-    if (batch) {
-      clearTimeout(batch.timer);
-      batch.events.push(event);
-    }
-    const current: Batch = batch ?? { events: [event], first: now, timer: undefined as unknown as NodeJS.Timeout };
-    const wait = Math.max(0, Math.min(settings.debounceMs, current.first + settings.debounceMaxMs - now));
-    current.timer = setTimeout(() => this.#flush(key), wait);
-    this.#batches.set(key, current);
-  }
+      const decide = (events: UndecidedEvent[], links: readonly Tracer.AnySpan[]) =>
+        Effect.gen(function* () {
+          if (!target) return yield* Effect.fail(new NoWakeTarget({ message: "no wake target" }));
+          const bot = target;
+          const first = events[0]!;
+          const place: PlaceInfo = first.place
+            ? { address: first.place, kind: first.place_kind ?? "channel", ...(first.place_name ? { name: first.place_name } : {}) }
+            : { address: `${first.channel}:`, kind: "channel", name: first.channel };
+          const ids = events.map((event) => event.id);
+          const wakeEvents = events.map(toWakeEvent);
+          const id = (reason: string) => `${reason}:${place.address}:${ids.at(-1)}`;
+          yield* Effect.annotateCurrentSpan({ place: place.address, events: ids.join(",") });
 
-  /** Stop the timers. Undecided events stay undecided in the log and come back on the next start. */
-  async stop(): Promise<void> {
-    for (const batch of this.#batches.values()) clearTimeout(batch.timer);
-    this.#batches.clear();
-    await Promise.allSettled(this.#deciding);
-  }
+          const deliver = (reason: PlaceWakeReason, decision: string, judged?: PlaceWake["judged"]) =>
+            Effect.gen(function* () {
+              const wake: PlaceWake = { id: id(reason), reason, place, events: wakeEvents, ...(judged ? { judged } : {}) };
+              const submission = yield* Effect.tryPromise({
+                try: () => bot.deliver(wake),
+                catch: (cause) => new DeliverError({ message: message(cause), cause }),
+              }).pipe(Effect.withSpan("wake.deliver", { attributes: { wake: wake.id } }));
+              yield* log.setWake(ids, decision);
+              const span = yield* Effect.currentSpan.pipe(Effect.option);
+              if (Option.isSome(span)) wakeSpans.remember(submission, span.value);
+              yield* Effect.annotateCurrentSpan({ reason, wake: wake.id, submission });
+              config.print("wake", { reason, place: place.address, events: ids.length });
+            });
 
-  #flush(key: string): void {
-    const batch = this.#batches.get(key);
-    if (!batch) return;
-    this.#batches.delete(key);
-    const task = this.#decide(batch.events)
-      .catch((error) => this.#print("wake decision failed", { place: key, error: String(error) }))
-      .finally(() => this.#deciding.delete(task));
-    this.#deciding.add(task);
-  }
+          if (bot.isWorkingOn(place.address)) return yield* deliver("steer", "steer");
+          if (place.kind === "dm") return yield* deliver("dm", "dm");
+          if (events.some((event) => event.mentions_me)) return yield* deliver("mention", "mention");
 
-  async #decide(events: UndecidedEvent[]): Promise<void> {
-    const target = this.target;
-    if (!target) throw new Error("no wake target");
-    const first = events[0]!;
-    const place: PlaceInfo = first.place
-      ? { address: first.place, kind: first.place_kind ?? "channel", ...(first.place_name ? { name: first.place_name } : {}) }
-      : { address: `${first.channel}:`, kind: "channel", name: first.channel };
-    const ids = events.map((event) => event.id);
-    const wakeEvents = events.map(toWakeEvent);
-    const id = (reason: string) => `${reason}:${place.address}:${ids.at(-1)}`;
+          const judge = config.judge();
+          if (!judge) return yield* deliver("heard", "heard");
+          const settings = config.settings();
+          const answer = yield* Effect.result(askJudge(judge, bot, place, events, settings));
+          if (Result.isFailure(answer)) {
+            // The judge could not decide. Nothing is dropped: the bot gets the events and decides itself.
+            config.print("judge failed", { place: place.address, error: answer.failure.message });
+            return yield* deliver("relevant", "relevant", { error: answer.failure.message });
+          }
+          const { related, respond } = answer.success;
+          config.print("judge", { place: place.address, events: ids.length, related, respond });
+          if (related >= settings.judgeThreshold && respond >= settings.judgeThreshold) return yield* deliver("relevant", "relevant", answer.success);
+          // The bot may have started working on this place while the judge thought.
+          if (bot.isWorkingOn(place.address)) return yield* deliver("steer", "steer");
+          yield* log.setWake(ids, "judge_no");
+          yield* Effect.annotateCurrentSpan({ reason: "judge_no" });
+        }).pipe(Effect.withSpan("wake", { root: true, links: links.map((span) => ({ span, attributes: {} })) }));
 
-    const deliver = async (reason: PlaceWakeReason, decision: string, judged?: PlaceWake["judged"]) => {
-      await target.deliver({ id: id(reason), reason, place, events: wakeEvents, ...(judged ? { judged } : {}) });
-      await this.#log.setWake(ids, decision);
-      this.#print("wake", { reason, place: place.address, events: ids.length });
-    };
+      const askJudge = (judge: Judge, bot: WakeTarget, place: PlaceInfo, events: UndecidedEvent[], settings: WakerSettings) =>
+        Effect.gen(function* () {
+          const earlier = yield* log.messagesBefore(place.address, events[0]!.at, settings.judgeContextMessages);
+          const latest: JudgeItem[] = [];
+          for (const event of events) latest.push(yield* describe(event, bot.name));
+          const responsibilities = yield* Effect.promise(() => bot.responsibilities());
+          const input = {
+            name: bot.name,
+            responsibilities,
+            place: `${place.name ?? place.address} (${place.kind})`,
+            earlier: earlier.map((logged) => messageItem(logged, bot.name)),
+            latest,
+          };
+          let lastError: unknown;
+          for (const wait of [0, ...JUDGE_RETRY_MS]) {
+            if (wait) yield* Effect.sleep(wait);
+            const result = yield* Effect.result(Effect.tryPromise({ try: () => judge.judge(input), catch: (cause) => cause }));
+            if (Result.isSuccess(result)) {
+              yield* Effect.annotateCurrentSpan({ related: result.success.related, respond: result.success.respond });
+              return result.success;
+            }
+            lastError = result.failure;
+          }
+          return yield* Effect.fail(new JudgeError({ message: message(lastError), cause: lastError }));
+        }).pipe(Effect.withSpan("wake.judge"));
 
-    if (target.isWorkingOn(place.address)) return deliver("steer", "steer");
-    if (place.kind === "dm") return deliver("dm", "dm");
-    if (events.some((event) => event.mentions_me)) return deliver("mention", "mention");
+      /** An event as the judge sees it: what happened, with the current state of the message it is about. */
+      const describe = (event: UndecidedEvent, name: string): Effect.Effect<JudgeItem, LogError> =>
+        Effect.gen(function* () {
+          const author = event.person_name ?? event.person ?? "unknown";
+          const time = new Date(event.at).toISOString();
+          const logged = event.message ? yield* log.message(event.message) : undefined;
+          const state = logged?.deleted_at ? " (since deleted)" : "";
+          const thread = event.thread ? { thread: event.thread } : {};
+          switch (event.kind) {
+            case "message":
+              return { what: `new message${state}`, author, time, text: logged?.text ?? event.text ?? "", ...thread };
+            case "edit":
+              return { what: `edited a message${state}`, author, time, text: logged?.text ?? event.text ?? "", ...thread };
+            default: {
+              const about = logged ? ` on ${logged.from_me ? `${name}'s` : `${logged.person_name ?? "someone"}'s`} message${state}` : "";
+              return {
+                what: `${event.kind}${event.text && event.kind !== "update" ? ` ${event.text}` : ""}${about}`,
+                author,
+                time,
+                ...(logged ? { text: logged.text } : {}),
+                ...thread,
+              };
+            }
+          }
+        });
 
-    const judge = this.#judge();
-    if (!judge) return deliver("heard", "heard");
-    const settings = this.#settings();
-    let answer: JudgeAnswer;
-    try {
-      answer = await this.#askJudge(judge, target, place, events, settings);
-    } catch (error) {
-      // The judge could not decide. Nothing is dropped: the bot gets the events and decides itself.
-      this.#print("judge failed", { place: place.address, error: String(error) });
-      return deliver("relevant", "relevant", { error: String(error) });
-    }
-    this.#print("judge", { place: place.address, events: ids.length, related: answer.related, respond: answer.respond });
-    if (answer.related >= settings.judgeThreshold && answer.respond >= settings.judgeThreshold) {
-      return deliver("relevant", "relevant", answer);
-    }
-    // The bot may have started working on this place while the judge thought.
-    if (target.isWorkingOn(place.address)) return deliver("steer", "steer");
-    await this.#log.setWake(ids, "judge_no");
-  }
+      // Take the whole group at once, so an event that comes now starts the next group.
+      const flush = (key: string) =>
+        Effect.uninterruptible(
+          Effect.suspend(() => {
+            const batch = batches.get(key);
+            if (!batch) return Effect.void;
+            batches.delete(key);
+            return FiberSet.run(
+              deciding,
+              decide(batch.events, batch.spans).pipe(
+                Effect.catch((error) => Effect.sync(() => config.print("wake decision failed", { place: key, error: error.message }))),
+              ),
+            );
+          }),
+        );
 
-  async #askJudge(judge: Judge, target: WakeTarget, place: PlaceInfo, events: UndecidedEvent[], settings: WakerSettings): Promise<JudgeAnswer> {
-    const earlier = await this.#log.messagesBefore(place.address, events[0]!.at, settings.judgeContextMessages);
-    const latest: JudgeItem[] = [];
-    for (const event of events) latest.push(await this.#describe(event, target.name));
-    const input = {
-      name: target.name,
-      responsibilities: await target.responsibilities(),
-      place: `${place.name ?? place.address} (${place.kind})`,
-      earlier: earlier.map((message) => messageItem(message, target.name)),
-      latest,
-    };
-    let lastError: unknown;
-    for (const delay of [0, 2_000, 8_000]) {
-      if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
-      try {
-        return await judge.judge(input);
-      } catch (error) {
-        lastError = error;
-      }
-    }
-    throw lastError;
-  }
-
-  /** An event as the judge sees it: what happened, with the current state of the message it is about. */
-  async #describe(event: UndecidedEvent, name: string): Promise<JudgeItem> {
-    const author = event.person_name ?? event.person ?? "unknown";
-    const time = new Date(event.at).toISOString();
-    const message = event.message ? await this.#log.message(event.message) : undefined;
-    const state = message?.deleted_at ? " (since deleted)" : "";
-    const thread = event.thread ? { thread: event.thread } : {};
-    switch (event.kind) {
-      case "message":
-        return { what: `new message${state}`, author, time, text: message?.text ?? event.text ?? "", ...thread };
-      case "edit":
-        return { what: `edited a message${state}`, author, time, text: message?.text ?? event.text ?? "", ...thread };
-      default: {
-        const about = message ? ` on ${message.from_me ? `${name}'s` : `${message.person_name ?? "someone"}'s`} message${state}` : "";
-        return {
-          what: `${event.kind}${event.text && event.kind !== "update" ? ` ${event.text}` : ""}${about}`,
-          author,
-          time,
-          ...(message ? { text: message.text } : {}),
-          ...thread,
-        };
-      }
-    }
-  }
+      return Waker.of({
+        setTarget: (next) => {
+          target = next;
+          stopped = false;
+        },
+        add: (event) =>
+          Effect.gen(function* () {
+            if (stopped) return;
+            const key = event.place ?? `${event.channel}:`;
+            const now = yield* Clock.currentTimeMillis;
+            const span = yield* Effect.currentSpan.pipe(Effect.option);
+            let batch = batches.get(key);
+            if (batch?.events.some((queued) => queued.id === event.id)) return;
+            if (batch) batch.events.push(event);
+            else batches.set(key, (batch = { events: [event], spans: [], first: now }));
+            if (Option.isSome(span)) batch.spans.push(span.value);
+            const wait = debounceWait(config.settings(), batch.first, now);
+            yield* FiberMap.run(timers, key, Effect.andThen(Effect.sleep(wait), flush(key)));
+          }),
+        stop: Effect.gen(function* () {
+          stopped = true;
+          yield* FiberMap.clear(timers);
+          batches.clear();
+          yield* FiberSet.awaitEmpty(deciding);
+        }),
+      });
+    }),
+  );
 }
 
 function toWakeEvent(event: UndecidedEvent): WakeEvent {

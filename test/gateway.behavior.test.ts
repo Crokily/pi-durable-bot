@@ -18,6 +18,8 @@ async function setUp(options: { judge?: string; settings?: Record<string, unknow
 afterEach(async () => {
   await gateway?.dispose();
   await model?.close();
+  // Nothing went wrong on the way: no failed step and no unhandled error in the gateway's output.
+  expect(gateway.output.filter((line) => /failed|unhandled/i.test(String(line.message)))).toEqual([]);
 });
 
 const event = (id: string) => gateway.query<{ kind: string; wake: string | null; place: string; mentions_me: number }>(

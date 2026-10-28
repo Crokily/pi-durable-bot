@@ -36,6 +36,7 @@
     "start": "node src/cli/pots.ts start",
     "pots": "node src/cli/pots.ts",
     "check": "tsc --noEmit",
+    "test": "vitest run",
     "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
     "prepare": "npm run build"
   },
@@ -51,7 +52,10 @@
     "effect": "4.0.7"
   },
   "devDependencies": {
+    "@effect/vitest": "4.0.7",
     "@types/node": "26.6.5",
-    "typescript": "7.0.2"
+    "fast-check": "4.10.2",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5"
   }
 }

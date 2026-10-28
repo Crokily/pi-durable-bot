@@ -161,6 +161,7 @@ export class Bot implements WakeTarget {
     const settings = () => current().settings;
     const judge = createJudge(definition.judge, env.models, () => current().model);
     const gateway = await Gateway.open(sql, {
+      bot: id,
       judge: () => (bot ? bot.#judge : judge),
       settings,
       fallbackWakeMinutes: () => settings().fallbackWakeMinutes,

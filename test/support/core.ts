@@ -1,7 +1,7 @@
 import { Clock, Effect } from "effect";
 import { TestClock } from "effect/testing";
 import { openDatabase } from "../../src/agent/agent.ts";
-import type { Address, ChannelAdapter, Happening, SentMessage } from "../../src/core/channel.ts";
+import type { Address, ChannelAdapter, ChannelSink, Happening, SentMessage } from "../../src/core/channel.ts";
 import type { Judge } from "../../src/core/judge.ts";
 import type { Sql } from "../../src/core/sql.ts";
 import type { PlaceWake, WakeTarget } from "../../src/core/wake.ts";
@@ -62,6 +62,7 @@ export const withCore = <A, E, R>(options: CoreOptions, body: (recorder: Recorde
     );
     const recorder = new Recorder(yield* Clock.Clock);
     const gatewayOptions: GatewayOptions = {
+      bot: "coworker",
       judge: () => options.judge,
       settings: () => ({ ...SETTINGS, ...options.settings }),
       fallbackWakeMinutes: () => options.fallbackWakeMinutes ?? 120,
@@ -130,9 +131,13 @@ export class MemoryChannel implements ChannelAdapter {
   readonly platform: { id: string; place: string; text: string; sendId?: string }[] = [];
   /** Throw from send before the platform takes the message. */
   failBeforeSend = false;
+  /** What the gateway gave the adapter at start, for tests that act as the platform. */
+  sink: ChannelSink | undefined;
   #ids = 0;
 
-  async start(): Promise<void> {}
+  async start(sink: ChannelSink): Promise<void> {
+    this.sink = sink;
+  }
   async backfill(): Promise<void> {}
   async stop(): Promise<void> {}
 

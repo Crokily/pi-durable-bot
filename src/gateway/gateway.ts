@@ -9,7 +9,7 @@ import { Inbox } from "./inbox.ts";
 import { MessageLog } from "./log.ts";
 import { Outbox, type OutboxHooks, type SendResult } from "./outbox.ts";
 import { type Timer, Timers } from "./timers.ts";
-import { WakeSpans } from "./tracing.ts";
+import { tracingLayer, WakeSpans } from "./tracing.ts";
 import { Waker } from "./waker.ts";
 
 export type { SendResult } from "./outbox.ts";
@@ -19,7 +19,8 @@ const HEARTBEAT_MS = 60_000;
 /** The gateway core of one bot as Effect services: log, channels, inbox, waker, outbox, timers. */
 export function gatewayLayer(sql: Sql, options: GatewayOptions) {
   const config = Layer.succeed(GatewayConfig, options);
-  const base = Layer.mergeAll(MessageLog.layer(sql), WakeSpans.layer, Channels.layer).pipe(Layer.provideMerge(config));
+  const tracing = tracingLayer(sql, options.bot).pipe(Layer.provide(config));
+  const base = Layer.mergeAll(MessageLog.layer(sql), WakeSpans.layer(sql), Channels.layer).pipe(Layer.provideMerge(config), Layer.provideMerge(tracing));
   const waker = Waker.layer.pipe(Layer.provideMerge(base));
   const inbox = Inbox.layer.pipe(Layer.provideMerge(waker));
   const core = Layer.mergeAll(Outbox.layer, Timers.layer(sql)).pipe(Layer.provideMerge(inbox));
@@ -176,7 +177,7 @@ export class Gateway {
 
   /** wakes: the agent's submission IDs this send answers, so the send joins their trace. */
   send(sendId: string, to: Address, text: string, wakes: readonly string[] = []): Promise<SendResult> {
-    return this.#run(this.#outbox.send(sendId, to, text, this.#wakeSpans.find(wakes)));
+    return this.#run(Effect.flatMap(this.#wakeSpans.find(wakes), (spans) => this.#outbox.send(sendId, to, text, spans)));
   }
 
   react(message: Address, emoji: string, remove: boolean): Promise<void> {

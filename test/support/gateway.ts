@@ -1,4 +1,4 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -141,6 +141,11 @@ export class TestGateway {
   async dispose(): Promise<void> {
     await this.kill();
     rmSync(this.home, { recursive: true, force: true });
+  }
+
+  /** Run a pots command against this home, and return what it printed. */
+  pots(...args: string[]): string {
+    return execFileSync(process.execPath, [POTS, ...args], { env: { ...process.env, POTS_HOME: this.home, NO_COLOR: "1" }, encoding: "utf8" });
   }
 
   /** Make the gateway die right after the platform accepts its next send, before it records the send. */

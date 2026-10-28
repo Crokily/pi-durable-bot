@@ -49,6 +49,14 @@ describe("receive, log, wake, send", { timeout: 60_000 }, () => {
     await pause(1_000);
     expect(wakes(model)).toHaveLength(1);
     expect(gateway.sent()).toHaveLength(1);
+
+    // pots trace shows the wake and its send; the trace of the send has the event that woke the bot.
+    await gateway.stop();
+    expect(gateway.pots("trace")).toMatch(/mention\s+test:#general\s+1 event\s+sent 1/);
+    const trace = gateway.pots("trace", reply!.send_id!);
+    expect(trace).toMatch(/^wake .*reason=mention/m);
+    expect(trace).toMatch(/└─ send .*result=sent/);
+    expect(trace).toContain(`event=${id}`);
   });
 
   it("wakes the bot for a one-to-one DM without a mention", async () => {

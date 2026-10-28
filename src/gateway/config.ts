@@ -7,6 +7,8 @@ export type Print = (message: string, data?: Record<string, unknown>) => void;
 
 /** What the bot gives its gateway. Getters, because bot.json can change while the bot runs. */
 export interface GatewayOptions {
+  /** The bot's ID, for the spans exported over OTLP. */
+  readonly bot: string;
   /** The judge of events that do not mention the bot; undefined: every such event wakes the bot. */
   readonly judge: () => Judge | undefined;
   readonly settings: () => WakerSettings;

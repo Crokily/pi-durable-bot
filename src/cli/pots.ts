@@ -11,6 +11,7 @@ import { chatCommand } from "./chat.ts";
 import { control, listBots, userError } from "./control.ts";
 import { initCommand } from "./init.ts";
 import * as ServiceLayer from "./service.ts";
+import { traceCommand } from "./trace.ts";
 
 // pots: one command for people and for the bots. People set up and run bots (init, chat, service, status); bots and
 // their scripts act in their channels (send, react, call, wake, context, turn-page).
@@ -102,7 +103,7 @@ const service = Command.make("service").pipe(
 
 const pots = Command.make("pots").pipe(
   Command.withDescription("Pots (pi-durable-bot): AI coworkers that live on this computer and work in your chat apps."),
-  Command.withSubcommands([initCommand, chatCommand, start, status, service, botCommand, ...agentCommands]),
+  Command.withSubcommands([initCommand, chatCommand, start, status, service, botCommand, traceCommand, ...agentCommands]),
 );
 
 Command.run(pots, { version }).pipe(

@@ -44,12 +44,12 @@ export interface Compaction {
 }
 
 /** Open the bot's SQLite file. The one connection is shared: the agent's tables start with pi_, the others use it too. */
-export async function openDatabase(path: string): Promise<Sql & { close(): Promise<void> }> {
-  return (await openNodeSqliteDatabase(path)) as unknown as Sql & { close(): Promise<void> };
+export function openDatabase(path: string): Promise<Sql & { close(): Promise<void> }> {
+  return openNodeSqliteDatabase(path);
 }
 
 export interface AgentOptions {
-  database: Sql;
+  database: Sql & { close(): Promise<void> };
   /** pi's model layer, from openModels(). */
   models: Models;
   /** "provider/modelId". */
@@ -112,7 +112,7 @@ export class Agent {
       get: (target, property) =>
         property === "close" ? async () => {} : typeof Reflect.get(target, property) === "function" ? Reflect.get(target, property).bind(target) : Reflect.get(target, property),
     });
-    const storage = await SqliteStorage.open(connection as never, { prefix: "pi_" });
+    const storage = await SqliteStorage.open(connection, { prefix: "pi_" });
     await requireChatModel(models, options.model);
     const text = (value: string) => [{ type: "text" as const, text: value }];
     const tools = [

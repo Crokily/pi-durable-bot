@@ -226,9 +226,10 @@ export class Bot implements WakeTarget {
     )) {
       bot.#submissionPlaces.set(row.submission, row.place);
     }
-    const adapters = await Promise.all(definition.channels.map((channel) => bot!.#loadChannel(channel)));
-    await gateway.start(bot, adapters);
+    let adapters: ChannelAdapter[] = [];
     try {
+      adapters = await Promise.all(definition.channels.map((channel) => bot!.#loadChannel(channel)));
+      await gateway.start(bot, adapters);
       agent.resume();
       await timers.start();
       if (existsSync(paths.firstWake)) {

@@ -155,8 +155,8 @@ export class Bot implements WakeTarget {
       workspace: paths.workspace,
       shellEnv: {
         ...process.env,
-        PERSONAL_BOT_ID: id,
-        PERSONAL_BOT_NODE: process.execPath,
+        PI_DURABLE_BOT_ID: id,
+        PI_DURABLE_BOT_NODE: process.execPath,
         PATH: `${env.binDir}:${process.env.PATH ?? ""}`,
         HOME: process.env.HOME ?? homedir(),
       },

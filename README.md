@@ -1,4 +1,4 @@
-# personal-bot
+# pi-durable-bot
 
 自建的常驻 bot，像团队里的同事一样工作。基于 pi-durable 和 Vercel Chat SDK。
 
@@ -19,17 +19,17 @@
 ## 运行需要
 
 - Node.js 24 或更新。
-- `~/.config/personal-bot/jev.env`：`JEV_API_KEY`。
-- 每个 Slack 账号一个 env 文件（例如 `~/.config/personal-bot/slack.env`）：`SLACK_APP_TOKEN`、`SLACK_BOT_TOKEN`。测试另需 `SLACK_USER_TOKEN`，只给测试脚本用。
+- `~/.config/pi-durable-bot/jev.env`：`JEV_API_KEY`。
+- 每个 Slack 账号一个 env 文件（例如 `~/.config/pi-durable-bot/slack.env`）：`SLACK_APP_TOKEN`、`SLACK_BOT_TOKEN`。测试另需 `SLACK_USER_TOKEN`，只给测试脚本用。
 - pi 已登录：`~/.pi/agent/auth.json`。
 - Slack app 按 [docs/slack-app-manifest.yaml](docs/slack-app-manifest.yaml) 创建。
 
 ## bot 文件夹
 
-每个 bot 一个文件夹：`~/.local/share/personal-bot/<id>/`。有 `bot.json` 的文件夹就会运行。
+每个 bot 一个文件夹：`~/.local/share/pi-durable-bot/<id>/`。有 `bot.json` 的文件夹就会运行。
 
 ```sh
-node scripts/new-bot.ts coly --name coly --slack ~/.config/personal-bot/slack.env \
+node scripts/new-bot.ts coly --name coly --slack ~/.config/pi-durable-bot/slack.env \
   --persona "……" --responsibilities "……"
 ```
 
@@ -50,7 +50,7 @@ node scripts/new-bot.ts coly --name coly --slack ~/.config/personal-bot/slack.en
   "name": "coly",
   "model": "openai/gpt-6.1-sol",
   "thinking": "medium",
-  "channels": [{ "id": "slack", "type": "slack", "secrets": "~/.config/personal-bot/slack.env" }],
+  "channels": [{ "id": "slack", "type": "slack", "secrets": "~/.config/pi-durable-bot/slack.env" }],
   "settings": { "fallbackWakeMinutes": 120 }
 }
 ```
@@ -60,8 +60,8 @@ node scripts/new-bot.ts coly --name coly --slack ~/.config/personal-bot/slack.en
 ```sh
 npm ci
 npm start                 # 前台运行
-./scripts/deploy.sh       # 复制到 ~/.local/lib/personal-bot，安装、enable 并重启 systemd 服务；装 ~/.local/bin/pb
-journalctl -u personal-bot -f
+./scripts/deploy.sh       # 复制到 ~/.local/lib/pi-durable-bot，安装、enable 并重启 systemd 服务；装 ~/.local/bin/pb
+journalctl -u pi-durable-bot -f
 ```
 
 ## 测试小工具

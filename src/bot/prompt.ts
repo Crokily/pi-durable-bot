@@ -50,7 +50,7 @@ ${accounts}
   pb wake --list | --cancel <id>
   pb context
   pb turn-page --note <文字>
-  在你自己的 bash 以外（例如 cron）运行时，写全：PERSONAL_BOT_NODE=${facts.node} ${facts.pb} --bot ${facts.id} <命令>
+  在你自己的 bash 以外（例如 cron）运行时，写全：PI_DURABLE_BOT_NODE=${facts.node} ${facts.pb} --bot ${facts.id} <命令>
 - 你在这台机器上有 sudo 和全部权限，操作不需要审批。工作目录：${facts.paths.workspace}`;
 }
 

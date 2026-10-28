@@ -9,7 +9,7 @@
 //   pb context
 //   pb turn-page --note <text>
 //   pb status
-// Options for every command: --bot <id> (default: $PERSONAL_BOT_ID, or the only bot).
+// Options for every command: --bot <id> (default: $PI_DURABLE_BOT_ID, or the only bot).
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { request } from "node:http";
 import { join } from "node:path";
@@ -50,7 +50,7 @@ function fail(message: string): never {
 }
 
 function socketFor(bot: string | undefined): string {
-  let id = bot ?? process.env.PERSONAL_BOT_ID;
+  let id = bot ?? process.env.PI_DURABLE_BOT_ID;
   if (!id) {
     const bots = existsSync(DATA_DIR) ? readdirSync(DATA_DIR).filter((name) => existsSync(join(DATA_DIR, name, "bot.json"))) : [];
     if (bots.length !== 1) fail(`say which bot with --bot <id> (bots: ${bots.join(", ") || "none"})`);

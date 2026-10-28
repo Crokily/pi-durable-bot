@@ -4,8 +4,8 @@ import { join } from "node:path";
 import type { Compaction, Thinking } from "../agent/agent.ts";
 import type { ChannelConfig } from "../core/channel.ts";
 
-export const DATA_DIR = process.env.PERSONAL_BOT_DATA_DIR ?? join(homedir(), ".local/share/personal-bot");
-export const CONFIG_DIR = process.env.PERSONAL_BOT_CONFIG_DIR ?? join(homedir(), ".config/personal-bot");
+export const DATA_DIR = process.env.PI_DURABLE_BOT_DATA_DIR ?? join(homedir(), ".local/share/pi-durable-bot");
+export const CONFIG_DIR = process.env.PI_DURABLE_BOT_CONFIG_DIR ?? join(homedir(), ".config/pi-durable-bot");
 
 /** bot.json: who the bot is and where it is. The agent may edit it; changes apply while running. */
 export interface BotDefinition {

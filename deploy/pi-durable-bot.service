@@ -1,6 +1,6 @@
-# Template. scripts/deploy.sh fills in the @...@ values and installs it as /etc/systemd/system/personal-bot.service.
+# Template. scripts/deploy.sh fills in the @...@ values and installs it as /etc/systemd/system/pi-durable-bot.service.
 [Unit]
-Description=personal-bot gateway (Slack bots)
+Description=pi-durable-bot gateway (Slack bots)
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=0

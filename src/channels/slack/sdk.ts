@@ -3,7 +3,7 @@ import { SlackAdapter, type SlackEvent } from "@chat-adapter/slack";
 import type { Message } from "chat";
 
 /** Slack message metadata type on messages the bot sends. The payload holds the send ID. */
-export const SEND_EVENT_TYPE = "personal_bot_send";
+export const SEND_EVENT_TYPE = "pi_durable_bot_send";
 
 const pendingMetadata = new AsyncLocalStorage<{ event_type: string; event_payload: { send_id: string } }>();
 

@@ -128,6 +128,7 @@ It joins only the places it is invited to, like a new hire who is added to the r
 | `pots service install \| uninstall \| restart \| logs` | The gateway as a background service: launchd on macOS, systemd on Linux (`--system` for a server), Task Scheduler on Windows |
 | `pots start` | Run the gateway in this terminal instead |
 | `pots bot new \| list` | Create and list bots |
+| `pots trace` | What a bot did: its last wakes, or one wake from the events to its run and the messages it sent |
 
 To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`. To remove it, run `pots service uninstall`, then `npm uninstall -g pi-durable-bot`. The bots stay in `~/.pots/` until you delete that folder.
 
@@ -260,9 +261,10 @@ npm install
 npm run pots -- status    # the pots command, straight from src/ (Node 24 runs TypeScript)
 npm run check             # type check
 npm test                  # tests, including a real gateway with a fake model
+npm run tla               # the TLA+ models of the inbox, outbox and waker (needs Java and tla2tools.jar)
 ```
 
-`npm run build` writes the JavaScript that the npm package ships to `dist/`. Set `POTS_HOME` to try things without touching `~/.pots/`. Tests, the TLA+ models (`npm run tla`) and traces (`pots trace`, OpenTelemetry): [docs/development.md](docs/development.md). Coding agents: read [AGENTS.md](AGENTS.md).
+`npm run build` writes the JavaScript that the npm package ships to `dist/`. Set `POTS_HOME` to try things without touching `~/.pots/`. With `OTEL_EXPORTER_OTLP_ENDPOINT` set, the gateway also sends its traces to any OpenTelemetry tool (Jaeger, Grafana Tempo, Honeycomb). Tests, the TLA+ models and traces in detail: [docs/development.md](docs/development.md). Coding agents: read [AGENTS.md](AGENTS.md).
 
 ## Built on
 

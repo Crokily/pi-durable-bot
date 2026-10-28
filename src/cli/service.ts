@@ -160,7 +160,9 @@ WantedBy=${system ? "multi-user.target" : "default.target"}
 }
 
 const systemd: ServiceManager = {
-  kind: existsSync(systemUnit) ? "systemd" : "systemd --user",
+  get kind() {
+    return existsSync(systemUnit) ? "systemd" : "systemd --user";
+  },
   installed: () => existsSync(userUnit) || existsSync(systemUnit),
   install: ({ system }) =>
     Effect.gen(function* () {

@@ -1,9 +1,9 @@
-import { Clock, Context, Effect, FiberMap, FiberSet, Layer, Option, Result, type Tracer } from "effect";
+import { Cause, Clock, Context, Effect, FiberMap, FiberSet, Layer, Option, Result, type Tracer } from "effect";
 import type { PlaceInfo } from "../core/channel.ts";
 import type { Judge, JudgeAnswer, JudgeItem } from "../core/judge.ts";
 import type { PlaceWake, PlaceWakeReason, WakeEvent, WakeTarget } from "../core/wake.ts";
 import { GatewayConfig } from "./config.ts";
-import { DeliverError, JudgeError, type LogError, message, NoWakeTarget } from "./errors.ts";
+import { DeliverError, failureText, JudgeError, type LogError, message, NoWakeTarget } from "./errors.ts";
 import { type LoggedMessage, MessageLog, type UndecidedEvent } from "./log.ts";
 import { WakeSpans } from "./tracing.ts";
 
@@ -97,8 +97,8 @@ export class Waker extends Context.Service<
           const answer = yield* Effect.result(askJudge(judge, bot, place, events, settings));
           if (Result.isFailure(answer)) {
             // The judge could not decide. Nothing is dropped: the bot gets the events and decides itself.
-            config.print("judge failed", { place: place.address, error: answer.failure.message });
-            return yield* deliver("relevant", "relevant", { error: answer.failure.message });
+            config.print("judge failed", { place: place.address, error: failureText(answer.failure) });
+            return yield* deliver("relevant", "relevant", { error: failureText(answer.failure) });
           }
           const { related, respond } = answer.success;
           config.print("judge", { place: place.address, events: ids.length, related, respond });
@@ -132,8 +132,12 @@ export class Waker extends Context.Service<
             }
             lastError = result.failure;
           }
-          return yield* Effect.fail(new JudgeError({ message: message(lastError), cause: lastError }));
-        }).pipe(Effect.withSpan("wake.judge"));
+          return yield* Effect.fail(new JudgeError({ message: String(lastError), cause: lastError }));
+        }).pipe(
+          // Anything that goes wrong on the way is the judge failing: the events still go to the bot.
+          Effect.catchDefect((defect) => Effect.fail(new JudgeError({ message: String(defect), cause: defect }))),
+          Effect.withSpan("wake.judge"),
+        );
 
       /** An event as the judge sees it: what happened, with the current state of the message it is about. */
       const describe = (event: UndecidedEvent, name: string): Effect.Effect<JudgeItem, LogError> =>
@@ -171,7 +175,11 @@ export class Waker extends Context.Service<
             return FiberSet.run(
               deciding,
               decide(batch.events, batch.spans).pipe(
-                Effect.catch((error) => Effect.sync(() => config.print("wake decision failed", { place: key, error: error.message }))),
+                Effect.catchCause((cause) =>
+                  Cause.hasInterruptsOnly(cause)
+                    ? Effect.void
+                    : Effect.sync(() => config.print("wake decision failed", { place: key, error: failureText(Cause.squash(cause)) })),
+                ),
               ),
             );
           }),

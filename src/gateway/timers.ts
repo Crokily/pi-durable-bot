@@ -85,6 +85,7 @@ export class Timers extends Context.Service<
 
         /** Fire what is due. False when a wake could not be handed to the bot; it stays pending. */
         const fireDue = Effect.gen(function* () {
+          if (stopped) return true;
           for (const timer of yield* pending) {
             if (stopped || timer.due_at > (yield* Clock.currentTimeMillis)) break;
             yield* fire(timer);
@@ -119,9 +120,10 @@ export class Timers extends Context.Service<
             yield* ensureFallback.pipe(lock.withPermits(1));
             yield* schedule;
           }),
+          // A loop that was replaced may still be firing: taking the lock waits for it.
           stop: Effect.suspend(() => {
             stopped = true;
-            return FiberHandle.clear(loop);
+            return FiberHandle.clear(loop).pipe(Effect.andThen(lock.withPermits(1)(Effect.void)));
           }),
           add: (dueAt, note) =>
             Number.isFinite(dueAt)

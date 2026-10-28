@@ -41,7 +41,7 @@ export type FileInfo = typeof FileInfo.Type;
 export const Happening = Schema.Struct({
   kind: Schema.NonEmptyString,
   /** Unix ms. */
-  at: Schema.Finite,
+  at: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 8.64e15 })),
   place: Schema.optional(PlaceInfo),
   /** The thread the message is in. */
   thread: Schema.optional(Schema.String),

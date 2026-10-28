@@ -5,7 +5,7 @@ import { Data } from "effect";
 /** A statement on the bot's SQLite file failed. */
 export class LogError extends Data.TaggedError("LogError")<{ readonly message: string; readonly cause: unknown }> {
   static from(cause: unknown): LogError {
-    return new LogError({ message: `database: ${cause instanceof Error ? cause.message : String(cause)}`, cause });
+    return new LogError({ message: message(cause), cause });
   }
 }
 
@@ -45,4 +45,15 @@ export class JudgeError extends Data.TaggedError("JudgeError")<{ readonly messag
 export class DeliverError extends Data.TaggedError("DeliverError")<{ readonly message: string; readonly cause: unknown }> {}
 
 /** The message of a thrown value. */
-export const message = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
+export function message(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+/** A failure as the log shows it: the thrown value, as String() gives it ("Error: ..."), or the failure's message. */
+export function failureText(failure: unknown): string {
+  if (failure && typeof failure === "object" && "_tag" in failure && "message" in failure) {
+    const { cause, message: text } = failure as { cause?: unknown; message: string };
+    return cause instanceof Error ? String(cause) : text;
+  }
+  return String(failure);
+}

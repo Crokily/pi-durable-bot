@@ -1,8 +1,8 @@
-import { Context, Deferred, Effect, FiberHandle, Layer, Queue, Schema } from "effect";
+import { Cause, Context, Deferred, Effect, FiberHandle, Layer, Queue, Schema } from "effect";
 import { Happening } from "../core/channel.ts";
 import { Channels } from "./channels.ts";
 import { GatewayConfig } from "./config.ts";
-import { BadHappening, ChannelError, type LogError } from "./errors.ts";
+import { BadHappening, ChannelError, failureText, type LogError } from "./errors.ts";
 import { MessageLog } from "./log.ts";
 import { Waker } from "./waker.ts";
 
@@ -12,6 +12,17 @@ type Item =
   | { readonly _tag: "mark"; readonly done: Deferred.Deferred<void> };
 
 const decodeHappenings = Schema.decodeUnknownEffect(Schema.Array(Happening));
+
+/** Adapters may say null for a missing value (a person without a name); the schema says absent. The raw data stays as it is. */
+function withoutNulls(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutNulls);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, item]) => item !== null)
+      .map(([key, item]) => [key, key === "raw" ? item : withoutNulls(item)]),
+  );
+}
 
 /**
  * Every event from every channel comes in here. It is stored before the adapter acknowledges it, then applied to the
@@ -49,19 +60,21 @@ export class Inbox extends Context.Service<
           const adapter = channels.running(channel);
           if (!adapter) return yield* Effect.fail(ChannelError.from(channel, `channel ${channel} is not running`));
           const translated = yield* Effect.tryPromise({ try: () => adapter.translate(raw), catch: (cause) => ChannelError.from(channel, cause) });
-          const happenings = yield* decodeHappenings(translated).pipe(
+          const happenings = yield* decodeHappenings(withoutNulls(translated)).pipe(
             Effect.mapError((error) => new BadHappening({ message: `${channel} gave a happening that does not fit: ${error.message}`, channel })),
           );
           const events = yield* log.apply(channel, eventId, happenings);
           yield* Effect.annotateCurrentSpan({ happenings: happenings.length, events: events.map((event) => event.id).join(",") });
           for (const event of events) yield* waker.add(event);
         }).pipe(
-          Effect.catch((error) =>
-            Effect.sync(() => print("event failed", { channel, eventId, error: error.message })).pipe(
-              Effect.andThen(log.failInbox(channel, eventId, error.message)),
+          Effect.catchCause((cause) => {
+            if (Cause.hasInterruptsOnly(cause)) return Effect.void;
+            const error = failureText(Cause.squash(cause));
+            return Effect.sync(() => print("event failed", { channel, eventId, error })).pipe(
+              Effect.andThen(log.failInbox(channel, eventId, error)),
               Effect.ignore,
-            ),
-          ),
+            );
+          }),
           Effect.withSpan("inbox.apply", { attributes: { channel, event: eventId } }),
         );
 

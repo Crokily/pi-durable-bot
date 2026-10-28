@@ -59,6 +59,7 @@ export class Gateway {
   readonly #print: GatewayOptions["print"];
   #lastAlive: number | undefined;
   #started = false;
+  #stopping: Promise<void> | undefined;
   readonly timers: TimersHandle;
 
   private constructor(
@@ -72,7 +73,7 @@ export class Gateway {
     this.#wakeSpans = services.wakeSpans;
     this.#background = services.background;
     this.#print = print;
-    this.timers = new TimersHandle((effect) => this.#runtime.runPromise(effect));
+    this.timers = new TimersHandle((effect) => this.#run(effect));
   }
 
   /** Open the gateway's tables on the bot's connection. */
@@ -128,7 +129,13 @@ export class Gateway {
     );
   }
 
-  async stop(): Promise<void> {
+  /** Stop everything. Calls after this fail with "the gateway is stopped". */
+  stop(): Promise<void> {
+    this.#stopping ??= this.#stop();
+    return this.#stopping;
+  }
+
+  async #stop(): Promise<void> {
     const self = this;
     try {
       await this.#runtime.runPromise(
@@ -148,18 +155,20 @@ export class Gateway {
 
   /** Add a channel account while running. */
   addChannel(adapter: ChannelAdapter): Promise<void> {
-    return this.#runtime.runPromise(this.#channels.add(adapter, (each) => this.#sink(each)));
+    return this.#run(this.#channels.add(adapter, (each) => this.#sink(each)));
   }
 
   removeChannel(id: string): Promise<void> {
-    return this.#runtime.runPromise(this.#channels.remove(id));
+    return this.#run(this.#channels.remove(id));
   }
 
   adapterFor(address: Address): ChannelAdapter {
+    if (this.#stopping) throw stopped();
     return this.#runtime.runSync(this.#channels.adapterFor(address));
   }
 
   channel(id: string): ChannelAdapter {
+    if (this.#stopping) throw stopped();
     return this.#runtime.runSync(this.#channels.get(id));
   }
 
@@ -167,11 +176,11 @@ export class Gateway {
 
   /** wakes: the agent's submission IDs this send answers, so the send joins their trace. */
   send(sendId: string, to: Address, text: string, wakes: readonly string[] = []): Promise<SendResult> {
-    return this.#runtime.runPromise(this.#outbox.send(sendId, to, text, this.#wakeSpans.find(wakes)));
+    return this.#run(this.#outbox.send(sendId, to, text, this.#wakeSpans.find(wakes)));
   }
 
   react(message: Address, emoji: string, remove: boolean): Promise<void> {
-    return this.#runtime.runPromise(
+    return this.#run(
       Effect.gen({ self: this }, function* () {
         const adapter = yield* this.#channels.adapterFor(message);
         yield* Effect.tryPromise({ try: () => adapter.react(message, emoji, remove), catch: (cause) => ChannelError.from(adapter.id, cause) });
@@ -180,12 +189,22 @@ export class Gateway {
   }
 
   call(channel: string, method: string, params: Record<string, unknown>): Promise<unknown> {
-    return this.#runtime.runPromise(
+    return this.#run(
       Effect.gen({ self: this }, function* () {
         const adapter = yield* this.#channels.get(channel);
         return yield* Effect.tryPromise({ try: () => adapter.call(method, params), catch: (cause) => ChannelError.from(adapter.id, cause) });
       }).pipe(Effect.withSpan("call", { attributes: { channel, method } })),
     );
+  }
+
+  /** Run an effect for the bot. Failures reach it as Error objects, also when the gateway stops in the middle. */
+  async #run<A, E>(effect: Effect.Effect<A, E, Services>): Promise<A> {
+    if (this.#stopping) throw stopped();
+    try {
+      return await this.#runtime.runPromise(effect);
+    } catch (error) {
+      throw error instanceof Error ? error : this.#stopping ? stopped() : new Error(String(error));
+    }
   }
 
   // ---- Receive ----
@@ -206,6 +225,8 @@ export class Gateway {
     );
   }
 }
+
+const stopped = () => new Error("the gateway is stopped");
 
 /** The bot's timers, in promises. */
 export class TimersHandle {

@@ -146,10 +146,28 @@ describe("the judge", () => {
         yield* advance(10_000);
         assert.strictEqual(judge.asked.length, 3);
         assert.strictEqual(recorder.wakes[0]!.wake.reason, "relevant");
-        assert.deepStrictEqual(recorder.wakes[0]!.wake.judged, { error: "the judge is down" });
+        assert.deepStrictEqual(recorder.wakes[0]!.wake.judged, { error: "Error: the judge is down" });
       }),
     );
   });
+
+  it.effect("gives the events to the bot when something on the way to the judge throws", () =>
+    withCore({ judge: { judge: async () => ({ related: 0.9, respond: 0.9 }) } }, (recorder) =>
+      Effect.gen(function* () {
+        const target = recorder.target();
+        (yield* Waker).setTarget({
+          ...target,
+          name: target.name,
+          responsibilities: () => {
+            throw new Error("cannot read responsibilities.md");
+          },
+        });
+        yield* arrive("general", "something");
+        yield* advance(3_000);
+        assert.strictEqual(recorder.wakes[0]!.wake.reason, "relevant");
+        assert.deepStrictEqual(recorder.wakes[0]!.wake.judged, { error: "Error: cannot read responsibilities.md" });
+      }),
+    ));
 });
 
 describe("stop", () => {

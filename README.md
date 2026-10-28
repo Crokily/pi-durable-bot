@@ -50,7 +50,7 @@ It is woken in three ways, the same three ways a person notices work:
 | | Like a coworker who... | How |
 |---|---|---|
 | **Someone asks** | gets a message or an @ | A mention or a DM wakes it at once (after a short pause, so you can finish typing) |
-| **It notices** | overhears something that is their job | A fast judge reads each message that does not mention it and asks two questions: *is this about me?* and *should I respond?* It sees the bot's own list of responsibilities |
+| **It notices** | overhears something that is their job | A judge reads each message that does not mention it and asks two questions: *is this about me?* and *should I respond?* It sees the bot's own list of responsibilities. The judge is the bot's own model, a fast classifier such as TypeSafe's Jev, or a local model |
 | **It checks in** | looks around now and then, and keeps promises | It sets its own timed wakes: "check Acme's pricing every Monday", "follow up at 5 pm". If it has none, it looks around every two hours |
 
 Being woken is not the same as speaking. Each time, the agent reads the log and decides if it should say anything, where, and when. Most of the time the right answer is to stay quiet.
@@ -90,7 +90,7 @@ Grok Bot, dots, Muse and Claude Duet are closed products. They run on someone el
 | Channels | The ones the vendor supports | Any channel with a [Chat SDK](https://chat-sdk.dev) adapter |
 | Custom work | What the vendor allows | Anything. Change the code, add tools, connect your own systems |
 
-**Any model.** Log in once with a subscription you already pay for, use an API key from any of the 40+ providers [pi](https://github.com/earendil-works/pi) supports, or point it at a local model. You are not locked to one model vendor.
+**Any model.** Log in once with a subscription you already pay for, use an API key from any of the 40+ providers [pi](https://github.com/earendil-works/pi) supports, point it at any OpenAI-compatible endpoint (vLLM, SGLang, a proxy), or run a local model with Ollama, LM Studio or llama.cpp. The bot uses pi's own model layer, so every model pi can use, the bot can use. With a local model for the agent and the judge, nothing leaves your machine. You are not locked to one model vendor.
 
 **Any channel.** The core speaks in five plain words: channel, place, thread, message, person. Platform details stay inside one adapter per platform, so adding Discord, Teams, Telegram or email is one adapter, not a rewrite. One bot can be in many channels and stays the same person everywhere.
 
@@ -120,19 +120,53 @@ Set up https://github.com/Crokily/pi-durable-bot on this machine and connect it 
    SLACK_APP_TOKEN=xapp-...
    SLACK_BOT_TOKEN=xoxb-...
    ```
-4. Put a [TypeSafe AI](https://typesafe.ai) key for the judge in `~/.config/pi-durable-bot/jev.env` as `JEV_API_KEY=...`.
-5. Create your coworker:
+4. Create your coworker:
    ```sh
    node scripts/new-bot.ts pots --name Pots --slack ~/.config/pi-durable-bot/slack.env \
      --persona "Calm, direct, a little dry." \
      --responsibilities "Pricing, competitors, and keeping the team's travel sorted."
    ```
-6. Run it as a service, then invite it to the channels it should work in:
+5. Run it as a service, then invite it to the channels it should work in:
    ```sh
    ./scripts/deploy.sh
    ```
 
 It joins only the places it is invited to, like a new hire who is added to the right channels.
+
+### Choose the models
+
+`bot.json` names two models. Both use pi's logins and model list, so `pi` shows what is available.
+
+| Field | What it does | Values |
+|---|---|---|
+| `model` | The agent that reads, thinks and acts | Any pi model as `provider/modelId`, for example `openai/gpt-6.1-sol` or `anthropic/claude-opus-5-5` |
+| `judge` | Decides which messages that do not mention the bot should wake it | `main` (default): the bot's own model judges, no extra account<br>`provider/modelId` of a classifier: `typesafe/jev-latest`, `openrouter/typesafe/jev-1.14`, `opencode/jev-1.13-free`, or a llama.cpp model<br>`off`: every message wakes the bot, and the agent decides |
+
+A fast classifier is cheaper and quicker than the main model: Jev answers in about 0.3 seconds. With `main`, each group of messages costs one short request to the main model.
+
+**OpenAI-compatible and local endpoints** (Ollama, LM Studio, vLLM, a proxy) go in pi's `~/.pi/agent/models.json`, the same file the pi CLI reads ([fields](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md)):
+
+```json
+{
+  "providers": {
+    "ollama": {
+      "baseUrl": "http://localhost:11434/v1",
+      "api": "openai-completions",
+      "apiKey": "ollama",
+      "compat": { "supportsDeveloperRole": false, "supportsReasoningEffort": false },
+      "models": [{ "id": "qwen3:8b", "contextWindow": 32768 }]
+    }
+  }
+}
+```
+
+Then set `"model": "ollama/qwen3:8b"`. The agent needs a model that calls tools well and a context window of 32K tokens or more.
+
+**llama.cpp** can be both the agent and the judge. Start `llama-server` in router mode and run `pi`, then `/login llama.cpp` once ([guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/llama-cpp.md)). Its chat models appear as `llama.cpp/<model>`. For the judge, use a decision model such as [Kev-4B](https://huggingface.co/ggml-org/Kev-4B-GGUF) (3 GB), which answers through llama.cpp's `/v1/systemone`; any chat model also works as a judge.
+
+```json
+{ "model": "llama.cpp/Qwen3-4B-Instruct-2507-Q4_K_M", "judge": "llama.cpp/Kev-4B-Q4_K_M" }
+```
 
 ## How it decides to act
 
@@ -190,7 +224,7 @@ Each bot is a folder in `~/.local/share/pi-durable-bot/<id>/`:
 
 | File | What it is |
 |---|---|
-| `bot.json` | Name, model, channel accounts, settings. Edits apply within seconds. |
+| `bot.json` | Name, model, judge, channel accounts, settings. Edits apply within seconds. |
 | `persona.md` | Personality and voice. The bot maintains it. |
 | `responsibilities.md` | What it is responsible for. The judge reads it. The bot maintains it. |
 | `notes.md` | Notes it carries across pages. |
@@ -209,14 +243,16 @@ pi-durable-bot runs every day as a teammate in a real workspace. What works toda
 - [x] Turning the page with notes, compaction as a fallback
 - [x] Crash-safe inbox and outbox, tested with a forced crash mid-send
 - [x] Several bots per machine, systemd service
-- [ ] Local models and a local judge, configured in `bot.json`
+- [x] Any model pi can use: subscription logins, API keys, OpenAI-compatible endpoints, local models
+- [x] A judge you choose: the bot's own model, Jev or another classifier, a local llama.cpp model, or none
 - [ ] More adapters: Discord, Teams, Telegram, email
 
 ## Built on
 
 - [pi-durable](https://github.com/earendil-works/pi) for the durable agent runtime
 - [Chat SDK](https://chat-sdk.dev) for channel adapters
-- [TypeSafe AI](https://typesafe.ai) for the fast relevance judge
+- [pi](https://github.com/earendil-works/pi)'s model layer for logins, providers and local models
+- [TypeSafe AI](https://typesafe.ai)'s Jev, one of the judges you can choose
 
 ## License
 

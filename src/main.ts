@@ -2,9 +2,9 @@ import { existsSync, readdirSync } from "node:fs";
 import { unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { openModels } from "./agent/models.ts";
 import { Bot } from "./bot/bot.ts";
-import { botPaths, CONFIG_DIR, DATA_DIR, readDefinition } from "./bot/definition.ts";
-import { readSecrets } from "./core/env-file.ts";
+import { botPaths, DATA_DIR, readDefinition } from "./bot/definition.ts";
 
 // Runs every bot folder in the data directory: a folder with a bot.json is a bot. Checks the folders every few
 // seconds, so a new folder starts a bot, a removed one stops it, and a changed bot.json applies while running.
@@ -21,6 +21,7 @@ function print(bot: string | undefined) {
 }
 
 const log = print(undefined);
+const models = await openModels();
 const running = new Map<string, { bot: Bot; text: string }>();
 /** Bots whose bot.json could not be read (the error) or used (the bot.json text and when it failed). */
 const invalid = new Map<string, string>();
@@ -68,8 +69,7 @@ async function scan(): Promise<void> {
         await current.bot.applyDefinition(read.definition);
         current.text = read.text;
       } else {
-        const jev = readSecrets(join(CONFIG_DIR, "jev.env"), ["JEV_API_KEY"]);
-        const bot = await Bot.start(id, paths.dir, read.definition, { dataDir: DATA_DIR, binDir, jevApiKey: jev.JEV_API_KEY! }, print(id));
+        const bot = await Bot.start(id, paths.dir, read.definition, { dataDir: DATA_DIR, binDir, models }, print(id));
         running.set(id, { bot, text: read.text });
       }
       failed.delete(id);

@@ -1,11 +1,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { type Message, Type } from "@earendil-works/pi-ai";
-import { createModels, type MutableModels } from "@earendil-works/pi-ai/models";
-import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
+import { type Message, type Models, Type } from "@earendil-works/pi-ai";
 import { calculateContextTokens, estimateMessageTokens } from "@earendil-works/pi-ai/utils/estimate";
 import {
   type Conversation,
@@ -22,7 +19,7 @@ import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import type { Sql } from "../core/sql.ts";
-import { FileModelsStore, PiAuthFile } from "./credentials.ts";
+import { modelRef, requireModel } from "./models.ts";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -48,10 +45,10 @@ export async function openDatabase(path: string): Promise<Sql & { close(): Promi
 
 export interface AgentOptions {
   database: Sql;
+  /** pi's model layer, from openModels(). */
+  models: Models;
   /** "provider/modelId". */
   model: string;
-  /** File for the dynamic model catalog. */
-  modelsStore: string;
   thinking: Thinking;
   compaction: () => Compaction;
   workspace: string;
@@ -73,6 +70,10 @@ export interface ContextStatus {
 
 /** Call results longer than this go to a file in the workspace. */
 const CALL_OUTPUT_CHARS = 30_000;
+/** The window assumed for a model whose catalog entry gives none. */
+const DEFAULT_WINDOW = 200_000;
+/** Room kept free for the answer and long tool results; pi's own default is 16K. */
+const RESERVE_TOKENS = 32_768;
 
 /**
  * The bot's agent: one long-lived pi-durable conversation (the root). Tools: read, write, edit, bash, and the
@@ -82,29 +83,24 @@ export class Agent {
   readonly #options: AgentOptions;
   readonly #harness: Harness;
   readonly #root: Conversation;
-  readonly #models: MutableModels;
+  readonly #models: Models;
   #model: ModelRef;
   #runInputs: readonly string[] | undefined;
   readonly #runListeners = new Set<(inputs: readonly string[] | undefined) => void>();
   #disposeView?: () => void;
 
-  private constructor(options: AgentOptions, harness: Harness, root: Conversation, models: MutableModels) {
+  private constructor(options: AgentOptions, harness: Harness, root: Conversation) {
     this.#options = options;
     this.#harness = harness;
     this.#root = root;
-    this.#models = models;
+    this.#models = options.models;
     this.#model = modelRef(options.model);
   }
 
   static async open(options: AgentOptions): Promise<Agent> {
-    const { actions } = options;
+    const { actions, models } = options;
     const storage = await SqliteStorage.open(options.database as never, { prefix: "pi_" });
-    const models = createModels({
-      credentials: new PiAuthFile(join(homedir(), ".pi/agent/auth.json")),
-      modelsStore: new FileModelsStore(options.modelsStore),
-    });
-    for (const provider of builtinProviders()) models.setProvider(provider);
-    await requireModel(models, options.model);
+    await requireChatModel(models, options.model);
     const text = (value: string) => [{ type: "text" as const, text: value }];
     const tools = [
       defineTool({
@@ -159,6 +155,7 @@ export class Agent {
     registry.install(CodingTools);
     registry.install(bot);
 
+    let agent: Agent | undefined;
     const harness = await Harness.open(
       storage,
       {
@@ -172,7 +169,7 @@ export class Agent {
           retry: { maxRetries: 4 },
           // The fallback when the agent does not turn the page itself.
           get compaction() {
-            return options.compaction();
+            return compactionFor(models, agent ? agent.#model : modelRef(options.model), options.compaction());
           },
         },
         env: () => new NodeExecutionEnv({ cwd: options.workspace, shellEnv: options.shellEnv }),
@@ -183,7 +180,7 @@ export class Agent {
     const model = modelRef(options.model);
     const root = await harness.root(context, { agent: { model, thinkingLevel: options.thinking } });
     await root.configure({ model, thinkingLevel: options.thinking, cwd: options.workspace }, context);
-    const agent = new Agent(options, harness, root, models);
+    agent = new Agent(options, harness, root);
     await agent.#watchRun();
     return agent;
   }
@@ -249,7 +246,7 @@ export class Agent {
 
   /** Change the model ("provider/modelId") or the thinking level. Throws for an unknown model. */
   async configure(model: string, thinking: Thinking): Promise<void> {
-    await requireModel(this.#models, model);
+    await requireChatModel(this.#models, model);
     this.#model = modelRef(model);
     await this.#root.configure({ model: this.#model, thinkingLevel: thinking }, context);
   }
@@ -259,8 +256,7 @@ export class Agent {
    * pi estimates from characters, which counts Chinese at about half, so the estimate is doubled.
    */
   async contextStatus(): Promise<ContextStatus> {
-    const model = this.#models.getModel(this.#model.provider, this.#model.modelId);
-    const window = model?.contextWindow ?? 200_000;
+    const window = this.#models.getModel(this.#model.provider, this.#model.modelId)?.contextWindow ?? DEFAULT_WINDOW;
     const messages: readonly Message[] = (await this.#root.context(context)).messages;
     let index = -1;
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -278,20 +274,26 @@ export class Agent {
       used += 2 * estimateMessageTokens({ role: "user", content: parts.join("\n\n"), timestamp: 0 });
     }
     // pi compacts in the background from (window - reserve - background), and blocks at (window - reserve).
-    const policy = { ...DEFAULT_COMPACTION_POLICY, ...this.#options.compaction() };
+    const policy = compactionFor(this.#models, this.#model, this.#options.compaction());
     const compactAt = window - policy.reserveTokens - (policy.backgroundTokens > 0 ? policy.backgroundTokens : 0);
     return { used, window, compactAt };
   }
 }
 
-function modelRef(model: string): ModelRef {
-  const [provider, ...rest] = model.split("/");
-  return { provider: provider!, modelId: rest.join("/") };
+/**
+ * Compaction for the model's context window: what bot.json sets, else the defaults, each at most 15% of the window,
+ * so a small local model still has room to work.
+ */
+function compactionFor(models: Models, ref: ModelRef, set: Compaction): Required<Compaction> {
+  const window = models.getModel(ref.provider, ref.modelId)?.contextWindow ?? DEFAULT_WINDOW;
+  const fit = (tokens: number) => Math.min(tokens, Math.floor(window * 0.15));
+  return {
+    reserveTokens: set.reserveTokens ?? fit(RESERVE_TOKENS),
+    keepRecentTokens: set.keepRecentTokens ?? fit(DEFAULT_COMPACTION_POLICY.keepRecentTokens),
+    backgroundTokens: set.backgroundTokens ?? fit(DEFAULT_COMPACTION_POLICY.backgroundTokens),
+  };
 }
 
-async function requireModel(models: MutableModels, model: string): Promise<void> {
-  const ref = modelRef(model);
-  if (models.getModel(ref.provider, ref.modelId)) return;
-  await models.refresh();
-  if (!models.getModel(ref.provider, ref.modelId)) throw new Error(`unknown model ${model}`);
+async function requireChatModel(models: Models, model: string): Promise<void> {
+  await requireModel(models, model, (provider, id) => models.getModel(provider, id));
 }

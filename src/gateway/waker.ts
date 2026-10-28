@@ -1,6 +1,6 @@
 import type { PlaceInfo } from "../core/channel.ts";
+import type { Judge, JudgeAnswer, JudgeItem } from "../core/judge.ts";
 import type { PlaceWake, PlaceWakeReason, WakeEvent, WakeTarget } from "../core/wake.ts";
-import type { Jev, JevAnswer, JevItem } from "./jev.ts";
 import type { LoggedMessage, MessageLog, UndecidedEvent } from "./log.ts";
 
 export interface WakerSettings {
@@ -8,10 +8,10 @@ export interface WakerSettings {
   readonly debounceMs: number;
   /** Never wait longer than this after the first event. */
   readonly debounceMaxMs: number;
-  /** Jev wakes the bot when both answers are at least this probable. */
-  readonly jevThreshold: number;
-  /** How many earlier messages of the place Jev sees. */
-  readonly jevContextMessages: number;
+  /** The judge wakes the bot when both answers are at least this probable. */
+  readonly judgeThreshold: number;
+  /** How many earlier messages of the place the judge sees. */
+  readonly judgeContextMessages: number;
 }
 
 interface Batch {
@@ -26,20 +26,20 @@ type Log = (message: string, data?: Record<string, unknown>) => void;
  * Decides when new events wake the bot. Per place, it waits until people stop (debounce), then:
  * 1. the bot works on this place now → steer;
  * 2. an event @-mentions the bot, or the place is a one-to-one DM → wake;
- * 3. otherwise Jev decides.
+ * 3. otherwise the judge decides; with no judge, every event wakes the bot.
  */
 export class Waker {
   readonly #batches = new Map<string, Batch>();
   readonly #deciding = new Set<Promise<void>>();
   readonly #log: MessageLog;
-  readonly #jev: Jev;
+  readonly #judge: () => Judge | undefined;
   readonly #settings: () => WakerSettings;
   readonly #print: Log;
   target?: WakeTarget;
 
-  constructor(log: MessageLog, jev: Jev, settings: () => WakerSettings, print: Log) {
+  constructor(log: MessageLog, judge: () => Judge | undefined, settings: () => WakerSettings, print: Log) {
     this.#log = log;
-    this.#jev = jev;
+    this.#judge = judge;
     this.#settings = settings;
     this.#print = print;
   }
@@ -88,8 +88,8 @@ export class Waker {
     const wakeEvents = events.map(toWakeEvent);
     const id = (reason: string) => `${reason}:${place.address}:${ids.at(-1)}`;
 
-    const deliver = async (reason: PlaceWakeReason, decision: string, jev?: PlaceWake["jev"]) => {
-      await target.deliver({ id: id(reason), reason, place, events: wakeEvents, ...(jev ? { jev } : {}) });
+    const deliver = async (reason: PlaceWakeReason, decision: string, judged?: PlaceWake["judged"]) => {
+      await target.deliver({ id: id(reason), reason, place, events: wakeEvents, ...(judged ? { judged } : {}) });
       await this.#log.setWake(ids, decision);
       this.#print("wake", { reason, place: place.address, events: ids.length });
     };
@@ -98,27 +98,29 @@ export class Waker {
     if (place.kind === "dm") return deliver("dm", "dm");
     if (events.some((event) => event.mentions_me)) return deliver("mention", "mention");
 
+    const judge = this.#judge();
+    if (!judge) return deliver("heard", "heard");
     const settings = this.#settings();
-    let answer: JevAnswer;
+    let answer: JudgeAnswer;
     try {
-      answer = await this.#askJev(target, place, events, settings);
+      answer = await this.#askJudge(judge, target, place, events, settings);
     } catch (error) {
-      // Jev could not decide. Nothing is dropped: the bot gets the events and decides itself.
-      this.#print("jev failed", { place: place.address, error: String(error) });
+      // The judge could not decide. Nothing is dropped: the bot gets the events and decides itself.
+      this.#print("judge failed", { place: place.address, error: String(error) });
       return deliver("relevant", "relevant", { error: String(error) });
     }
-    this.#print("jev", { place: place.address, events: ids.length, related: answer.related, respond: answer.respond });
-    if (answer.related >= settings.jevThreshold && answer.respond >= settings.jevThreshold) {
+    this.#print("judge", { place: place.address, events: ids.length, related: answer.related, respond: answer.respond });
+    if (answer.related >= settings.judgeThreshold && answer.respond >= settings.judgeThreshold) {
       return deliver("relevant", "relevant", answer);
     }
-    // The bot may have started working on this place while Jev thought.
+    // The bot may have started working on this place while the judge thought.
     if (target.isWorkingOn(place.address)) return deliver("steer", "steer");
-    await this.#log.setWake(ids, "jev_no");
+    await this.#log.setWake(ids, "judge_no");
   }
 
-  async #askJev(target: WakeTarget, place: PlaceInfo, events: UndecidedEvent[], settings: WakerSettings): Promise<JevAnswer> {
-    const earlier = await this.#log.messagesBefore(place.address, events[0]!.at, settings.jevContextMessages);
-    const latest: JevItem[] = [];
+  async #askJudge(judge: Judge, target: WakeTarget, place: PlaceInfo, events: UndecidedEvent[], settings: WakerSettings): Promise<JudgeAnswer> {
+    const earlier = await this.#log.messagesBefore(place.address, events[0]!.at, settings.judgeContextMessages);
+    const latest: JudgeItem[] = [];
     for (const event of events) latest.push(await this.#describe(event, target.name));
     const input = {
       name: target.name,
@@ -131,7 +133,7 @@ export class Waker {
     for (const delay of [0, 2_000, 8_000]) {
       if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
       try {
-        return await this.#jev.judge(input);
+        return await judge.judge(input);
       } catch (error) {
         lastError = error;
       }
@@ -139,8 +141,8 @@ export class Waker {
     throw lastError;
   }
 
-  /** An event as Jev sees it: what happened, with the current state of the message it is about. */
-  async #describe(event: UndecidedEvent, name: string): Promise<JevItem> {
+  /** An event as the judge sees it: what happened, with the current state of the message it is about. */
+  async #describe(event: UndecidedEvent, name: string): Promise<JudgeItem> {
     const author = event.person_name ?? event.person ?? "unknown";
     const time = new Date(event.at).toISOString();
     const message = event.message ? await this.#log.message(event.message) : undefined;
@@ -177,7 +179,7 @@ function toWakeEvent(event: UndecidedEvent): WakeEvent {
   };
 }
 
-function messageItem(message: LoggedMessage, name: string): JevItem {
+function messageItem(message: LoggedMessage, name: string): JudgeItem {
   return {
     what: message.deleted_at ? "message (since deleted)" : "message",
     author: message.from_me ? `${name} (me)` : (message.person_name ?? message.person ?? "unknown"),

@@ -2,13 +2,15 @@ import { randomUUID } from "node:crypto";
 import { existsSync, unlinkSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
+import type { Models } from "@earendil-works/pi-ai";
 import { Agent, openDatabase } from "../agent/agent.ts";
+import { createJudge } from "../agent/judge.ts";
 import { loadChannel } from "../channels/load.ts";
 import type { Address, ChannelAdapter, ChannelConfig } from "../core/channel.ts";
+import type { Judge } from "../core/judge.ts";
 import type { Sql } from "../core/sql.ts";
 import type { PlaceWake, WakeTarget } from "../core/wake.ts";
 import { Gateway } from "../gateway/gateway.ts";
-import { Jev } from "../gateway/jev.ts";
 import { MessageLog } from "../gateway/log.ts";
 import { ControlServer } from "./control.ts";
 import { type BotDefinition, type BotPaths, botPaths } from "./definition.ts";
@@ -41,7 +43,8 @@ export interface BotEnvironment {
   dataDir: string;
   /** Directory with the pb command. */
   binDir: string;
-  jevApiKey: string;
+  /** pi's model layer, shared by all bots of the process. */
+  models: Models;
 }
 
 type Print = (message: string, data?: Record<string, unknown>) => void;
@@ -60,6 +63,8 @@ export class Bot implements WakeTarget {
   readonly #gateway: Gateway;
   readonly #timers: Timers;
   readonly #agent: Agent;
+  /** Undefined when bot.json says "judge": "off". */
+  #judge: Judge | undefined;
   readonly #control: ControlServer;
   /** Which place each wake submission is about, for "is the bot working on this place". */
   readonly #submissionPlaces = new Map<string, Address>();
@@ -76,6 +81,7 @@ export class Bot implements WakeTarget {
     gateway: Gateway;
     timers: Timers;
     agent: Agent;
+    judge: Judge | undefined;
   }) {
     this.id = init.id;
     this.paths = init.paths;
@@ -86,6 +92,7 @@ export class Bot implements WakeTarget {
     this.#gateway = init.gateway;
     this.#timers = init.timers;
     this.#agent = init.agent;
+    this.#judge = init.judge;
     this.#control = new ControlServer(init.paths.socket, this.#routes());
     this.#agent.onRunChange((inputs) => {
       if (!inputs) this.#touched.clear();
@@ -130,26 +137,25 @@ export class Bot implements WakeTarget {
       if (!bot) throw new Error("the bot is still starting");
       return bot;
     };
-    const settings = () => (bot ? bot.#definition.settings : definition.settings);
-    const gateway = new Gateway(log, new Jev(env.jevApiKey), settings, print);
+    const current = () => (bot ? bot.#definition : definition);
+    const settings = () => current().settings;
+    const judge = createJudge(definition.judge, env.models, () => current().model);
+    const gateway = new Gateway(log, () => (bot ? bot.#judge : judge), settings, print);
     const timers = await Timers.open(sql, () => settings().fallbackWakeMinutes, (timer) => self().#deliverTimer(timer), print);
-    const facts = (): PromptFacts => {
-      const current = bot ? bot.#definition : definition;
-      return {
-        id,
-        name: current.name,
-        paths,
-        dataDir: env.dataDir,
-        pb: `${env.binDir}/pb`,
-        node: process.execPath,
-        fallbackWakeMinutes: current.settings.fallbackWakeMinutes,
-        accounts: gateway.channels.map((channel) => ({ channel: channel.id, ...(channel.me ? { me: channel.me } : {}) })),
-      };
-    };
+    const facts = (): PromptFacts => ({
+      id,
+      name: current().name,
+      paths,
+      dataDir: env.dataDir,
+      pb: `${env.binDir}/pb`,
+      node: process.execPath,
+      fallbackWakeMinutes: current().settings.fallbackWakeMinutes,
+      accounts: gateway.channels.map((channel) => ({ channel: channel.id, ...(channel.me ? { me: channel.me } : {}) })),
+    });
     const agent = await Agent.open({
       database: sql,
+      models: env.models,
       model: definition.model,
-      modelsStore: paths.modelsStore,
       thinking: definition.thinking,
       compaction: () => settings().compaction,
       workspace: paths.workspace,
@@ -176,7 +182,7 @@ export class Bot implements WakeTarget {
     });
     opened(agent);
 
-    bot = new Bot({ id, paths, definition, env, print, sql, gateway, timers, agent });
+    bot = new Bot({ id, paths, definition, env, print, sql, gateway, timers, agent, judge });
     // Crash test: with this file in the bot folder, the process dies right after the platform accepts the next send,
     // before the outbox records it. The next start must find that message instead of sending it again.
     gateway.outbox.afterPlatformSend = (sendId) => {
@@ -201,7 +207,7 @@ export class Bot implements WakeTarget {
       await gateway.stop();
       throw error;
     }
-    print("bot started", { name: definition.name, model: definition.model, channels: adapters.map((adapter) => adapter.id) });
+    print("bot started", { name: definition.name, model: definition.model, judge: definition.judge, channels: adapters.map((adapter) => adapter.id) });
     return bot;
   }
 
@@ -233,8 +239,9 @@ export class Bot implements WakeTarget {
       if (!running) await this.#gateway.addChannel(await this.#loadChannel(channel, next.name));
     }
     this.#definition = next;
+    if (before.judge !== next.judge) this.#judge = createJudge(next.judge, this.#env.models, () => this.#definition.model);
     if (before.settings.fallbackWakeMinutes !== next.settings.fallbackWakeMinutes) await this.#timers.resetFallback();
-    this.#print("definition applied", { name: next.name, model: next.model, channels: next.channels.map((channel) => channel.id) });
+    this.#print("definition applied", { name: next.name, model: next.model, judge: next.judge, channels: next.channels.map((channel) => channel.id) });
   }
 
   #loadChannel(config: ChannelConfig, botName = this.#definition.name): Promise<ChannelAdapter> {
@@ -346,6 +353,7 @@ export class Bot implements WakeTarget {
         id: this.id,
         name: this.#definition.name,
         model: this.#definition.model,
+        judge: this.#definition.judge,
         busy: this.#agent.runInputs !== undefined,
         channels: this.#gateway.channels.map((channel) => ({ id: channel.id, me: channel.me?.address })),
       }),

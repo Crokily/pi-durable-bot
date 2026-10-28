@@ -28,7 +28,7 @@ export function workSection(facts: PromptFacts): string {
   const accounts = facts.accounts.map((account) => `  - ${account.channel}: ${account.me ? account.me.address : "(not connected yet)"}`).join("\n");
   return `# How you work
 - You are a coworker on a team. You listen to every message in the places you were invited to (channels, DMs, group chats). Every event goes into the message log: messages that do not mention you, edits, deletions, reactions, people joining, and your own messages.
-- You are woken when there is something for you: someone mentions you or sends you a DM; Jev judges that people are talking about something you are responsible for and you need to respond; a time you set comes; or the fallback check-in. A wake message tells you only where, who, why, the time of each new event and the time now. Read the content yourself in the log.
+- You are woken when there is something for you: someone mentions you or sends you a DM; the judge finds that people are talking about something you are responsible for and you need to respond (with the judge off, every message that does not mention you comes to you); a time you set comes; or the fallback check-in. A wake message tells you only where, who, why, the time of each new event and the time now. Read the content yourself in the log.
 - While you are working on a place, new events there come to you as "[new events]".
 - You decide whether to speak, what to say, where and when. You also decide whether a message is out of date and whether it still needs anything. A coworker does not need to answer in seconds: you can think and do the work first, then reply.
 - Your answer text is not sent to anyone. To speak in a channel, use send. To add a reaction, use react. For other platform features, use call.
@@ -69,9 +69,9 @@ ${LOG_SCHEMA}
 export function folderSection(facts: PromptFacts): string {
   const paths = facts.paths;
   return `# Your folder: ${paths.dir}
-- bot.json: your definition: name, model, thinking, channels (channel accounts), settings. Changes take effect within a few seconds. If it has an error, the error goes into bot.json.error and the old definition stays in use.
+- bot.json: your definition: name, model, thinking, judge, channels (channel accounts), settings. model is "provider/modelId". judge decides which messages that do not mention you wake you: "main" (your own model judges), "off" (all of them), or a classifier "provider/modelId" such as typesafe/jev-latest. Models and logins are pi's: ~/.pi/agent/auth.json, and ~/.pi/agent/models.json for OpenAI-compatible and local endpoints. Changes take effect within a few seconds. If it has an error, the error goes into bot.json.error and the old definition stays in use.
 - persona.md: your personality and how you talk. It is read before each request, so changes take effect at once.
-- responsibilities.md: what you are responsible for. Jev uses it to judge whether an event that does not mention you is about you. When your responsibilities change, update it.
+- responsibilities.md: what you are responsible for. The judge uses it to decide whether an event that does not mention you is about you. When your responsibilities change, update it.
 - notes.md: your notes. After you turn the page, you find what you need again from them and the message log.
 - workspace/: your working directory.
 - Other bots are in ${facts.dataDir}, one subfolder per bot. You can change their definitions. A new folder with a bot.json is a new bot.`;
@@ -150,9 +150,12 @@ export function renderPlaceWake(wake: PlaceWake, status: ContextStatus): string 
       break;
     case "relevant":
       why =
-        wake.jev && "error" in wake.jev
-          ? `no mention. Jev could not judge this time (${wake.jev.error}), so it comes to you`
-          : `no mention. Jev judged that it is about what you are responsible for and you need to respond (related ${wake.jev?.related.toFixed(2)}, respond ${wake.jev?.respond.toFixed(2)})`;
+        wake.judged && "error" in wake.judged
+          ? `no mention. The judge could not decide this time (${wake.judged.error}), so it comes to you`
+          : `no mention. The judge found that it is about what you are responsible for and you need to respond (related ${wake.judged?.related.toFixed(2)}, respond ${wake.judged?.respond.toFixed(2)})`;
+      break;
+    case "heard":
+      why = "no mention. You have no judge set, so every message comes to you";
       break;
   }
   const place = wake.place;

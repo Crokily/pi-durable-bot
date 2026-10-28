@@ -1,6 +1,6 @@
 import type { Address, ChannelAdapter, ChannelSink } from "../core/channel.ts";
+import type { Judge } from "../core/judge.ts";
 import type { WakeTarget } from "../core/wake.ts";
-import type { Jev } from "./jev.ts";
 import type { MessageLog } from "./log.ts";
 import { Outbox, type SendResult } from "./outbox.ts";
 import { Waker, type WakerSettings } from "./waker.ts";
@@ -25,10 +25,10 @@ export class Gateway {
   #heartbeat?: NodeJS.Timeout;
   #started = false;
 
-  constructor(log: MessageLog, jev: Jev, settings: () => WakerSettings, print: Print) {
+  constructor(log: MessageLog, judge: () => Judge | undefined, settings: () => WakerSettings, print: Print) {
     this.log = log;
     this.#print = print;
-    this.#waker = new Waker(log, jev, settings, print);
+    this.#waker = new Waker(log, judge, settings, print);
     this.#outbox = new Outbox(log, (address) => this.adapterFor(address), (channel, eventId, raw) => this.#receive(channel, eventId, raw), print);
   }
 

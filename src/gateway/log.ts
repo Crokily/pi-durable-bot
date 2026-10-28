@@ -95,7 +95,7 @@ export const LOG_SCHEMA = `Times are Unix ms. Columns that hold an address (plac
 - gw_events(id, channel, kind, at, place, thread, message, person, from_me, mentions_me, text, raw, wake)
   Everything that happened, in order: kind is message, edit, delete, reaction_added, reaction_removed, join, leave, update (a change to a message that is not its text, for example a link preview), command, interaction, or another word the channel uses.
   text: the message text for message and edit, the emoji for reactions. from_me = 1: done by you (for update: a change to your own message). raw: the platform's data (JSON), for details and for call.
-  wake: how the gateway handled the event: self (yours, no notice), log (only logged), mention, dm, relevant, jev_no (Jev saw no need), steer. NULL: not decided yet.
+  wake: how the gateway handled the event: self (yours, no notice), log (only logged), mention, dm, relevant (the judge saw a need), judge_no (the judge saw none), heard (no judge set), steer. NULL: not decided yet.
 - gw_messages(address, channel, place, thread, person, from_me, mentions_me, text, mentions, files, at, edited_at, deleted_at, send_id, raw)
   One row per message with its current text. thread: the thread the message is in; a message that starts a thread has its own address there.
   deleted_at is set for deleted messages; the text stays. mentions and files are JSON.
@@ -199,7 +199,7 @@ export class MessageLog {
     });
   }
 
-  // ---- Reads for backfill and Jev ----
+  // ---- Reads for backfill and the judge ----
 
   async newestMessage(place: Address): Promise<Address | undefined> {
     const row = await this.sql.get<{ address: string }>("SELECT address FROM gw_messages WHERE place = ? ORDER BY at DESC LIMIT 1", place);

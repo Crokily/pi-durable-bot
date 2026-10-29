@@ -60,7 +60,7 @@ ${accounts}
 # This computer
 - It is yours to work on: ${facts.machine.os}, host ${facts.machine.hostname}, user ${facts.machine.user}. The bash tool runs ${facts.machine.shell}.
 - You have all the permissions of this user${facts.machine.sudo ? ", and sudo works without a password" : ""}. Your actions need no approval. You can install what you need.
-- The screen: if this computer has a desktop, use it like a person. See it with screenshots (the read tool shows you an image) and use the mouse and keyboard, with tools you find, install or write: the apps and the browser on it, with the logins people made there. People can watch it and take over at any time. The gateway usually runs as a background service, so your shell may not have the desktop's environment (such as DISPLAY). If there is no desktop, work without a screen, and ask a person before you set up a virtual one.
+- The screen: if this computer has a desktop, use it like a person. See it with screenshots (the read tool shows you an image) and use the mouse and keyboard, with tools you find, install or write: the apps and the browser on it, with the logins people made there. People can watch it and take over at any time. The gateway usually runs as a background service, so your shell may not have the desktop's environment (such as DISPLAY). If there is no desktop, work without a screen until a task needs one, such as signing up for a chat app's tokens. Then ask the person which way they want, and say what each costs: a virtual desktop (for example Xvfb and a browser, with a VNC or noVNC server) works like a real one, and they can watch it and sign in themselves over VNC, but it needs sudo, several hundred MB of packages, and an SSH tunnel or an open port for them to see it; a browser-only tool such as agent-browser is lighter, but it drives only the browser, they cannot watch it or take over, sites detect it more often, and sign-ins go through you; or they do the browser steps on their own computer while you guide them, and give you what you need.
 - Working directory: ${facts.paths.workspace}`;
 }
 
@@ -84,7 +84,7 @@ export function folderSection(facts: PromptFacts): string {
 - responsibilities.md: what you are responsible for. The judge uses it to decide whether an event that does not mention you is about you. When your responsibilities change, update it.
 - notes.md: your notes. After you turn the page, you find what you need again from them and the message log.
 - workspace/: your working directory.
-- Channel types: slack, terminal (the person who set you up, in their terminal), test. How to connect a new chat app yourself is in ${facts.docs}/channels/; put its tokens in ${facts.secretsDir}, readable only by this user.
+- Channel types: slack, terminal (the person who set you up, in their terminal), test. How to connect a new chat app yourself is in ${facts.docs}/channels/; put its tokens in ${facts.secretsDir}, readable only by this user. When the person has to give you secrets, such as tokens they copied, ask in the terminal channel with call <its channel id> ask-secret {"text": "…", "file": "slack.env", "keys": ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN"]}: pots chat asks for each key without showing it and writes it to that file in ${facts.secretsDir}, and you get a message that names the keys it wrote. You never see the values, so they stay out of your log.
 - Other bots are in ${facts.botsDir}, one subfolder per bot. You can change their definitions. A new folder with a bot.json is a new bot.`;
 }
 

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type FakeModel, startFakeModel } from "./support/fake-model.ts";
@@ -117,6 +117,28 @@ describe("pots", { timeout: 120_000 }, () => {
     const answer = await pots("chat", "--message", "are you there?", "--timeout", "60");
     expect(answer).toBe("Coworker: ack: [wake] DM\n");
     await waitFor(() => gateway.query("SELECT 1 FROM gw_events WHERE channel = 'terminal' AND text = 'are you there?'").length === 1, { what: "the message in the log" });
+  });
+
+  it("asks for secrets in pots chat, where the bot does not see them", async () => {
+    const params = { text: "Your two Slack tokens, please", file: "slack.env", keys: ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN"] };
+    const asked = JSON.parse(await pots("call", "terminal", "ask-secret", JSON.stringify(params))) as { message: string; asked: unknown };
+    expect(asked.asked).toEqual({ file: "slack.env", keys: ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN"] });
+    expect(await fails("call", "terminal", "ask-secret", JSON.stringify({ ...params, file: "../bot.json" }))).toBe(
+      'ERROR\n  ask-secret: "file" must be a file name in the secrets folder, such as "slack.env"',
+    );
+
+    const file = join(gateway.home, "secrets", "slack.env");
+    const chat = await gateway.run(["chat"], { input: "xapp-hidden-1\nxoxb-hidden-2\n" });
+    expect(chat.stdout).toContain("Coworker: Your two Slack tokens, please");
+    expect(chat.stdout).toContain(`wrote SLACK_APP_TOKEN, SLACK_BOT_TOKEN to ${file}`);
+    expect(chat.stdout).not.toContain("hidden");
+    expect(readFileSync(file, "utf8")).toBe("SLACK_APP_TOKEN=xapp-hidden-1\nSLACK_BOT_TOKEN=xoxb-hidden-2\n");
+    if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
+
+    // The bot gets a message that names the keys; the values reach neither the bot's log nor the model.
+    await waitFor(() => gateway.query("SELECT 1 FROM gw_events WHERE channel = 'terminal' AND text LIKE '(pots chat: wrote %'").length === 1, { what: "the answer in the log" });
+    expect(gateway.query("SELECT 1 FROM gw_events WHERE text LIKE '%hidden%' OR raw LIKE '%hidden%'")).toEqual([]);
+    expect(JSON.stringify(model.requests)).not.toContain("hidden");
   });
 
   it("says what is wrong in one line", async () => {

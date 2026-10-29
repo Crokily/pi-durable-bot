@@ -3,8 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Api, AuthEvent, AuthInteraction, AuthPrompt, AuthType, Model, Models } from "@earendil-works/pi-ai";
-import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Console, Effect, Redacted } from "effect";
+import { type Context, Console, Effect, Redacted } from "effect";
 import { Prompt } from "effect/cli";
 import { userError } from "./control.ts";
 
@@ -61,14 +60,21 @@ const chooseModel = (available: readonly Model<Api>[]) =>
 
 /** Run pi's login flow for a provider in this terminal. */
 const login = (models: Models, providerId: string, type: AuthType) =>
-  Effect.tryPromise({
-    try: () => models.login(providerId, type, terminalInteraction),
-    catch: (error) => userError(`login failed: ${error instanceof Error ? error.message : String(error)}`),
-  }).pipe(Effect.tap(() => Console.log("Signed in.")));
+  Effect.gen(function* () {
+    const terminal = yield* Effect.context<Prompt.Environment>();
+    yield* Effect.tryPromise({
+      try: () => models.login(providerId, type, terminalInteraction(terminal)),
+      catch: (error) => userError(`login failed: ${error instanceof Error ? error.message : String(error)}`),
+    });
+    yield* Console.log("Signed in.");
+  });
 
-/** pi's login callbacks, answered with prompts in this terminal. */
-const terminalInteraction: AuthInteraction = {
-  prompt: (prompt: AuthPrompt) => Effect.runPromise(Prompt.run(toPrompt(prompt)).pipe(Effect.provide(NodeServices.layer))),
+/**
+ * pi's login callbacks, answered with prompts in this terminal. They use the same terminal as the other prompts: a
+ * second one would let the first switch raw mode off a moment later, and the arrow keys would print as ^[[B.
+ */
+const terminalInteraction = (terminal: Context.Context<Prompt.Environment>): AuthInteraction => ({
+  prompt: (prompt: AuthPrompt) => Effect.runPromiseWith(terminal)(Prompt.run(toPrompt(prompt))),
   notify: (event: AuthEvent) => {
     if (event.type === "auth_url") {
       console.log(`\nOpen this page to sign in${event.instructions ? ` (${event.instructions})` : ""}:\n  ${event.url}\n`);
@@ -81,7 +87,7 @@ const terminalInteraction: AuthInteraction = {
       if (event.type === "info") for (const link of event.links ?? []) console.log(`  ${link.label ?? ""} ${link.url}`);
     }
   },
-};
+});
 
 function toPrompt(prompt: AuthPrompt): Prompt.Prompt<string> {
   switch (prompt.type) {

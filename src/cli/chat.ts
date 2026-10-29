@@ -1,15 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { createInterface } from "node:readline";
+import { createInterface, type Interface } from "node:readline";
+import { Writable } from "node:stream";
 import { Effect, Option } from "effect";
 import { Command, Flag } from "effect/cli";
-import { terminalDir, terminalPerson } from "../channels/terminal/index.ts";
+import { type SecretRequest, secretRequest, terminalDir, terminalPerson } from "../channels/terminal/index.ts";
 import { platformFile } from "../channels/test/index.ts";
+import { writeSecrets } from "../core/env-file.ts";
+import { SECRETS_DIR } from "../core/home.ts";
 import { botDir, control, resolveBot, userError } from "./control.ts";
 
 // pots chat: talk to a bot in this terminal. What you type goes into its terminal channel; what it sends there shows up
-// here. The channel is a file, so messages wait while the bot is not running.
+// here. The channel is a file, so messages wait while the bot is not running. When the bot asks for secrets, such as a
+// chat app's tokens, they are typed here without being shown and go straight to the secrets folder.
 
 interface Line {
   id: string;
@@ -19,6 +23,10 @@ interface Line {
   person: string;
   text?: string;
   emoji?: string;
+  /** A bot message that asks for secrets. */
+  secret?: SecretRequest;
+  /** The id of the request for secrets that this message answers. */
+  answers?: string;
 }
 
 const dim = (text: string) => (process.stdout.isTTY ? `\x1b[2m${text}\x1b[0m` : text);
@@ -36,9 +44,9 @@ const terminalOf = (id: string) =>
 
 type Terminal = Effect.Success<ReturnType<typeof terminalOf>>;
 
-function say(terminal: Terminal, text: string): void {
+function say(terminal: Terminal, text: string, answers?: string): void {
   mkdirSync(dirname(terminal.file), { recursive: true });
-  const line: Line = { id: `m-${randomUUID()}`, type: "message", at: Date.now(), place: terminal.place, person: terminal.person, text };
+  const line: Line = { id: `m-${randomUUID()}`, type: "message", at: Date.now(), place: terminal.place, person: terminal.person, text, ...(answers ? { answers } : {}) };
   appendFileSync(terminal.file, `${JSON.stringify(line)}\n`);
 }
 
@@ -68,6 +76,24 @@ function render(terminal: Terminal, line: Line): string | undefined {
   return undefined;
 }
 
+/** The requests for secrets in these lines that no line answers yet. */
+function unanswered(lines: Line[]): Line[] {
+  const answered = new Set(lines.map((line) => line.answers));
+  return lines.filter((line) => line.person === "bot" && line.secret && !answered.has(line.id));
+}
+
+/** Write what the person typed for a request to its file in the secrets folder, and tell the bot which keys came. */
+function answerSecret(terminal: Terminal, request: Line, values: Record<string, string>): string {
+  const { file, keys } = secretRequest({ ...request.secret });
+  const path = join(SECRETS_DIR, file);
+  const given = keys.filter((key) => values[key]);
+  const skipped = keys.filter((key) => !values[key]);
+  if (given.length > 0) writeSecrets(path, Object.fromEntries(given.map((key) => [key, values[key]!])));
+  const text = [given.length > 0 ? `wrote ${given.join(", ")} to ${path}` : "", skipped.length > 0 ? `skipped ${skipped.join(", ")}` : ""].filter(Boolean).join("; ");
+  say(terminal, `(pots chat: ${text})`, request.id);
+  return text;
+}
+
 interface Status {
   busy: boolean;
   lastError?: { at: number; error: string };
@@ -89,15 +115,74 @@ export const chatInteractive = (id: string) =>
     if ((yield* Effect.promise(() => statusOf(id))) === undefined) console.log(dim(`${terminal.name} is not running. Messages wait until it starts (pots service install, or pots start).`));
     console.log(dim(`Talking to ${terminal.name}. Ctrl+C to leave.`));
     yield* Effect.callback<void>((resume) => {
-      const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: "> " });
+      // One readline at a time: the chat's, or a fresh one for each request for secrets, with its echo muted and no
+      // history. A secret never shares the chat's half-typed text, its history or its deleted text (Ctrl+U, then Ctrl+Y).
+      const muted = new Writable({ write: (_chunk, _encoding, done) => done() });
+      Object.defineProperty(muted, "columns", { get: () => process.stdout.columns });
+      let replacing = false;
+      const onClose = () => {
+        if (!replacing) resume(Effect.void);
+      };
+      const chatLine = (typed = "") => {
+        const next = createInterface({ input: process.stdin, output: process.stdout, prompt: "> " });
+        next.on("line", onChat).on("close", onClose);
+        next.prompt();
+        if (typed) next.write(typed);
+        return next;
+      };
+      const secretLine = () =>
+        createInterface({ input: process.stdin, output: muted, terminal: process.stdin.isTTY === true, historySize: 0 })
+          .on("line", onSecret)
+          .on("close", onClose);
+      const replace = (make: () => Interface) => {
+        replacing = true;
+        rl.close();
+        replacing = false;
+        rl = make();
+      };
       let offset = start.offset;
       let busy: boolean | undefined;
       let errorShown = since;
+      const pending = unanswered(start.lines);
+      let asking: { request: Line; keys: string[]; values: Record<string, string>; typed: string } | undefined;
+      const showPrompt = () => {
+        if (asking) process.stdout.write(`${asking.keys[0]}: `);
+        else rl.prompt(true);
+      };
       const print = (text: string) => {
         process.stdout.write("\r\x1b[2K");
         console.log(text);
-        rl.prompt(true);
+        showPrompt();
       };
+      const askNext = () => {
+        const request = pending.shift();
+        if (!request?.secret) return;
+        asking = { request, keys: [...request.secret.keys], values: {}, typed: asking?.typed ?? rl.line };
+        replace(secretLine);
+        print(dim(`${terminal.name} asks for ${request.secret.keys.join(", ")}. What you type is not shown; it goes only to ${join(SECRETS_DIR, request.secret.file)}, and ${terminal.name} does not see it. An empty line skips one.`));
+      };
+      function onChat(input: string) {
+        if (input.trim()) say(terminal, input);
+        rl.prompt();
+      }
+      function onSecret(input: string) {
+        if (!asking) return;
+        process.stdout.write("\n");
+        const key = asking.keys.shift()!;
+        if (input.trim()) asking.values[key] = input.trim();
+        if (asking.keys.length > 0) return showPrompt();
+        const done = asking;
+        try {
+          console.log(dim(answerSecret(terminal, done.request, done.values)));
+        } catch (error) {
+          console.log(`Could not save it: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        if (pending.length > 0) return askNext();
+        asking = undefined;
+        replace(() => chatLine(done.typed));
+      }
+      let rl = chatLine();
+      askNext();
       const watch = setInterval(() => {
         const next = readFrom(terminal, offset);
         offset = next.offset;
@@ -105,6 +190,8 @@ export const chatInteractive = (id: string) =>
           const text = line.person === "bot" ? render(terminal, line) : undefined;
           if (text) print(text);
         }
+        pending.push(...unanswered(next.lines));
+        if (!asking) askNext();
       }, 300);
       const status = setInterval(() => {
         void statusOf(id).then((status) => {
@@ -116,12 +203,6 @@ export const chatInteractive = (id: string) =>
           }
         });
       }, 1_000);
-      rl.on("line", (input) => {
-        if (input.trim()) say(terminal, input);
-        rl.prompt();
-      });
-      rl.on("close", () => resume(Effect.void));
-      rl.prompt();
       return Effect.sync(() => {
         clearInterval(watch);
         clearInterval(status);

@@ -30,7 +30,7 @@ function firstWake(user: string, address: string, about: string | undefined): st
     about
       ? `They described you in one sentence: "${about}". Write persona.md and responsibilities.md from it, and refine them as you learn more.`
       : "They did not say what you are for yet. Ask them, then write persona.md and responsibilities.md.",
-    `Say hello there. Then check that you can see and use this computer's screen. If something that only ${user} can do stands in the way, such as a permission the system asks for, help them do it now, step by step. If there is no desktop, tell them, and work without one.`,
+    `Say hello there. Then check that you can see and use this computer's screen. If something that only ${user} can do stands in the way, such as a permission the system asks for, help them do it now, step by step. If there is no desktop, tell them, and work without one until you need a screen.`,
     `Then find out which chat apps you should work in, for example Slack, and connect them yourself with this computer. Ask ${user} only for what you cannot do yourself, such as signing in or approving an install.`,
   ].join("\n");
 }

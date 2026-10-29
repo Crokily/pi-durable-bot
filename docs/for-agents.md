@@ -55,7 +55,7 @@ pots init
    ```
    Then tell your person to run `pots chat` to meet the bot.
 
-On a Linux server where the service should run without anyone logged in, `pots init --system` installs a system service instead (it needs sudo).
+On Linux, `pots init` turns on lingering for the user (with `sudo` when the system asks for it), so the bot keeps running after your person logs out of SSH; there is no need to run `loginctl enable-linger` yourself. `pots init --system` installs a system service instead (it needs sudo).
 
 ## After setup
 

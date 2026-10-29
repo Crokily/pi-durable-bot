@@ -19,9 +19,9 @@ Slack works today, and so does the person's own terminal (`pots chat`). Discord,
 
 ## The one thing to get right: the bot sets itself up
 
-Once `pots init` is done, **the bot connects its chat apps itself**. It creates the Slack app, gets the tokens, writes its own `bot.json` and asks the person only for what it cannot do, such as signing in or approving an install.
+Once `pots init` is done, **the bot connects its chat apps itself**. For each app, it creates what that platform needs (on Slack, a Slack app), gets the tokens, writes its own `bot.json` and asks the person only for what it cannot do, such as signing in or approving an install.
 
-So do not create a Slack app, write a manifest, collect tokens or edit `~/.pots/` by hand for your person, and do not tell them to do any of that first. Your job is to get Pots installed and `pots init` done. After that, hand the person over to their bot: they say "join our Slack" in `pots chat`, and the bot does the rest.
+So do not create the chat app (such as a Slack app), write a manifest, collect tokens or edit `~/.pots/` by hand for your person, and do not tell them to do any of that first. Your job is to get Pots installed and `pots init` done. After that, hand the person over to their bot: they say "join our Slack" in `pots chat`, and the bot does the rest.
 
 On a computer without a desktop, such as a cloud server reached over SSH, the bot still does this. It explains the choices and lets the person pick:
 

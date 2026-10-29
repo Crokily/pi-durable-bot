@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Api, AuthEvent, AuthInteraction, AuthPrompt, AuthType, Model, Models } from "@earendil-works/pi-ai";
+import type { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { type Context, Console, Effect, Redacted } from "effect";
 import { Prompt } from "effect/cli";
 import { userError } from "./control.ts";
@@ -43,38 +44,66 @@ export const setUpModel = (models: Models) =>
       }),
     );
     yield* login(models, providerId, way);
-    return yield* chooseModel(yield* Effect.promise(() => models.getAvailable(providerId)));
+    return yield* chooseModel(yield* Effect.promise(() => models.getAvailable(providerId)), yield* Effect.promise(() => piDefaultModel(providerId)));
   });
 
-const chooseModel = (available: readonly Model<Api>[]) =>
+/** Ask for one of these models. pi's default model for the provider, when there is one, comes first, as pi picks it. */
+const chooseModel = (available: readonly Model<Api>[], recommended?: string) =>
   Effect.gen(function* () {
     if (available.length === 0) return yield* Effect.fail(userError("no models are available with this login"));
+    const first = available.filter((model) => model.id === recommended);
     return yield* Prompt.run(
       Prompt.Select({
         message: "Which model should it think with? A strong model that calls tools well works best.",
         maxPerPage: 15,
-        choices: available.map((model) => ({ title: `${model.provider}/${model.id}`, value: `${model.provider}/${model.id}`, description: model.name })),
+        choices: [...first, ...available.filter((model) => model.id !== recommended)].map((model) => ({
+          title: `${model.provider}/${model.id}${model.id === recommended ? " (recommended)" : ""}`,
+          value: `${model.provider}/${model.id}`,
+          description: model.name,
+        })),
       }),
     );
   });
+
+/** The model pi itself picks after a login to this provider. */
+async function piDefaultModel(providerId: string): Promise<string | undefined> {
+  const { piModule } = await import("../agent/models.ts");
+  const { defaultModelPerProvider } = (await import(piModule("./core/model-resolver.js"))) as { defaultModelPerProvider: Record<string, string> };
+  return defaultModelPerProvider[providerId];
+}
 
 /** Run pi's login flow for a provider in this terminal. */
 const login = (models: Models, providerId: string, type: AuthType) =>
   Effect.gen(function* () {
     const terminal = yield* Effect.context<Prompt.Environment>();
+    const deviceId = yield* Effect.promise(piDeviceId);
     yield* Effect.tryPromise({
-      try: () => models.login(providerId, type, terminalInteraction(terminal)),
+      try: () => models.login(providerId, type, terminalInteraction(terminal), { getDeviceId: () => deviceId }),
       catch: (error) => userError(`login failed: ${error instanceof Error ? error.message : String(error)}`),
     });
     yield* Console.log("Signed in.");
   });
 
 /**
+ * This installation's ID in pi's settings, as the pi command line keeps it. Some logins send it: Sign in with ChatGPT
+ * fails without one.
+ */
+async function piDeviceId(): Promise<string> {
+  const { piModule } = await import("../agent/models.ts");
+  const { SettingsManager: Settings } = (await import(piModule("./core/settings-manager.js"))) as { SettingsManager: typeof SettingsManager };
+  const settings = Settings.create(process.cwd());
+  const id = settings.getOrCreateDeviceId();
+  await settings.flush();
+  return id;
+}
+
+/**
  * pi's login callbacks, answered with prompts in this terminal. They use the same terminal as the other prompts: a
  * second one would let the first switch raw mode off a moment later, and the arrow keys would print as ^[[B.
  */
 const terminalInteraction = (terminal: Context.Context<Prompt.Environment>): AuthInteraction => ({
-  prompt: (prompt: AuthPrompt) => Effect.runPromiseWith(terminal)(Prompt.run(toPrompt(prompt))),
+  // The login can withdraw a prompt, such as "paste the redirect URL" once the browser has called back.
+  prompt: (prompt: AuthPrompt) => Effect.runPromiseWith(terminal)(Prompt.run(toPrompt(prompt)), { signal: prompt.signal }),
   notify: (event: AuthEvent) => {
     if (event.type === "auth_url") {
       console.log(`\nOpen this page to sign in${event.instructions ? ` (${event.instructions})` : ""}:\n  ${event.url}\n`);

@@ -33,9 +33,6 @@ oauth_config:
       - reactions:read
       - reactions:write
       - users:read
-    user:
-      - chat:write
-      - im:write
 settings:
   event_subscriptions:
     bot_events:

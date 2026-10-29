@@ -1,5 +1,7 @@
 // Slack test helper. Acts as the user with SLACK_USER_TOKEN (tests only; the bot never gets this token), and reads
 // or cleans test places with the bot token. Never prints a token.
+// The user token needs user scopes the bot's manifest does not ask for: add chat:write and im:write under OAuth &
+// Permissions → User Token Scopes, reinstall the app, and put the User OAuth Token (xoxp-…) in slack.env as SLACK_USER_TOKEN.
 //
 //   node scripts/slack-test.ts post <channel ID> <text> [thread ts]     prints the message ts
 //   node scripts/slack-test.ts dm <text>                                 to the bot, prints "<channel> <ts>"

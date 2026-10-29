@@ -20,6 +20,9 @@ does the work on its own computer, and speaks up when it should.
 
 </div>
 
+> [!TIP]
+> **Setting this up with an AI agent, such as Claude Code, Codex or Cursor?** Have it read [docs/for-agents.md](https://github.com/Crokily/pi-durable-bot/blob/main/docs/for-agents.md) first. That page explains Pots to your agent and how to set it up. In short: install it and run `pots init`, then the bot connects Slack and your other apps itself.
+
 <p align="center" id="see-it-work">
   <a href="docs/media/demo.mp4"><img src="docs/media/demo.gif" width="900" alt="Pots reads Slack, email, Discord, X and calendars on its own, decides what matters, speaks up in #pricing, and does real work on its own computer"></a>
 </p>
@@ -265,7 +268,7 @@ npm test                  # tests, including a real gateway with a fake model
 npm run tla               # the TLA+ models of the inbox, outbox and waker (needs Java and tla2tools.jar)
 ```
 
-`npm run build` writes the JavaScript that the npm package ships to `dist/`. Set `POTS_HOME` to try things without touching `~/.pots/`. With `OTEL_EXPORTER_OTLP_ENDPOINT` set, the gateway also sends its traces to any OpenTelemetry tool (Jaeger, Grafana Tempo, Honeycomb). Tests, the TLA+ models and traces in detail: [docs/development.md](docs/development.md). Coding agents: read [AGENTS.md](AGENTS.md).
+`npm run build` writes the JavaScript that the npm package ships to `dist/`. Set `POTS_HOME` to try things without touching `~/.pots/`. With `OTEL_EXPORTER_OTLP_ENDPOINT` set, the gateway also sends its traces to any OpenTelemetry tool (Jaeger, Grafana Tempo, Honeycomb). Tests, the TLA+ models and traces in detail: [docs/development.md](docs/development.md). Coding agents: read [AGENTS.md](AGENTS.md). Agents that set Pots up for someone: read [docs/for-agents.md](docs/for-agents.md).
 
 ## Built on
 

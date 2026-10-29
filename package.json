@@ -28,6 +28,7 @@
     "docs/channels",
     "docs/for-agents.md",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "engines": {

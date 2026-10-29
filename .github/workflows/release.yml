@@ -56,6 +56,12 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           [ "v$VERSION" = "$RELEASE_TAG" ] || { echo "Tag $RELEASE_TAG, package.json $VERSION"; exit 1; }
 
+      - name: Release notes from CHANGELOG.md
+        run: |
+          VERSION=${RELEASE_TAG#v}
+          awk -v v="$VERSION" '/^## /{p = index($0, "## " v " ") == 1 || $0 == "## " v; next} p' CHANGELOG.md > release-notes.md
+          [ -s release-notes.md ] || { echo "CHANGELOG.md has no section for $VERSION"; exit 1; }
+
       - name: Publish to npm
         run: |
           if [[ "$RELEASE_TAG" == *-* ]]; then
@@ -68,5 +74,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
+          body_path: release-notes.md
           generate_release_notes: true
           prerelease: ${{ contains(env.RELEASE_TAG, '-') }}

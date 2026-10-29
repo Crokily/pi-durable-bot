@@ -7,7 +7,8 @@ import type { AddressInfo } from "node:net";
 export interface FakeRequest {
   /** The system prompt. */
   readonly system: string;
-  readonly messages: readonly { role: string; content: string; toolCalls?: readonly string[] }[];
+  /** images: how many images the message carries. */
+  readonly messages: readonly { role: string; content: string; images: number; toolCalls?: readonly string[] }[];
   readonly tools: readonly string[];
 }
 
@@ -130,6 +131,7 @@ function toRequest(body: { messages: OpenAiMessage[]; tools?: { function: { name
       .map((message) => ({
         role: message.role,
         content: text(message.content),
+        images: typeof message.content === "string" ? 0 : (message.content ?? []).filter((part) => part.type === "image_url").length,
         ...(message.tool_calls ? { toolCalls: message.tool_calls.map((call) => call.function.name) } : {}),
       })),
     tools: (body.tools ?? []).map((tool) => tool.function.name),

@@ -51,7 +51,7 @@ export function botPaths(dir: string) {
     dir,
     definition: join(dir, "bot.json"),
     definitionError: join(dir, "bot.json.error"),
-    persona: join(dir, "persona.md"),
+    agents: join(dir, "AGENTS.md"),
     responsibilities: join(dir, "responsibilities.md"),
     notes: join(dir, "notes.md"),
     workspace: join(dir, "workspace"),

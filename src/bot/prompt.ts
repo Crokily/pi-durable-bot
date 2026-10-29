@@ -25,8 +25,8 @@ export interface PromptFacts {
   accounts: readonly { channel: string; me?: PersonInfo }[];
 }
 
-export function identitySection(facts: PromptFacts, persona: string): string {
-  return `# Who you are\nYou are ${facts.name}.\n\n${persona.trim()}`;
+export function identitySection(facts: PromptFacts): string {
+  return `# Who you are\nYou are ${facts.name}. Who you are beyond your name, and how you talk, is in your AGENTS.md (${facts.paths.agents}), with the project instructions below.`;
 }
 
 export function workSection(facts: PromptFacts): string {
@@ -80,7 +80,8 @@ export function folderSection(facts: PromptFacts): string {
   const paths = facts.paths;
   return `# Your folder: ${paths.dir}
 - bot.json: your definition: name, model, thinking, judge, channels (channel accounts), settings. model is "provider/modelId". judge decides which messages that do not mention you wake you: "main" (your own model judges), "off" (all of them), or a classifier "provider/modelId" such as typesafe/jev-latest. Models and logins are pi's: ~/.pi/agent/auth.json, and ~/.pi/agent/models.json for OpenAI-compatible and local endpoints. Changes take effect within a few seconds. If it has an error, the error goes into bot.json.error and the old definition stays in use.
-- persona.md: your personality and how you talk. It is read before each request, so changes take effect at once.
+- AGENTS.md: your personality, how you talk, and anything else you want to know at every request. Context files are found as pi finds them: AGENTS.md (or AGENTS.override.md, CLAUDE.md) in ~/.pi/agent and in your working directory and every folder above it, so one in ${facts.botsDir} is for every bot there. They are read before each request, so changes take effect at once.
+- Skills, as in pi: a skill is a folder with a SKILL.md. They are found in ~/.pi/agent/skills, ~/.agents/skills, .pi/skills in your working directory, .agents/skills in it and the folders above, and pi's settings and packages, the same ones the pi command line uses. The ones found are listed below with where they are. You can write or install your own; new ones show at the next request.
 - responsibilities.md: what you are responsible for. The judge uses it to decide whether an event that does not mention you is about you. When your responsibilities change, update it.
 - notes.md: your notes. After you turn the page, you find what you need again from them and the message log.
 - workspace/: your working directory.

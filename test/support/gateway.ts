@@ -70,7 +70,7 @@ export class TestGateway {
           api: "openai-completions",
           apiKey: "fake",
           compat: { supportsDeveloperRole: false, supportsReasoningEffort: false },
-          models: [{ id: "coworker", contextWindow: 128_000 }],
+          models: [{ id: "coworker", contextWindow: 128_000, input: ["text", "image"] }],
         },
       },
     };

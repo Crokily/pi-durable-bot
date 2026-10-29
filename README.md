@@ -66,6 +66,8 @@ It has a real machine with a shell, files, the internet, and a screen it uses li
 
 This is **code mode**: the agent gets a few general tools (`read`, `write`, `edit`, `bash`) plus three channel actions (`send`, `react`, `call`), and builds the rest itself.
 
+It works like a [pi](https://github.com/earendil-works/pi) session: it reads `AGENTS.md` and uses [Agent Skills](https://agentskills.io) from the same places pi does, so the skills you give pi, the bot can use too. Screenshots and photos are shrunk to fit the model, as in pi.
+
 ### 💬 Its own voice
 
 When it speaks, it speaks like a teammate: in the right channel or thread, in its own words, with the file attached. It can reply in a thread, start a new message, DM a person, add a reaction, edit its own message, or call any other platform API.
@@ -76,7 +78,7 @@ It promises to come back, and it does. Timed wakes live in the same database as 
 
 ### 📓 Its own memory
 
-Each bot has one long conversation, across every channel. When the context gets full, the bot decides when to **turn the page**: it writes notes for itself, starts a fresh context, and the notes come with it. The full message log stays on disk, so nothing is lost. Its persona, its responsibilities and its notes are plain files it edits itself.
+Each bot has one long conversation, across every channel. When the context gets full, the bot decides when to **turn the page**: it writes notes for itself, starts a fresh context, and the notes come with it. The full message log stays on disk, so nothing is lost. Its `AGENTS.md`, its responsibilities and its notes are plain files it edits itself.
 
 ### 🛟 Durable by design
 
@@ -230,7 +232,7 @@ One gateway process runs every bot on the machine. Everything lives in `~/.pots/
 | File | What it is |
 |---|---|
 | `bot.json` | Name, model, judge, channel accounts, settings. Edits apply within seconds. |
-| `persona.md` | Personality and voice. The bot maintains it. |
+| `AGENTS.md` | Personality and voice, read the way pi reads AGENTS.md. The bot maintains it. |
 | `responsibilities.md` | What it is responsible for. The judge reads it. The bot maintains it. |
 | `notes.md` | Notes it carries across pages. |
 | `workspace/` | Its working directory. |
@@ -254,6 +256,8 @@ pi-durable-bot runs every day as a teammate in a real workspace. What works toda
 - [x] The screen, mouse and keyboard of its computer, used like a person (computer use), or no screen on a server
 - [x] Any model pi can use: subscription logins, API keys, OpenAI-compatible endpoints, local models
 - [x] A judge you choose: the bot's own model, Jev or another classifier, a local llama.cpp model, or none
+- [x] `AGENTS.md`, Agent Skills and images as in a pi session
+- [ ] MCP servers
 - [ ] More adapters: Discord, Teams, Telegram, email
 - [ ] `pots init` in a web page, for people who do not use a terminal
 

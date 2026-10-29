@@ -5,7 +5,7 @@ import { Console, Effect, Option, Schedule } from "effect";
 import { Command, Flag, Prompt } from "effect/cli";
 import { terminalPerson } from "../channels/terminal/index.ts";
 import { runningGateway } from "../core/home.ts";
-import { setUpModel } from "./ai.ts";
+import { checkModel, setUpModel } from "./ai.ts";
 import { createBot, idFor } from "./bots.ts";
 import { chatInteractive } from "./chat.ts";
 import { control, listBots, userError } from "./control.ts";
@@ -79,14 +79,10 @@ export const initCommand = Command.make(
       const id = idFor(name);
 
       yield* step(2, `Give ${name} an AI`);
-      const model = Option.isSome(input.model)
-        ? input.model.value
-        : interactive
-          ? yield* Effect.flatMap(
-              Effect.promise(async () => (await import("../agent/models.ts")).openModels()),
-              setUpModel,
-            )
-          : yield* Effect.fail(userError("pass --model"));
+      const given = Option.getOrUndefined(input.model);
+      if (given === undefined && !interactive) return yield* Effect.fail(userError("pass --model"));
+      const models = yield* Effect.promise(async () => (await import("../agent/models.ts")).openModels());
+      const model = given === undefined ? yield* setUpModel(models) : yield* checkModel(models, given);
 
       yield* step(3, `In one sentence, what is ${name} for? (optional)`);
       const about = Option.isSome(input.about)

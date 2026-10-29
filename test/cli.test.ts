@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type FakeModel, startFakeModel } from "./support/fake-model.ts";
@@ -173,5 +173,29 @@ describe("pots without a running gateway", { timeout: 120_000 }, () => {
     expect(await fails("send", "test:#general", "hi")).toBe("ERROR\n  say which bot with --bot <id> (bots: coworker, second-bot, second-bot-2)");
     expect(await fails("send", "test:#general", "hi", "--bot", "coworker")).toMatch(/^ERROR\n {2}the bot is not running \(.*\); start it with pots service install or pots start$/);
     expect(await pots("send", "test:#general", "hi", "--bot", "coworker", "--help")).toContain("Send a message.");
+  });
+
+  it("init checks that pi can use the model before it makes a bot", async () => {
+    const init = async (model: string) => {
+      const result = await gateway.run(["init", "--yes", "--name", "Third", "--model", model, "--no-service", "--no-chat"], { env: { PI_CODING_AGENT_DIR: join(gateway.home, "pi") } });
+      return { status: result.status, error: result.stderr.trim() };
+    };
+    expect(await init("nope/x")).toEqual({
+      status: 1,
+      error: 'ERROR\n  nope/x cannot be used: pi has no login or key for "nope" on this computer. Run pots init without --model to sign in, or set it up with the pi command line.',
+    });
+    expect(await init("fake/nope")).toEqual({ status: 1, error: 'ERROR\n  fake/nope cannot be used: "fake" has no model "nope". It has: coworker' });
+    expect(await init("coworker")).toEqual({ status: 1, error: 'ERROR\n  --model must be "provider/modelId", for example anthropic/claude-opus-5-5' });
+    expect(existsSync(join(gateway.home, "bots", "third"))).toBe(false);
+    // Listed, but it does not answer: a server that is not there.
+    const dead = join(gateway.home, "pi-dead");
+    mkdirSync(dead, { recursive: true });
+    writeFileSync(join(dead, "models.json"), JSON.stringify({ providers: { dead: { baseUrl: "http://127.0.0.1:9/v1", api: "openai-completions", apiKey: "x", models: [{ id: "m", contextWindow: 32_768 }] } } }));
+    const silent = await gateway.run(["init", "--yes", "--name", "Third", "--model", "dead/m", "--no-service", "--no-chat"], { env: { PI_CODING_AGENT_DIR: dead } });
+    expect(silent.status).toBe(1);
+    expect(silent.stderr.trim()).toMatch(/^ERROR\n {2}dead\/m cannot be used with this login: .+/);
+    expect(existsSync(join(gateway.home, "bots", "third"))).toBe(false);
+    expect(await init("fake/coworker")).toEqual({ status: 0, error: "" });
+    expect(JSON.parse(readFileSync(join(gateway.home, "bots", "third", "bot.json"), "utf8")).model).toBe("fake/coworker");
   });
 });

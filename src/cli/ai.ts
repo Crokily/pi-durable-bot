@@ -30,7 +30,7 @@ export const setUpModel = (models: Models) =>
         ],
       }),
     );
-    if (way === "existing") return yield* chooseModel(ready);
+    if (way === "existing") return yield* chooseModel(models, ready);
     if (way === "local") return yield* setUpLocal(models);
     const providers = models.getProviders().filter((provider) => (way === "oauth" ? provider.auth.oauth : provider.auth.apiKey?.login));
     const providerId = yield* Prompt.run(
@@ -44,25 +44,78 @@ export const setUpModel = (models: Models) =>
       }),
     );
     yield* login(models, providerId, way);
-    return yield* chooseModel(yield* Effect.promise(() => models.getAvailable(providerId)), yield* Effect.promise(() => piDefaultModel(providerId)));
+    return yield* chooseModel(models, yield* Effect.promise(() => models.getAvailable(providerId)), yield* Effect.promise(() => piDefaultModel(providerId)));
   });
 
-/** Ask for one of these models. pi's default model for the provider, when there is one, comes first, as pi picks it. */
-const chooseModel = (available: readonly Model<Api>[], recommended?: string) =>
+/** Fail unless pi can use this model on this computer, so a bot is never made with a model it cannot use. */
+export const checkModel = (models: Models, model: string) =>
   Effect.gen(function* () {
-    if (available.length === 0) return yield* Effect.fail(userError("no models are available with this login"));
-    const first = available.filter((model) => model.id === recommended);
-    return yield* Prompt.run(
-      Prompt.Select({
-        message: "Which model should it think with? A strong model that calls tools well works best.",
-        maxPerPage: 15,
-        choices: [...first, ...available.filter((model) => model.id !== recommended)].map((model) => ({
-          title: `${model.provider}/${model.id}${model.id === recommended ? " (recommended)" : ""}`,
-          value: `${model.provider}/${model.id}`,
-          description: model.name,
-        })),
-      }),
-    );
+    const slash = model.indexOf("/");
+    if (slash <= 0) return yield* Effect.fail(userError(`--model must be "provider/modelId", for example anthropic/claude-opus-5-5`));
+    const provider = model.slice(0, slash);
+    const id = model.slice(slash + 1);
+    const available = yield* Effect.promise(() => models.getAvailable(provider));
+    const found = available.find((item) => item.id === id);
+    if (found) {
+      const error = yield* tryModel(models, found);
+      return error === undefined ? model : yield* Effect.fail(userError(`${model} cannot be used with this login: ${error}`));
+    }
+    if (available.length === 0) {
+      return yield* Effect.fail(userError(`${model} cannot be used: pi has no login or key for "${provider}" on this computer. Run pots init without --model to sign in, or set it up with the pi command line.`));
+    }
+    const ids = available.map((item) => item.id);
+    return yield* Effect.fail(userError(`${model} cannot be used: "${provider}" has no model "${id}". It has: ${ids.slice(0, 8).join(", ")}${ids.length > 8 ? ", …" : ""}`));
+  });
+
+/**
+ * Ask for one of these models, and try the chosen one: a login does not unlock every model of its provider (a ChatGPT
+ * account cannot use every OpenAI model), and it is better to learn that here than on the bot's first wake. pi's
+ * default model for the provider comes first, marked recommended, when it answers with this login.
+ */
+const chooseModel = (models: Models, available: readonly Model<Api>[], piDefault?: string) =>
+  Effect.gen(function* () {
+    const name = (model: Model<Api>) => `${model.provider}/${model.id}`;
+    let left = [...available];
+    let recommended = left.find((model) => model.id === piDefault);
+    if (recommended && (yield* tryModel(models, recommended)) !== undefined) {
+      left = left.filter((model) => model !== recommended);
+      recommended = undefined;
+    }
+    for (;;) {
+      if (left.length === 0) return yield* Effect.fail(userError("no model answers with this login"));
+      const chosen = yield* Prompt.run(
+        Prompt.Select({
+          message: "Which model should it think with? A strong model that calls tools well works best.",
+          maxPerPage: 15,
+          choices: [...left.filter((model) => model === recommended), ...left.filter((model) => model !== recommended)].map((model) => ({
+            title: `${name(model)}${model === recommended ? " (recommended)" : ""}`,
+            value: model,
+            description: model.name,
+          })),
+        }),
+      );
+      if (chosen === recommended) return name(chosen);
+      yield* Console.log(`Trying ${name(chosen)}…`);
+      const error = yield* tryModel(models, chosen);
+      if (error === undefined) return name(chosen);
+      yield* Console.log(`${name(chosen)} cannot be used with this login: ${error}`);
+      left = left.filter((model) => model !== chosen);
+    }
+  });
+
+/** Ask the model for a word. The reason it cannot answer, or undefined when it can. */
+const tryModel = (models: Models, model: Model<Api>) =>
+  Effect.promise(async () => {
+    try {
+      const reply = await models.completeSimple(
+        model,
+        { messages: [{ role: "user", content: "Say OK.", timestamp: Date.now() }] },
+        { signal: AbortSignal.timeout(60_000) },
+      );
+      return reply.stopReason === "error" || reply.stopReason === "aborted" ? (reply.errorMessage ?? reply.stopReason) : undefined;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
   });
 
 /** The model pi itself picks after a login to this provider. */
@@ -103,7 +156,11 @@ async function piDeviceId(): Promise<string> {
  */
 const terminalInteraction = (terminal: Context.Context<Prompt.Environment>): AuthInteraction => ({
   // The login can withdraw a prompt, such as "paste the redirect URL" once the browser has called back.
-  prompt: (prompt: AuthPrompt) => Effect.runPromiseWith(terminal)(Prompt.run(toPrompt(prompt)), { signal: prompt.signal }),
+  prompt: (prompt: AuthPrompt) =>
+    Effect.runPromiseWith(terminal)(
+      Prompt.run(toPrompt(prompt)).pipe(Effect.onInterrupt(() => Console.log(""))),
+      { signal: prompt.signal },
+    ),
   notify: (event: AuthEvent) => {
     if (event.type === "auth_url") {
       console.log(`\nOpen this page to sign in${event.instructions ? ` (${event.instructions})` : ""}:\n  ${event.url}\n`);

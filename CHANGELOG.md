@@ -2,6 +2,19 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
+## 0.3.2 (2026-10-29)
+
+Found by running `pots init` from npm on a fresh Ubuntu server without a desktop, from the first command to a reply in Slack.
+
+### Fixed
+- **Sign in with ChatGPT works.** It stopped with "requires a device ID (UUID)". `pots init` now passes pi's own ID for this installation, as the pi command line does, and keeps it in pi's settings.
+- **A sign-in that finishes in the browser no longer leaves "paste the redirect URL" waiting** in the terminal, in the way of the next question.
+- **The bots keep running after you log out of SSH.** Where Linux does not let a user turn on lingering, `pots init` now does it with `sudo` (without a password), and otherwise says the command to run.
+- **No SQLite warning in the middle of the first question** on Node releases that still call `node:sqlite` experimental, such as 24.13.
+
+### Changed
+- **After a sign-in, the model pi recommends for that provider comes first**, marked "(recommended)", instead of an alphabetical list that starts with old models.
+
 ## 0.3.1 (2026-10-29)
 
 ### Fixed

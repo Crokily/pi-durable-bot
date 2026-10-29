@@ -52,6 +52,7 @@
     "@earendil-works/pi-durable": "1.4.0",
     "@earendil-works/pi-telemetry": "1.4.0",
     "@effect/platform-node": "4.0.7",
+    "@effect/platform-node-shared": "4.0.7",
     "chat": "4.43.0",
     "effect": "4.0.7"
   },

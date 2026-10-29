@@ -2,6 +2,11 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
+## 0.3.1 (2026-10-29)
+
+### Fixed
+- **`pots` starts again after `npm install -g`.** A dependency of ours newly allowed `@effect/platform-node-shared` 4.1.0, which needs a newer `effect` than Pots uses, so every new install of 0.3.0 or 0.2.1 stopped with `ERR_MODULE_NOT_FOUND`. Pots now pins it to the tested version. Each release is now installed and run the way a user gets it before it is published.
+
 ## 0.3.0 (2026-10-29)
 
 Setting Pots up on a server without a desktop, or through someone else's AI agent, and a bot that works like a pi session.

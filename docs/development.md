@@ -98,4 +98,4 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 pots start
 2. `npm version 0.3.0` sets the version in `package.json` and `package-lock.json`, commits it and tags it `v0.3.0`.
 3. Push the commit and the tag: `git push origin main v0.3.0`.
 
-The tag starts `.github/workflows/release.yml`. It runs `npm run check` and `npm test`, and checks that the tag matches `package.json` and that CHANGELOG.md has a section for the version. Then it publishes to npm with trusted publishing and provenance, and makes a GitHub release whose notes are that section. A version with a hyphen, such as `0.4.0-beta.1`, goes to the `next` dist-tag.
+The tag starts `.github/workflows/release.yml`. It runs `npm run check` and `npm test`, and checks that the tag matches `package.json` and that CHANGELOG.md has a section for the version. It installs the packed package globally, without our lockfile, as a user gets it, and runs `pots`. Then it publishes to npm with trusted publishing and provenance, and makes a GitHub release whose notes are that section. A version with a hyphen, such as `0.4.0-beta.1`, goes to the `next` dist-tag.

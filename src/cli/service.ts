@@ -180,9 +180,12 @@ const systemd: ServiceManager = {
       yield* run("systemctl", ["--user", "daemon-reload"]);
       yield* run("systemctl", ["--user", "enable", "pots.service"]);
       yield* run("systemctl", ["--user", "restart", "pots.service"]);
-      // Keep the user's services running without a login session, and start them at boot.
-      yield* run("loginctl", ["enable-linger", userInfo().username]).pipe(
-        Effect.catch((error) => Effect.logWarning(`could not enable lingering, so the bots stop when you log out: ${error.message}`)),
+      // Keep the user's services running without a login session, and start them at boot. Where polkit does not let a
+      // user do that for themselves, sudo without a password often can, as on many cloud servers.
+      const user = userInfo().username;
+      yield* run("loginctl", ["enable-linger", user]).pipe(
+        Effect.catch(() => run("sudo", ["-n", "loginctl", "enable-linger", user])),
+        Effect.catch(() => Effect.logWarning(`could not enable lingering, so the bots stop when you log out. Run: sudo loginctl enable-linger ${user}`)),
       );
     }),
   uninstall: () =>

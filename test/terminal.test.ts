@@ -12,9 +12,10 @@ const POTS = fileURLToPath(new URL("../src/cli/pots.ts", import.meta.url));
 const python = process.platform !== "win32" && spawnSync("python3", ["-c", "import pty"]).status === 0;
 
 // Runs a command in a pseudo-terminal. Each step waits until the screen shows a text, then, a moment later like a
-// person, types keys or appends a line to a file. Prints the screen.
+// person, types keys, appends a line to a file or opens a URL; a step with no action only waits, until the command
+// ends when its text is never shown. Prints the screen, and <<exited>> if the command ended.
 const DRIVER = `
-import json, os, pty, select, sys, time
+import json, os, pty, select, sys, time, urllib.request
 steps = json.loads(sys.argv[1])
 pid, fd = pty.fork()
 if pid == 0:
@@ -29,17 +30,22 @@ def read_until(text, seconds=20):
             except OSError: break
 for wait, action in steps:
     read_until(wait)
+    if action is None: continue
     time.sleep(0.3)
-    if isinstance(action, dict):
+    if isinstance(action, dict) and "get" in action:
+        try: urllib.request.urlopen(action["get"], timeout=5)
+        except Exception: pass
+    elif isinstance(action, dict):
         with open(action["file"], "a") as f: f.write(action["line"] + "\\n")
     else:
         os.write(fd, action.encode())
 read_until("never", 2)
-os.kill(pid, 9)
+if os.waitpid(pid, os.WNOHANG)[0]: screen += b"\\n<<exited>>"
+else: os.kill(pid, 9)
 sys.stdout.write(screen.decode(errors="replace"))
 `;
 
-type Step = [wait: string, action: string | { file: string; line: string }];
+type Step = [wait: string, action: string | { file: string; line: string } | { get: string } | null];
 
 let home: string;
 
@@ -73,6 +79,43 @@ describe.skipIf(!python)("pots in a terminal", { timeout: 90_000 }, () => {
     expect(screen).not.toContain("^[[B");
     expect(screen).toMatch(/✔ Select Anthropic login method: …\s+Copy code login/);
     expect(screen).toContain("Paste the code Anthropic shows after you sign in: › abc");
+  });
+
+  it("init signs in with ChatGPT using pi's device ID", () => {
+    home = mkdtempSync(join(tmpdir(), "pots-terminal-"));
+    const screen = inTerminal(
+      ["init", "--no-service", "--no-chat"],
+      [
+        ["Continue?", "y"],
+        ["What is its name?", "\r"],
+        ["How should your bot get its AI?", "\r"],
+        ["Which subscription?", DOWN.repeat(4)],
+        ["Which subscription?", "\r"],
+        ["paste the final redirect URL", ""],
+      ],
+    );
+    expect(screen).not.toContain("requires a device ID");
+    const deviceId = (JSON.parse(readFileSync(join(home, "pi", "settings.json"), "utf8")) as { deviceId: string }).deviceId;
+    expect(screen).toContain(`ext_agent_host_id=urn%3Auuid%3A${deviceId}`);
+    expect(screen).toContain("Complete login in your browser, or paste the final redirect URL here:");
+  });
+
+  it("init says why a browser sign-in failed, and ends", () => {
+    home = mkdtempSync(join(tmpdir(), "pots-terminal-"));
+    const screen = inTerminal(
+      ["init", "--no-service", "--no-chat"],
+      [
+        ["Continue?", "y"],
+        ["What is its name?", "\r"],
+        ["How should your bot get its AI?", "\r"],
+        ["Which subscription?", DOWN.repeat(4)],
+        ["Which subscription?", "\r"],
+        ["paste the final redirect URL", { get: "http://127.0.0.1:1455/auth/callback?error=access_denied" }],
+        ["<<the command ends>>", null],
+      ],
+    );
+    expect(screen).toContain("login failed: ChatGPT authorization failed: access_denied");
+    expect(screen).toContain("<<exited>>");
   });
 
   it("chat takes a secret apart from what the person was typing, and forgets it", () => {

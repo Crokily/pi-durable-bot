@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { createInterface } from "node:readline";
+import { createInterface, type Interface } from "node:readline";
 import { Writable } from "node:stream";
 import { Effect, Option } from "effect";
 import { Command, Flag } from "effect/cli";
@@ -115,24 +115,36 @@ export const chatInteractive = (id: string) =>
     if ((yield* Effect.promise(() => statusOf(id))) === undefined) console.log(dim(`${terminal.name} is not running. Messages wait until it starts (pots service install, or pots start).`));
     console.log(dim(`Talking to ${terminal.name}. Ctrl+C to leave.`));
     yield* Effect.callback<void>((resume) => {
-      // What readline echoes goes through this stream, so it can be muted while a secret is typed.
-      let muted = false;
-      const output = new Writable({
-        write: (chunk, _encoding, done) => {
-          if (!muted) process.stdout.write(chunk);
-          done();
-        },
-      });
-      Object.defineProperty(output, "columns", { get: () => process.stdout.columns });
-      const rl = createInterface({ input: process.stdin, output, terminal: process.stdin.isTTY === true, prompt: "> " });
-      // The history readline keeps for the arrow keys; a typed secret is taken out of it.
-      let history: string[] = [];
-      rl.on("history", (lines) => (history = lines));
+      // One readline at a time: the chat's, or a fresh one for each request for secrets, with its echo muted and no
+      // history. A secret never shares the chat's half-typed text, its history or its deleted text (Ctrl+U, then Ctrl+Y).
+      const muted = new Writable({ write: (_chunk, _encoding, done) => done() });
+      Object.defineProperty(muted, "columns", { get: () => process.stdout.columns });
+      let replacing = false;
+      const onClose = () => {
+        if (!replacing) resume(Effect.void);
+      };
+      const chatLine = (typed = "") => {
+        const next = createInterface({ input: process.stdin, output: process.stdout, prompt: "> " });
+        next.on("line", onChat).on("close", onClose);
+        next.prompt();
+        if (typed) next.write(typed);
+        return next;
+      };
+      const secretLine = () =>
+        createInterface({ input: process.stdin, output: muted, terminal: process.stdin.isTTY === true, historySize: 0 })
+          .on("line", onSecret)
+          .on("close", onClose);
+      const replace = (make: () => Interface) => {
+        replacing = true;
+        rl.close();
+        replacing = false;
+        rl = make();
+      };
       let offset = start.offset;
       let busy: boolean | undefined;
       let errorShown = since;
       const pending = unanswered(start.lines);
-      let asking: { request: Line; keys: string[]; values: Record<string, string> } | undefined;
+      let asking: { request: Line; keys: string[]; values: Record<string, string>; typed: string } | undefined;
       const showPrompt = () => {
         if (asking) process.stdout.write(`${asking.keys[0]}: `);
         else rl.prompt(true);
@@ -145,10 +157,32 @@ export const chatInteractive = (id: string) =>
       const askNext = () => {
         const request = pending.shift();
         if (!request?.secret) return;
-        asking = { request, keys: [...request.secret.keys], values: {} };
-        muted = true;
+        asking = { request, keys: [...request.secret.keys], values: {}, typed: asking?.typed ?? rl.line };
+        replace(secretLine);
         print(dim(`${terminal.name} asks for ${request.secret.keys.join(", ")}. What you type is not shown; it goes only to ${join(SECRETS_DIR, request.secret.file)}, and ${terminal.name} does not see it. An empty line skips one.`));
       };
+      function onChat(input: string) {
+        if (input.trim()) say(terminal, input);
+        rl.prompt();
+      }
+      function onSecret(input: string) {
+        if (!asking) return;
+        process.stdout.write("\n");
+        const key = asking.keys.shift()!;
+        if (input.trim()) asking.values[key] = input.trim();
+        if (asking.keys.length > 0) return showPrompt();
+        const done = asking;
+        try {
+          console.log(dim(answerSecret(terminal, done.request, done.values)));
+        } catch (error) {
+          console.log(`Could not save it: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        if (pending.length > 0) return askNext();
+        asking = undefined;
+        replace(() => chatLine(done.typed));
+      }
+      let rl = chatLine();
+      askNext();
       const watch = setInterval(() => {
         const next = readFrom(terminal, offset);
         offset = next.offset;
@@ -169,29 +203,6 @@ export const chatInteractive = (id: string) =>
           }
         });
       }, 1_000);
-      rl.on("line", (input) => {
-        if (!asking) {
-          if (input.trim()) say(terminal, input);
-          return rl.prompt();
-        }
-        if (history[0] === input) history.shift();
-        process.stdout.write("\n");
-        const key = asking.keys.shift()!;
-        if (input.trim()) asking.values[key] = input.trim();
-        if (asking.keys.length > 0) return showPrompt();
-        const done = asking;
-        asking = undefined;
-        muted = false;
-        try {
-          print(dim(answerSecret(terminal, done.request, done.values)));
-        } catch (error) {
-          print(`Could not save it: ${error instanceof Error ? error.message : String(error)}`);
-        }
-        askNext();
-      });
-      rl.on("close", () => resume(Effect.void));
-      if (pending.length > 0) askNext();
-      else rl.prompt();
       return Effect.sync(() => {
         clearInterval(watch);
         clearInterval(status);

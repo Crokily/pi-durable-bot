@@ -13,7 +13,7 @@ export interface NewBot {
   name: string;
   model: string;
   judge?: string;
-  /** The one-sentence definition from pots init. The bot turns it into its persona and responsibilities. */
+  /** The one-sentence definition from pots init. The bot turns it into its AGENTS.md and responsibilities. */
   about?: string;
   /** What the bot is told when it starts for the first time. */
   firstWake?: string;
@@ -33,7 +33,6 @@ export const createBot = (bot: NewBot) =>
     const dir = botDir(bot.id);
     if (existsSync(join(dir, "bot.json"))) return Effect.fail(userError(`${dir} already has a bot.json`));
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    writeFileSync(join(dir, "persona.md"), "");
     writeFileSync(join(dir, "responsibilities.md"), bot.about ? `${bot.about}\n` : "");
     writeFileSync(join(dir, "notes.md"), "");
     if (bot.firstWake) writeFileSync(join(dir, "first-wake.md"), bot.firstWake);

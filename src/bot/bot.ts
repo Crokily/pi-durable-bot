@@ -1,13 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, unlinkSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { delimiter, dirname } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Models } from "@earendil-works/pi-ai";
 import type { TelemetrySpan } from "@earendil-works/pi-telemetry";
 import { Agent, openDatabase } from "../agent/agent.ts";
 import { createJudge } from "../agent/judge.ts";
+import { openResources } from "../agent/resources.ts";
 import { loadChannel } from "../channels/load.ts";
 import type { Address, ChannelAdapter, ChannelConfig } from "../core/channel.ts";
 import { SECRETS_DIR } from "../core/home.ts";
@@ -59,7 +60,7 @@ const MACHINE = describeMachine();
 const DOCS_DIR = fileURLToPath(new URL("../../docs", import.meta.url));
 
 /**
- * One bot: a person with a name, persona, responsibilities, memory, timed wakes, a workspace and one long
+ * One bot: a person with a name, an AGENTS.md, responsibilities, memory, timed wakes, a workspace and one long
  * conversation. It joins the gateway (channels) and the agent (pi-durable).
  */
 export class Bot implements WakeTarget {
@@ -124,7 +125,10 @@ export class Bot implements WakeTarget {
   static async start(id: string, dir: string, definition: BotDefinition, env: BotEnvironment, print: Print): Promise<Bot> {
     const paths = botPaths(dir);
     await mkdir(paths.workspace, { recursive: true, mode: 0o700 });
-    for (const file of [paths.persona, paths.responsibilities, paths.notes]) if (!existsSync(file)) await writeFile(file, "");
+    // Before 0.3 the bot's AGENTS.md was persona.md.
+    const persona = join(dir, "persona.md");
+    if (existsSync(persona) && !existsSync(paths.agents)) await rename(persona, paths.agents);
+    for (const file of [paths.responsibilities, paths.notes]) if (!existsSync(file)) await writeFile(file, "");
 
     // One SQLite file: gateway (gw_), bot (bot_) and pi-durable (pi_) tables on one connection.
     const sql = await openDatabase(paths.db);
@@ -182,6 +186,8 @@ export class Bot implements WakeTarget {
       fallbackWakeMinutes: current().settings.fallbackWakeMinutes,
       accounts: gateway.channels.map((channel) => ({ channel: channel.id, ...(channel.me ? { me: channel.me } : {}) })),
     });
+    // AGENTS.md and skills as a pi session finds them from the bot's working directory, so its own folder's AGENTS.md.
+    const resources = await openResources(paths.workspace, print);
     const agent = await Agent.open({
       database: sql,
       models: env.models,
@@ -196,11 +202,21 @@ export class Bot implements WakeTarget {
         HOME: process.env.HOME ?? homedir(),
       },
       sections: [
-        { name: "identity", render: async () => identitySection(facts(), await readFile(paths.persona, "utf8").catch(() => "")) },
+        { name: "identity", render: () => identitySection(facts()) },
         { name: "work", render: () => workSection(facts()) },
         { name: "log", render: () => logSection(facts()) },
         { name: "folder", render: () => folderSection(facts()) },
         { name: "memory", render: () => memorySection(facts()) },
+        // After the bot's own sections, as pi puts them after a custom system prompt. Rendered in this order, so the
+        // skills are those of the same scan.
+        {
+          name: "project_context",
+          render: async () => {
+            await resources.reload();
+            return resources.projectContext();
+          },
+        },
+        { name: "skills", render: () => resources.skills() },
       ],
       actions: {
         send: (to, text, sendId, trace) => self().send(to, text, sendId, trace),

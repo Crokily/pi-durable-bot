@@ -16,9 +16,10 @@ import {
   section,
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
+import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { CodingTools } from "@earendil-works/pi-durable/tools";
+import { createCodingTools } from "@earendil-works/pi-durable/tools";
 import type { TelemetryCarrier, TelemetryContext, TelemetrySpan } from "@earendil-works/pi-telemetry";
 import type { Sql } from "../core/sql.ts";
 import { modelRef, requireModel } from "./models.ts";
@@ -81,6 +82,12 @@ const CALL_OUTPUT_CHARS = 30_000;
 const DEFAULT_WINDOW = 200_000;
 /** Room kept free for the answer and long tool results; pi's own default is 16K. */
 const RESERVE_TOKENS = 32_768;
+
+/**
+ * read shrinks, turns upright and converts images as in the pi CLI, so a full-size screenshot reaches the model. One
+ * per process, for all bots: it prepares images in a worker thread that exits when idle.
+ */
+let images: ReturnType<typeof createNodePhotonImages> | undefined;
 
 /**
  * The bot's agent: one long-lived pi-durable conversation (the root). Tools: read, write, edit, bash, and the
@@ -165,7 +172,7 @@ export class Agent {
       sections: options.sections.map((part) => section(part.name, () => part.render(), { tag: false })),
     });
     const registry = createRegistry();
-    registry.install(CodingTools);
+    registry.install(createCodingTools({ images: await (images ??= createNodePhotonImages()) }));
     registry.install(bot);
 
     let agent: Agent | undefined;

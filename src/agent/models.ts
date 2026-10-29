@@ -4,7 +4,7 @@ import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { TelemetrySpan } from "@earendil-works/pi-telemetry";
 
 /** A module of pi-coding-agent that its package does not export. */
-const piModule = (path: string) => new URL(path, import.meta.resolve("@earendil-works/pi-coding-agent")).href;
+export const piModule = (path: string) => new URL(path, import.meta.resolve("@earendil-works/pi-coding-agent")).href;
 
 /**
  * pi's own model layer, shared with the pi CLI: subscription logins and API keys in `~/.pi/agent/auth.json`,

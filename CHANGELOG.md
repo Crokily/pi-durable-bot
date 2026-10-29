@@ -10,6 +10,7 @@ Found by running `pots init` from npm on a fresh Ubuntu server without a desktop
 - **Sign in with ChatGPT works.** It stopped with "requires a device ID (UUID)". `pots init` now passes pi's own ID for this installation, as the pi command line does, and keeps it in pi's settings.
 - **A sign-in that finishes in the browser no longer leaves "paste the redirect URL" waiting** in the terminal, in the way of the next question.
 - **The bots keep running after you log out of SSH.** Where Linux does not let a user turn on lingering, `pots init` now does it with `sudo` (without a password), and otherwise says the command to run.
+- **`pots init --model` checks that pi can use the model** before it makes the bot. It used to make a bot that failed on its first wake when the model had no login or key, or its name was wrong.
 - **No SQLite warning in the middle of the first question** on Node releases that still call `node:sqlite` experimental, such as 24.13.
 
 ### Changed

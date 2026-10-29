@@ -47,6 +47,22 @@ export const setUpModel = (models: Models) =>
     return yield* chooseModel(yield* Effect.promise(() => models.getAvailable(providerId)), yield* Effect.promise(() => piDefaultModel(providerId)));
   });
 
+/** Fail unless pi can use this model on this computer, so a bot is never made with a model it cannot use. */
+export const checkModel = (models: Models, model: string) =>
+  Effect.gen(function* () {
+    const slash = model.indexOf("/");
+    if (slash <= 0) return yield* Effect.fail(userError(`--model must be "provider/modelId", for example anthropic/claude-opus-5-5`));
+    const provider = model.slice(0, slash);
+    const id = model.slice(slash + 1);
+    const available = yield* Effect.promise(() => models.getAvailable(provider));
+    if (available.some((item) => item.id === id)) return model;
+    if (available.length === 0) {
+      return yield* Effect.fail(userError(`${model} cannot be used: pi has no login or key for "${provider}" on this computer. Run pots init without --model to sign in, or set it up with the pi command line.`));
+    }
+    const ids = available.map((item) => item.id);
+    return yield* Effect.fail(userError(`${model} cannot be used: "${provider}" has no model "${id}". It has: ${ids.slice(0, 8).join(", ")}${ids.length > 8 ? ", …" : ""}`));
+  });
+
 /** Ask for one of these models. pi's default model for the provider, when there is one, comes first, as pi picks it. */
 const chooseModel = (available: readonly Model<Api>[], recommended?: string) =>
   Effect.gen(function* () {

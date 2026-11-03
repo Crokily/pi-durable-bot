@@ -22,11 +22,12 @@ Run `npm run check` and `npm test` before every commit. Run `npm run tla` too wh
 | `test/waker.test.ts`, `test/timers.test.ts` | The waker (grouping, reasons, the judge and its retries, waiting for files) and the timers, on Effect's `TestClock`: every wake happens at an exact time, with no waiting. |
 | `test/properties.test.ts` | Properties on many random cases with [fast-check](https://fast-check.dev): grouping against a plain model of the rule, one message per send ID when the process dies before or after the platform send, timers on time and in order, and the inbox dropping repeats. |
 | `test/children.test.ts` | Children, from outside like the gateway tests: a child's final message reaches the main agent exactly once, also when the process dies just before or just after the report, and nothing comes back after a stop, from the task tool or `pots children`. The child runs show in `pots trace`. |
+| `test/memory.test.ts` | The memory pass, from outside: its request starts as the main agent's last one, with the same provider session; it reaches neither the chat nor the main conversation; the memory section shows the new memory only on the next page; a forgotten fact is not saved again; and a pass is saved once when the process dies right after it saved. |
 | `test/screen.test.ts` | The screen lease: one conversation at a time on a screen, and a lease frees when its holder gives it up, stops using the screen or its process is gone, also a process that is not the test's. |
 | `test/inbox.test.ts`, `test/gateway.test.ts` | What adapters give the inbox, the `Gateway` class as the bot uses it, and the traces, also over OTLP. |
 | `test/telemetry.test.ts` | pi-telemetry's own conformance suite for the bridge from pi's telemetry to the gateway's spans. |
 
-**The fake model.** `test/support/fake-model.ts` is a small server that speaks the OpenAI chat completions API, so a real gateway uses it through pi's model layer like any OpenAI-compatible endpoint. Its judge says yes to events about pricing; its agent answers each wake with one `send` in the wake's place. It says the provider's cache served 80 of each request's 100 input tokens. The tests point pi at it with `PI_CODING_AGENT_DIR`, so your own `~/.pi/agent` is not used.
+**The fake model.** `test/support/fake-model.ts` is a small server that speaks the OpenAI chat completions API, so a real gateway uses it through pi's model layer like any OpenAI-compatible endpoint. Its judge says yes to events about pricing; its agent answers each wake with one `send` in the wake's place. It says the provider's cache served 80 of each request's 100 input tokens. Its answer to the memory pass's first look is no, so there is no pass, unless a test gives answers for the memory pass. It records each request's provider session (the `session_id` header, which the tests' models.json asks pi to send). The tests point pi at it with `PI_CODING_AGENT_DIR`, so your own `~/.pi/agent` is not used.
 
 **Crash tests.** An empty file in a bot's folder makes the gateway kill itself at one point, once:
 
@@ -35,8 +36,9 @@ Run `npm run check` and `npm test` before every commit. Run `npm run tla` too wh
 | `crash-after-send` | right after the platform accepted a send, before the outbox recorded it |
 | `crash-after-wake` | right after the bot took a wake, before the gateway recorded that |
 | `crash-before-child-report`, `crash-after-child-report` | just before, or just after, a child's end was handed to the main agent, before its reporter task ended |
+| `crash-after-memory-pass` | right after a memory pass saved its answer, before the pass ended |
 
-After the restart the bot must send once and be woken once.
+After the restart the bot must send once, be woken once, and save a memory pass once.
 
 ## TLA+ models
 
@@ -103,6 +105,7 @@ The system prompt is made of sections (`src/bot/bot.ts`). pi-durable renders the
 - The bot's own sections are pinned (`pin: true`): they keep the text they had when the page began, from pi-durable's `PromptInput.shown`, and show the new text when the page turns or pi compacts, and once after an upgrade (`bot_state.prompt_version`). The name, AGENTS.md and skills are not pinned: people change them on purpose and expect the change at once.
 - A new section goes at the end, and a section always has a text. A section in the middle that comes or goes makes pi-durable send every section again.
 - The tool list stays the same.
+- The memory pass (`src/agent/memory.ts`) runs after each run of the main conversation that ended with an answer, as a background task of it: a first look with the main model at its lowest thinking level, over the run's messages, answers `{"write_likely": true|false}`; on yes, a fork of the main conversation at the run's answer gets one more message, which asks what to save (`renderMemoryPass` in `src/bot/prompt.ts`). pi-durable gives a fork a provider session of its own; the pass gives it the main conversation's, and adds only an extension with a hook that blocks every tool, so the fork's request has the same sections, tools and session as the main agent's last one, and the provider's cache serves it. The first look's answer is a memo and the fork's answer has a request ID, so after a restart neither is asked again; the bot saves an answer once per pass (`*_applied` tables). A pass that the last process did not start, the bot starts at the next start. Its requests are not in `pots trace`, which shows wakes.
 - Children have sections of their own (`child`, then the log, the folder, AGENTS.md and skills), the same for every child, so their requests share a start too. The main agent selects the extensions `coding-tools`, `bot` and `tasks`; a child selects `coding-tools` and `child`.
 
 ```sh

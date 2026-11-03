@@ -61,6 +61,7 @@ export function workSection(facts: PromptFacts): string {
   pots wake --list | --cancel <id>
   pots context
   pots turn-page --note <text>
+  pots memory list | add <text, or -> [--shared] | change <id> <text, or -> | forget <id>
   Outside your own bash (for example in cron), write it in full: ${facts.pots} <command> --bot ${facts.id}
 
 ${computerSection(facts)}`;
@@ -114,14 +115,14 @@ export function folderSection(facts: PromptFacts): string {
 - AGENTS.md: your personality, how you talk, and anything else you want to know at every request. Context files are found as pi finds them: AGENTS.md (or AGENTS.override.md, CLAUDE.md) in ~/.pi/agent and in your working directory and every folder above it, so one in ${facts.botsDir} is for every bot there. They are read before each request, so changes take effect at once.
 - Skills, as in pi: a skill is a folder with a SKILL.md. They are found in ~/.pi/agent/skills, ~/.agents/skills, .pi/skills in your working directory, .agents/skills in it and the folders above, and pi's settings and packages, the same ones the pi command line uses. The ones found are listed below with where they are. You can write or install your own; new ones show at the next request.
 - responsibilities.md: what you are responsible for. The judge uses it to decide whether an event that does not mention you is about you. When your responsibilities change, update it.
-- notes.md: your notes. After you turn the page, you find what you need again from them and the message log.
+- notes.md: your handoff to the next page: what you are doing, what you promised, how far you got. After you turn the page, you find what you need again from them and the message log. What you want to know beyond that goes into your memory.
 - workspace/: your working directory.
 - files/: the files of messages people send, one folder per message. They are saved when the message comes, and the wake gives each file's path.
 - Channel types: slack, terminal (the person who set you up, in their terminal), test. How to connect a new chat app yourself is in ${facts.docs}/channels/; put its tokens in ${facts.secretsDir}, readable only by this user. When the person has to give you secrets, such as tokens they copied, ask in the terminal channel with call <its channel id> ask-secret {"text": "…", "file": "<app>.env", "keys": ["<TOKEN_NAME>", …]}: pots chat asks for each key without showing it and writes it to that file in ${facts.secretsDir}, and you get a message that names the keys it wrote. You never see the values, so they stay out of your log.
 - Other bots are in ${facts.botsDir}, one subfolder per bot. You can change their definitions. A new folder with a bot.json is a new bot.`;
 }
 
-export function memorySection(facts: PromptFacts): string {
+export function contextSection(facts: PromptFacts): string {
   return `# Context and turning the page
 - You have one long-lived conversation. Events from all channels go into it.
 - Each wake tells you how many tokens the context uses, how large the window is, and at what point pi compacts it automatically. You can also check at any time with pots context.
@@ -131,6 +132,36 @@ export function memorySection(facts: PromptFacts): string {
 # Timed wakes
 - Use pots wake to set timed wakes. You can have several at once, and you choose the times: look in now and then at what people are talking about, or do something you promised when its time comes.
 - When you have no timed wake, a fallback check-in comes every ${facts.fallbackWakeMinutes} minutes.`;
+}
+
+/** The memory as it was when the page began: the section is pinned, so it changes only with a new page. */
+export function memorySection(facts: PromptFacts, entries: string): string {
+  return `# Memory
+- Your memory keeps what you want to know beyond this page: short entries, on this computer. Entries whose ID starts with s are shared: facts about the user that every bot in ${facts.botsDir} sees. The others are yours.
+- After each of your runs, a pass of yours in the background saves what is worth keeping from it: preferences, rules, facts about people and the work, decisions. You can save, change and forget entries yourself with pots memory. When a person says "remember X" or "forget X", do it at once. People manage your memory by talking to you.
+- An entry more than a day old says how old it is: it may be out of date.
+- Your memory as it was when this page began (pots memory list shows it now):
+${entries}`;
+}
+
+/** The system prompt of the memory pass's first look. */
+export const FIRST_LOOK_PROMPT = `You decide whether a bot should update its memory after a piece of its work. Its memory keeps what a good coworker would still know tomorrow: preferences, rules, facts about people and the work, decisions, and what a person asked it to remember or forget. It does not keep what is true only for now, or details its message log already holds.
+The user message has the latest exchanges: what came in ("Input"), and what the bot said and did ("You").`;
+
+/** The message that asks the fork of the main conversation what to save. messages: how many the run added. */
+export function renderMemoryPass(messages: number, memory: { entries: string; forgotten: readonly string[] }): string {
+  return `This is not a wake: nobody sees this message or your answer, and no tool runs here. Look at the most recent ~${messages} messages above, your work since the last memory pass, and say what your memory should keep from them.
+
+Your memory now:
+${memory.entries}
+${memory.forgotten.length === 0 ? "" : `\nForgotten: a person asked you to forget these, so do not save them again:\n${memory.forgotten.map((text) => `- ${text.replace(/\r?\n/g, " ")}`).join("\n")}\n`}
+- Keep what a good coworker would still know tomorrow: preferences, rules, facts about people and the work, decisions. When a person said "remember X" or "forget X", do it.
+- Do not keep what is true only for now, details the message log or your files already hold, or secrets such as passwords and tokens.
+- Use only those messages; do not go and check anything.
+- One short fact per entry. Change an entry rather than add one that says nearly the same.
+- shared: a fact about the user that every bot should know, such as their name, time zone or language. Everything else is for you only.
+
+Answer with only this JSON: {"changes": [...]}, each change one of {"add": "<text>"}, {"add": "<text>", "shared": true}, {"change": "<id>", "text": "<new text>"}, {"forget": "<id>"}. When nothing is worth keeping, answer only: Nothing to save.`;
 }
 
 export function renderContext(status: ContextStatus): string {

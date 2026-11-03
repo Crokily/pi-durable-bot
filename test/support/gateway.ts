@@ -71,7 +71,8 @@ export class TestGateway {
           baseUrl: options.model.url,
           api: "openai-completions",
           apiKey: "fake",
-          compat: { supportsDeveloperRole: false, supportsReasoningEffort: false },
+          // The session header shows which provider session a request names, as a provider's cache sees it.
+          compat: { supportsDeveloperRole: false, supportsReasoningEffort: false, sendSessionAffinityHeaders: true, sessionAffinityFormat: "openai" },
           models: [{ id: "coworker", contextWindow: 128_000, input: ["text", "image"] }],
         },
       },
@@ -174,6 +175,11 @@ export class TestGateway {
   /** Make the gateway die right after the platform accepts its next send, before it records the send. */
   crashAfterNextSend(): void {
     writeFileSync(join(this.botDir, "crash-after-send"), "");
+  }
+
+  /** Make the gateway die right after the next memory pass saved its answer, before the pass ended. */
+  crashAfterNextMemoryPass(): void {
+    writeFileSync(join(this.botDir, "crash-after-memory-pass"), "");
   }
 
   /** Make the gateway die just before, or just after, the next child's end is handed to the main agent. */

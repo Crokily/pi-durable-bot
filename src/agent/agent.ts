@@ -10,6 +10,7 @@ import {
   createRegistry,
   DEFAULT_COMPACTION_POLICY,
   defineExtension,
+  type EntryId,
   defineTool,
   Harness,
   type ModelRef,
@@ -28,6 +29,7 @@ import { type BashExecution, createBashTool, createEditTool, createReadTool, cre
 import type { TelemetryCarrier, TelemetryContext, TelemetrySpan } from "@earendil-works/pi-telemetry";
 import type { Sql } from "../core/sql.ts";
 import { type ChildEnd, type ChildInfo, Children, childInfo, childrenExtension, reportRequestId } from "./children.ts";
+import { lastAnswer, type MemoryHost, memoryExtensions } from "./memory.ts";
 import { modelRef, requireModel } from "./models.ts";
 import { NO_SCREEN, renderBusy, type Screen, ScreenLeases } from "./screen.ts";
 
@@ -103,6 +105,8 @@ export interface AgentOptions {
    * did that.
    */
   refreshPinned?: () => Promise<void>;
+  /** The memory pass after each run of the main conversation; without it, there is none. */
+  memory?: Omit<MemoryHost, "model" | "log" | "afterApply">;
   actions: AgentActions;
   /** Where pi-durable's and pi-ai's spans go: submissions, task phases, tool calls, model requests. */
   telemetry?: TelemetryContext;
@@ -171,8 +175,13 @@ export class Agent {
   #disposeView?: () => void;
   #children: readonly ChildInfo[] = [];
   #disposeChildren?: () => void;
-  /** Crash tests: called just before and just after a child's end is handed to the main agent. */
-  readonly crashTests: { beforeReport?: (reporter: string) => void; afterReport?: (reporter: string) => void } = {};
+  #memory: ReturnType<typeof memoryExtensions> | undefined;
+  #closing = false;
+  /**
+   * Crash tests: called just before and just after a child's end is handed to the main agent, and right after a memory
+   * pass applied its answer, before the pass ended.
+   */
+  readonly crashTests: { beforeReport?: (reporter: string) => void; afterReport?: (reporter: string) => void; afterMemoryPass?: (pass: string) => void } = {};
 
   private constructor(options: AgentOptions, harness: Harness, root: Conversation) {
     this.#options = options;
@@ -354,11 +363,23 @@ export class Agent {
       beforeReport: (reporter) => self().crashTests.beforeReport?.(reporter),
       afterReport: (reporter) => self().crashTests.afterReport?.(reporter),
     });
+    const memory = options.memory
+      ? memoryExtensions({
+          ...options.memory,
+          model: () => (agent ? agent.#model : modelRef(options.model)),
+          log: options.log,
+          afterApply: (key) => agent?.crashTests.afterMemoryPass?.(key),
+        })
+      : undefined;
     const registry = createRegistry();
     registry.install(coding);
     registry.install(bot);
     registry.install(tasks);
     registry.install(child);
+    if (memory) {
+      registry.install(memory.tasks);
+      registry.install(memory.fork);
+    }
 
     harness = await Harness.open(
       storage,
@@ -393,8 +414,14 @@ export class Agent {
     const root = await harness.root(context, { agent: { model, thinkingLevel: options.thinking } });
     await root.configure({ model, thinkingLevel: options.thinking, cwd: options.workspace }, context);
     agent = new Agent(options, harness, root);
+    agent.#memory = memory;
     await agent.#watchRun();
     await agent.#watchChildren((list) => (children = list));
+    // A run that ended just before the last process stopped, before its memory pass was started.
+    if (memory && agent.#runInputs === undefined) {
+      const at = await lastAnswer(root, context);
+      if (at !== undefined) await memory.queue(root, at, context);
+    }
     return agent;
   }
 
@@ -409,8 +436,12 @@ export class Agent {
       const live = value.docs["pi.live"] as { run?: { inputs?: unknown[] } } | undefined;
       const inputs = live?.run ? (live.run.inputs ?? []).map(String) : undefined;
       const changed = (inputs === undefined) !== (this.#runInputs === undefined) || inputs?.join() !== this.#runInputs?.join();
-      // A run ended (pi-durable can end one and start the next in one commit): the main agent's screen lease ends with it.
-      if (this.#runInputs !== undefined && inputs?.[0] !== this.#runInputs[0]) this.#releaseScreen(String(ROOT_CONVERSATION_ID));
+      // A run ended (pi-durable can end one and start the next in one commit): the main agent's screen lease ends with
+      // it, and the memory pass looks at it.
+      if (this.#runInputs !== undefined && inputs?.[0] !== this.#runInputs[0]) {
+        this.#releaseScreen(String(ROOT_CONVERSATION_ID));
+        void this.#remember(this.#runInputs);
+      }
       this.#runInputs = inputs;
       if (changed) for (const listener of this.#runListeners) listener(inputs);
     };
@@ -420,6 +451,21 @@ export class Agent {
       unsubscribe();
       view.dispose();
     };
+  }
+
+  /** Start the memory pass for a run that ended with an answer. */
+  async #remember(inputs: readonly string[]): Promise<void> {
+    if (!this.#memory || this.#closing) return;
+    try {
+      let at: number | undefined;
+      for (const id of inputs) {
+        const record = await (await this.#harness.submission(Number(id) as SubmissionId, context))?.status(context);
+        if (record?.type === "input" && record.status === "done" && (at === undefined || record.answer > at)) at = record.answer;
+      }
+      if (at !== undefined && !this.#closing) await this.#memory.queue(this.#root, at as EntryId, context);
+    } catch (error) {
+      if (!this.#closing) this.#options.log("could not start the memory pass", { error: String(error) });
+    }
   }
 
   /** Keep the children list up to date from the main conversation's children document. */
@@ -521,6 +567,7 @@ export class Agent {
   }
 
   async close(): Promise<void> {
+    this.#closing = true;
     this.#disposeView?.();
     this.#disposeChildren?.();
     try {

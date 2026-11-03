@@ -111,7 +111,50 @@ const children = Command.make(
     }),
 ).pipe(Command.withDescription("List the children the bot's main agent started, or stop one or all. A stopped child reports nothing."));
 
-export const agentCommands = [send, react, call, wake, context, turnPage, children] as const;
+const memoryList = Command.make("list", { bot }, (input) =>
+  Effect.gen(function* () {
+    yield* printResult(yield* control(yield* resolveBot(input.bot), "GET", "/memory"));
+  }),
+).pipe(Command.withDescription("Show the memory: the shared entries (s...), then the bot's own (m...)."));
+
+const memoryAdd = Command.make(
+  "add",
+  {
+    text: Argument.String("text").pipe(Argument.withDescription('What to keep, or "-" to read it from standard input.')),
+    shared: Flag.Boolean("shared").pipe(Flag.withDefault(false), Flag.withDescription("A fact about the user, for every bot of this computer.")),
+    bot,
+  },
+  (input) =>
+    Effect.gen(function* () {
+      yield* printResult(yield* control(yield* resolveBot(input.bot), "POST", "/memory/add", { text: textOrStdin(input.text), shared: input.shared }));
+    }),
+).pipe(Command.withDescription("Save an entry."));
+
+const memoryChange = Command.make(
+  "change",
+  {
+    id: Argument.String("id").pipe(Argument.withDescription("The entry, for example m3 or s1.")),
+    text: Argument.String("text").pipe(Argument.withDescription('Its new text, or "-" to read it from standard input.')),
+    bot,
+  },
+  (input) =>
+    Effect.gen(function* () {
+      yield* printResult(yield* control(yield* resolveBot(input.bot), "POST", "/memory/change", { id: input.id, text: textOrStdin(input.text) }));
+    }),
+).pipe(Command.withDescription("Change an entry's text."));
+
+const memoryForget = Command.make("forget", { id: Argument.String("id").pipe(Argument.withDescription("The entry, for example m3 or s1.")), bot }, (input) =>
+  Effect.gen(function* () {
+    yield* printResult(yield* control(yield* resolveBot(input.bot), "POST", "/memory/forget", { id: input.id }));
+  }),
+).pipe(Command.withDescription("Forget an entry. The memory pass does not save it again."));
+
+const memory = Command.make("memory").pipe(
+  Command.withDescription("The bot's memory: what it keeps beyond a page, and the facts about the user that every bot shares."),
+  Command.withSubcommands([memoryList, memoryAdd, memoryChange, memoryForget]),
+);
+
+export const agentCommands = [send, react, call, wake, context, turnPage, children, memory] as const;
 
 function duration(text: string) {
   const match = /^(\d+(?:\.\d+)?)(s|m|h|d)$/.exec(text.trim());

@@ -24,8 +24,11 @@ import type { Timer } from "../gateway/timers.ts";
 import { ControlServer } from "./control.ts";
 import { type BotDefinition, type BotPaths, botPaths } from "./definition.ts";
 import { describeMachine } from "./machine.ts";
+import { Memory, MemoryTable } from "./memory.ts";
 import {
   childSection,
+  contextSection,
+  FIRST_LOOK_PROMPT,
   folderSection,
   identitySection,
   logSection,
@@ -35,6 +38,7 @@ import {
   renderChildWake,
   renderContext,
   renderHandoff,
+  renderMemoryPass,
   renderPlaceWake,
   renderTimerWake,
   workSection,
@@ -62,6 +66,8 @@ export interface BotEnvironment {
   potsCommand: string;
   /** pi's model layer, shared by all bots of the process. */
   models: Models;
+  /** The memory all bots share, for facts about the user: one table on one connection, for every bot of the process. */
+  sharedMemory: MemoryTable;
 }
 
 /** What the agent is told about the computer it runs on. Checked once per process, from when the gateway loads. */
@@ -88,6 +94,7 @@ export class Bot implements WakeTarget {
   readonly #gateway: Gateway;
   readonly #timers: TimersHandle;
   readonly #agent: Agent;
+  readonly #memory: Memory;
   /** Undefined when bot.json says "judge": "off". */
   #judge: Judge | undefined;
   readonly #control: ControlServer;
@@ -114,6 +121,7 @@ export class Bot implements WakeTarget {
     gateway: Gateway;
     timers: TimersHandle;
     agent: Agent;
+    memory: Memory;
     judge: Judge | undefined;
   }) {
     this.id = init.id;
@@ -125,6 +133,7 @@ export class Bot implements WakeTarget {
     this.#gateway = init.gateway;
     this.#timers = init.timers;
     this.#agent = init.agent;
+    this.#memory = init.memory;
     this.#judge = init.judge;
     this.#control = new ControlServer(init.paths.socket, this.#routes());
     let working: readonly string[] = [];
@@ -226,6 +235,7 @@ export class Bot implements WakeTarget {
       },
     };
     const skills = { name: "skills", render: () => resources.skills() ?? NO_SKILLS };
+    const memory = new Memory(await MemoryTable.open(sql, "bot_memory", "m"), env.sharedMemory);
     const agent = await Agent.open({
       database: sql,
       models: env.models,
@@ -251,9 +261,11 @@ export class Bot implements WakeTarget {
         { name: "work", render: () => workSection(facts()), pin: true },
         { name: "log", render: () => logSection(facts()), pin: true },
         { name: "folder", render: () => folderSection(facts()), pin: true },
-        { name: "memory", render: () => memorySection(facts()), pin: true },
+        // About the context; its name is from before the bot had a memory, and a new name would move it.
+        { name: "memory", render: () => contextSection(facts()), pin: true },
         projectContext,
         skills,
+        { name: "remembered", render: async () => memorySection(facts(), await memory.render()), pin: true },
       ],
       children: {
         model: () => current().childModel,
@@ -277,6 +289,13 @@ export class Bot implements WakeTarget {
             refreshPinned: () =>
               sql.run("INSERT INTO bot_state (key, value) VALUES ('prompt_version', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", VERSION),
           }),
+      memory: {
+        firstLook: FIRST_LOOK_PROMPT,
+        instruction: async (messages) => renderMemoryPass(messages, await memory.forPass()),
+        apply: async (key, answer) => {
+          print("memory pass", { pass: key, result: await memory.applyAnswer(`${id}:${key}`, answer) });
+        },
+      },
       actions: {
         send: (to, text, sendId, trace) => self().send(to, text, sendId, trace),
         react: (message, emoji, remove, trace) => self().react(message, emoji, remove, trace),
@@ -290,7 +309,7 @@ export class Bot implements WakeTarget {
     });
     opened(agent);
 
-    bot = new Bot({ id, paths, definition, env, print, sql, gateway, timers, agent, judge });
+    bot = new Bot({ id, paths, definition, env, print, sql, gateway, timers, agent, memory, judge });
     // Crash tests: with one of these files in the bot folder, the process dies at that point, once.
     const crashTest = (file: string, message: string, key: string) => (id: string) => {
       if (!existsSync(file)) return;
@@ -307,6 +326,8 @@ export class Bot implements WakeTarget {
     // Around the report of a child's end to the main agent. The next start must report it once.
     agent.crashTests.beforeReport = crashTest(paths.crashBeforeChildReport, "crash test: dying before the child's report", "reporter");
     agent.crashTests.afterReport = crashTest(paths.crashAfterChildReport, "crash test: dying after the child's report", "reporter");
+    // Right after a memory pass saved its answer, before the pass ended. The next start must not save it again.
+    agent.crashTests.afterMemoryPass = crashTest(paths.crashAfterMemoryPass, "crash test: dying after the memory pass saved", "pass");
     for (const row of await sql.all<{ submission: string; place: string }>(
       "SELECT submission, place FROM bot_wakes WHERE submission IS NOT NULL AND place IS NOT NULL ORDER BY at DESC LIMIT 1000",
     )) {
@@ -536,6 +557,19 @@ export class Bot implements WakeTarget {
         return { ...status, cache, text: `${renderContext(status)}\n${renderCacheUse(cache)}` };
       },
       "POST /turn-page": async (body: Record<string, unknown>) => this.turnPage(text(body.note, "note")),
+      "GET /memory": async () => this.#memory.render(),
+      "POST /memory/add": async (body: Record<string, unknown>) => {
+        const entry = await this.#memory.add(text(body.text, "text"), body.shared === true);
+        return `Saved ${entry.id}${entry.shared ? " (shared)" : ""}.`;
+      },
+      "POST /memory/change": async (body: Record<string, unknown>) => {
+        const entry = await this.#memory.change(text(body.id, "id"), text(body.text, "text"));
+        return `Changed ${entry.id}.`;
+      },
+      "POST /memory/forget": async (body: Record<string, unknown>) => {
+        await this.#memory.forget(text(body.id, "id"));
+        return `Forgot ${String(body.id)}. It is not saved again.`;
+      },
       "GET /children": async () => {
         const now = Date.now();
         const children = this.#agent.children;

@@ -86,7 +86,9 @@ It promises to come back, and it does. Timed wakes live in the same database as 
 
 ### 📓 Its own memory
 
-Each bot has one long conversation, across every channel. When the context gets full, the bot decides when to **turn the page**: it writes notes for itself, starts a fresh context, and the notes come with it. The full message log stays on disk, so nothing is lost. Its `AGENTS.md`, its responsibilities and its notes are plain files it edits itself.
+Each bot has one long conversation, across every channel. After each piece of work, the bot saves what is worth keeping to its **memory** by itself, as Claude Code does: a short first look asks whether the work holds anything (preferences, rules, facts about people and the work, decisions), and if so, the bot's own model, continuing the same conversation in the background, says what to save. The pass never sends a message or holds up a reply, and its request starts as the bot's last one did, so the provider's prompt cache serves most of it. Each bot has its own memory, and the bots of one computer share one more for facts about you. "Remember this" and "forget that" work by talking to it; the bot itself uses `pots memory`. A forgotten fact is not saved again.
+
+When the context gets full, the bot decides when to **turn the page**: it writes notes for itself, starts a fresh context, and the notes and the memory come with it. The full message log stays on disk, so nothing is lost. Its `AGENTS.md`, its responsibilities and its notes are plain files it edits itself.
 
 ### 🛟 Durable by design
 
@@ -240,22 +242,22 @@ flowchart LR
 | Bot | Identity, persona, responsibilities, notes, timers, workspace and one long conversation. |
 | Agent | [pi-durable](https://github.com/earendil-works/pi): runs the model, journals every step, owns the tools. |
 
-One gateway process runs every bot on the machine. Everything lives in `~/.pots/` (or `$POTS_HOME`): one folder per bot in `bots/`, channel tokens in `secrets/`, the gateway's output in `logs/` on macOS and Windows (on Linux, `pots service logs` reads the journal). Each bot folder holds:
+One gateway process runs every bot on the machine. Everything lives in `~/.pots/` (or `$POTS_HOME`): one folder per bot in `bots/`, channel tokens in `secrets/`, the memory the bots share about you in `memory.sqlite`, the gateway's output in `logs/` on macOS and Windows (on Linux, `pots service logs` reads the journal). Each bot folder holds:
 
 | File | What it is |
 |---|---|
 | `bot.json` | Name, model, children's model, judge, channel accounts, its screen, settings. Edits apply within seconds. |
 | `AGENTS.md` | Personality and voice, read the way pi reads AGENTS.md. The bot maintains it. |
 | `responsibilities.md` | What it is responsible for. The judge reads it. The bot maintains it. |
-| `notes.md` | Notes it carries across pages. |
+| `notes.md` | Its handoff to the next page: what it is doing and what it promised. |
 | `workspace/` | Its working directory. |
 | `files/` | Files people sent in messages, one folder per message. |
 | `terminal/` | Its terminal channel: what you and the bot say in `pots chat`. |
-| `bot.sqlite` | Message log, timers and the agent's journal in one file. |
+| `bot.sqlite` | Message log, timers, its memory and the agent's journal in one file. |
 
-The same `pots` command gives the bot (and its scripts and cron jobs) its actions from a shell: `pots send`, `pots react`, `pots call`, `pots wake`, `pots context`, `pots turn-page`, `pots children`. Tokens stay inside the running gateway; the agent never sees them.
+The same `pots` command gives the bot (and its scripts and cron jobs) its actions from a shell: `pots send`, `pots react`, `pots call`, `pots wake`, `pots context`, `pots turn-page`, `pots children`, `pots memory`. Tokens stay inside the running gateway; the agent never sees them.
 
-The bot sends its whole conversation with each model request, so the provider's prompt cache matters: a request whose start the provider has cached costs a fraction. The system prompt holds only facts that stay the same, and the bot's own parts of it keep their text for the whole page; a change, such as a new `settings` value in `bot.json`, shows after the page turns, after pi compacts, or after an upgrade. What changes from one wake to the next, such as the time, the context use and the bot's own address in a channel, is in the wake. `pots trace` and `pots context` show how much of the input the cache served and what the requests that missed it cost.
+The bot sends its whole conversation with each model request, so the provider's prompt cache matters: a request whose start the provider has cached costs a fraction. The system prompt holds only facts that stay the same, and the bot's own parts of it, its memory too, keep their text for the whole page; a change, such as a new `settings` value in `bot.json`, shows after the page turns, after pi compacts, or after an upgrade. What changes from one wake to the next, such as the time, the context use and the bot's own address in a channel, is in the wake. `pots trace` and `pots context` show how much of the input the cache served and what the requests that missed it cost.
 
 ## Status
 
@@ -265,6 +267,7 @@ pi-durable-bot runs every day as a teammate in a real workspace. What works toda
 - [x] Mention, DM, judge and timer wakes, grouping, and steering
 - [x] Code mode on its own machine, `pots` command line
 - [x] Turning the page with notes, compaction as a fallback
+- [x] Memory it keeps by itself after each piece of work, its own and one shared about you
 - [x] Crash-safe inbox and outbox, tested with a forced crash mid-send
 - [x] Several bots per machine
 - [x] `pots init`: name, AI and one sentence, then the bot sets up its own chat apps from the terminal

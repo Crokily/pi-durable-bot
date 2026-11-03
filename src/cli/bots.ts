@@ -48,7 +48,7 @@ const create = Command.make(
     name: Argument.String("name").pipe(Argument.withDescription("What people call it.")),
     id: Flag.String("id").pipe(Flag.optional, Flag.withDescription("The folder name. Default: from the name.")),
     model: Flag.String("model").pipe(Flag.withDefault(DEFAULT_MODEL), Flag.withDescription('Any pi model as "provider/modelId".')),
-    judge: Flag.String("judge").pipe(Flag.withDefault(DEFAULT_JUDGE), Flag.withDescription('"main", "off", or a classifier "provider/modelId".')),
+    judge: Flag.String("judge").pipe(Flag.withDefault(DEFAULT_JUDGE), Flag.withDescription('"off" (every message comes to the bot), a classifier "provider/modelId", or "main" (the bot\'s own model judges).')),
     about: Flag.String("about").pipe(Flag.optional, Flag.withDescription("One sentence: what this bot is for.")),
   },
   (input) =>

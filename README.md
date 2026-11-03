@@ -55,7 +55,7 @@ It is woken in three ways, the same three ways a person notices work:
 | | Like a coworker who... | How |
 |---|---|---|
 | **Someone asks** | gets a message or an @ | A mention or a DM wakes it at once (after a short pause, so you can finish typing) |
-| **It notices** | overhears something that is their job | A judge reads each message that does not mention it and asks two questions: *is this about me?* and *should I respond?* It sees the bot's own list of responsibilities. The judge is the bot's own model, a fast classifier such as TypeSafe's Jev, or a local model |
+| **It notices** | overhears something that is their job | Every message that does not mention it comes to it too, and it decides itself whether it is about its work. You can also set a judge that reads these messages first and asks two questions: *is this about me?* and *should I respond?* It sees the bot's own list of responsibilities. The judge is a fast classifier such as TypeSafe's Jev, a local model, or the bot's own model |
 | **It checks in** | looks around now and then, and keeps promises | It sets its own timed wakes: "check Acme's pricing every Monday", "follow up at 5 pm". If it has none, it looks around every two hours |
 
 Being woken is not the same as speaking. Each time, the agent reads the log and decides if it should say anything, where, and when. Most of the time the right answer is to stay quiet.
@@ -139,14 +139,14 @@ To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service resta
 
 ### Choose the models
 
-`pots init` sets up the model. Each bot's `bot.json` names two models, and you can change them at any time; edits apply within seconds. Logins, API keys and local endpoints are stored in pi's files in `~/.pi/agent/`, so the [pi](https://github.com/earendil-works/pi) command line, if you use it, shares them.
+`pots init` sets up the model. Each bot's `bot.json` names its model and, if you want one, a judge, and you can change them at any time; edits apply within seconds. Logins, API keys and local endpoints are stored in pi's files in `~/.pi/agent/`, so the [pi](https://github.com/earendil-works/pi) command line, if you use it, shares them.
 
 | Field | What it does | Values |
 |---|---|---|
 | `model` | The agent that reads, thinks and acts | Any pi model as `provider/modelId`, for example `openai/gpt-6.1-sol` or `anthropic/claude-opus-5-5` |
-| `judge` | Decides which messages that do not mention the bot should wake it | `main` (default): the bot's own model judges, no extra account<br>`provider/modelId` of a classifier: `typesafe/jev-latest`, `openrouter/typesafe/jev-1.14`, `opencode/jev-1.13-free`, or a llama.cpp model<br>`off`: every message wakes the bot, and the agent decides |
+| `judge` | Decides which messages that do not mention the bot should wake it | `off` (default): every message wakes the bot, and the agent decides<br>`provider/modelId` of a classifier: `typesafe/jev-latest`, `openrouter/typesafe/jev-1.14`, `opencode/jev-1.13-free`, or a llama.cpp model<br>`main`: the bot's own model judges, no extra account, but slower |
 
-A fast classifier is cheaper and quicker than the main model: Jev answers in about 0.3 seconds. With `main`, each group of messages costs one short request to the main model.
+With `off`, each group of messages is a wake of the main model, which then decides. A fast classifier keeps the messages that are not for the bot away from it, and is cheaper and quicker than the main model: Jev answers in about 0.3 seconds. With `main`, each group of messages costs one short request to the main model before the bot hears of it.
 
 **OpenAI-compatible and local endpoints** (Ollama, LM Studio, vLLM, a proxy): `pots init` adds them for you. By hand, they go in pi's `~/.pi/agent/models.json` ([fields](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md)):
 
@@ -179,7 +179,7 @@ flowchart LR
   E[New event] --> L[(Message log)]
   E --> M{Mention or DM?}
   M -- yes --> W[Wake the agent]
-  M -- no --> J{Judge: about me?<br/>need to respond?}
+  M -- no --> J{Judge, if set:<br/>about me?<br/>need to respond?}
   J -- yes --> W
   J -- no --> Q[Stay quiet, remember it]
   T[Its own timers] --> W
@@ -188,7 +188,7 @@ flowchart LR
   A --> N[Do nothing]
 ```
 
-- Messages that arrive close together are grouped: it waits 3 seconds after the last one (20 seconds at most) before it judges.
+- Messages that arrive close together are grouped: it waits 3 seconds after the last one (20 seconds at most) before it decides.
 - If it is already working in a place, new messages there are handed to it as it works, so it can change course.
 - The wake message says where, who, why and when, and gives each new message's text, the start of its thread when it is a reply, and its files. The gateway downloads files as soon as a message comes, so the wake gives their paths on the machine. Earlier messages and other details are in the log.
 

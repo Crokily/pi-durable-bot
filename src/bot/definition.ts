@@ -13,7 +13,7 @@ export interface BotDefinition {
   /** "provider/modelId", any model pi can use. */
   model: string;
   thinking: Thinking;
-  /** Who judges events that do not mention the bot: "main" (its own model), "off" (every event wakes it), or a classifier "provider/modelId". */
+  /** Who judges events that do not mention the bot: "off" (every event wakes it), a classifier "provider/modelId", or "main" (its own model). */
   judge: JudgeSetting;
   channels: ChannelConfig[];
   settings: BotSettings;
@@ -44,7 +44,8 @@ const DEFAULT_SETTINGS: BotSettings = {
 };
 
 export const DEFAULT_MODEL = "openai/gpt-6.1-sol";
-export const DEFAULT_JUDGE: JudgeSetting = "main";
+/** No judge: every message that does not mention the bot comes to it, and it decides itself. */
+export const DEFAULT_JUDGE: JudgeSetting = "off";
 
 export function botPaths(dir: string) {
   return {

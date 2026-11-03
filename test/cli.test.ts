@@ -158,7 +158,7 @@ describe("pots without a running gateway", { timeout: 120_000 }, () => {
       name: "Second Bot",
       model: "fake/coworker",
       thinking: "medium",
-      judge: "main",
+      judge: "off",
       channels: [{ id: "terminal", type: "terminal" }],
     });
     expect(readFileSync(join(dir, "responsibilities.md"), "utf8")).toBe("helps with releases\n");

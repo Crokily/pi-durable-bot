@@ -76,7 +76,7 @@ Tell your person:
 
 ## When something goes wrong
 
-- `pots status` shows whether the gateway runs and each bot's state. `pots chat` shows "could not work: …" when the bot's last run failed, which is usually a model login.
+- `pots status` shows whether the gateway runs and each bot's state. When the bot cannot use its model, which is usually a model login, it says "I could not work on this" in the place that woke it; `pots status` and `pots chat` show why.
 - If a bot's `bot.json` has an error, the reason is in `bot.json.error` next to it, and the old definition stays in use.
 - `pots service logs` and `pots trace` show what happened.
 - Report bugs at https://github.com/Crokily/pi-durable-bot/issues.

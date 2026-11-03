@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { agentRequests, type FakeModel, judgeRequests, startFakeModel, wakeLine, wakes } from "./support/fake-model.ts";
+import { agentRequests, coworker, type FakeModel, judgeRequests, startFakeModel, wakeLine, wakes } from "./support/fake-model.ts";
 import { CHANNEL, ME, pause, TestGateway, waitFor } from "./support/gateway.ts";
 
 // The gateway seen from outside, with a real `pots start` process: people write on the test platform, the bot is
@@ -232,5 +232,62 @@ describe("crashes and restarts", { timeout: 90_000 }, () => {
     expect(gateway.query<{ n: number }>("SELECT count(*) AS n FROM gw_events WHERE kind = 'message'")[0]!.n).toBe(2);
     expect(wakes(model)).toHaveLength(1);
     expect(gateway.sent()).toHaveLength(1);
+  });
+});
+
+describe("when the model cannot be used", { timeout: 60_000 }, () => {
+  it("says so in each place that woke the bot, once until it works again", async () => {
+    let down = true;
+    model = await startFakeModel((request) => (down ? { fail: { status: 401, message: "the login expired" } } : coworker(request)));
+    gateway = new TestGateway({ model });
+    await gateway.start();
+    const count = (message: string) => gateway.output.filter((line) => line.message === message).length;
+    const failedRuns = () => count("agent run failed");
+
+    gateway.say("dm-alice", "alice", "are you there?");
+    await waitFor(() => gateway.sent().length === 1, { what: "the notice" });
+    expect(gateway.sent()[0]).toMatchObject({ place: "dm-alice" });
+    // Not why, which only this computer shows: a reason can name the model's configuration.
+    expect(gateway.sent()[0]!.text).toBe("I could not work on this: my model did not answer. The reason is in pots status on the computer I run on.");
+
+    // Another place is told too; a place already told is not told again.
+    gateway.say("general", "bob", `@${ME} hello?`);
+    await waitFor(() => gateway.sent().length === 2, { what: "the notice in the other place" });
+    expect(gateway.sent()[1]).toMatchObject({ place: "general" });
+    gateway.say("dm-alice", "alice", "hello?");
+    await waitFor(() => failedRuns() === 3, { what: "the third failed run" });
+    await pause(1_000);
+    expect(gateway.sent()).toHaveLength(2);
+
+    // Once a run works, a later failure is told again.
+    down = false;
+    const idle = count("agent idle");
+    gateway.say("dm-alice", "alice", "now?");
+    await waitFor(() => gateway.sent().length === 3 && count("agent idle") > idle, { what: "the reply, and the end of its run" });
+    expect(gateway.sent()[2]!.text).toBe("ack: [wake] DM");
+    down = true;
+    gateway.say("dm-alice", "alice", "and now?");
+    await waitFor(() => gateway.sent().length === 4, { what: "the second notice" });
+    expect(gateway.sent()[3]!.text).toMatch(/^I could not work on this: /);
+    await waitFor(() => failedRuns() === 4, { what: "the fourth failed run in the output" });
+    expect(gateway.pots("status")).toMatch(/last failed run .*the login expired/);
+
+    // These failures were the test's own.
+    gateway.output.splice(0, gateway.output.length, ...gateway.output.filter((line) => line.message !== "agent run failed"));
+  });
+
+  it("also says so for a run that starts right after the failed one", async () => {
+    model = await startFakeModel(() => ({ fail: { status: 401, message: "the login expired" } }), { delayMs: 1_500 });
+    gateway = new TestGateway({ model });
+    await gateway.start();
+
+    gateway.say("dm-alice", "alice", "are you there?");
+    await waitFor(() => model.requests.length === 1, { what: "the first model request" });
+    // Queued while the first run waits for the model; it runs as soon as that run ends, with no idle between.
+    gateway.say("general", "bob", `@${ME} hello?`);
+    await waitFor(() => gateway.sent().length === 2, { what: "both notices" });
+    expect(gateway.sent().map((record) => record.place).sort()).toEqual(["dm-alice", "general"]);
+
+    gateway.output.splice(0, gateway.output.length, ...gateway.output.filter((line) => line.message !== "agent run failed"));
   });
 });

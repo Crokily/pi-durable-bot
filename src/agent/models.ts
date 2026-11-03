@@ -3,7 +3,10 @@ import { type LazyStreamObserver, lazyStream } from "@earendil-works/pi-ai/api/l
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { TelemetrySpan } from "@earendil-works/pi-telemetry";
 
-/** A module of pi-coding-agent that its package does not export. */
+/**
+ * A module of pi-coding-agent that its package does not export. Only for what is not in its public entry; check each
+ * one when pi is upgraded.
+ */
 export const piModule = (path: string) => new URL(path, import.meta.resolve("@earendil-works/pi-coding-agent")).href;
 
 /**
@@ -13,9 +16,9 @@ export const piModule = (path: string) => new URL(path, import.meta.resolve("@ea
  * One per process; all bots share it.
  */
 export async function openModels(): Promise<Models> {
-  // The model layer from its own module: the package's index also loads pi's terminal interface (Markdown, syntax
-  // highlighting, diagrams), which takes about as long to load as the rest of the gateway.
-  const { ModelRuntime: Runtime } = (await import(piModule("./core/model-runtime.js"))) as { ModelRuntime: typeof ModelRuntime };
+  // From pi's public entry. It also loads pi's terminal interface, which the bot does not use: about 0.3 seconds and
+  // 20 MB more, once, when the gateway starts.
+  const { ModelRuntime: Runtime } = await import("@earendil-works/pi-coding-agent");
   const models = await Runtime.create();
   // pi registers llama.cpp from a built-in extension. It brings the router's chat models and its classifiers (decision
   // models through /v1/systemone, chat models through next-token probabilities).

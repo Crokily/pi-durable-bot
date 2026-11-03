@@ -1,17 +1,13 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Api, AuthEvent, AuthInteraction, AuthPrompt, AuthType, Model, Models } from "@earendil-works/pi-ai";
-import type { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { type Context, Console, Effect, Redacted } from "effect";
 import { Prompt } from "effect/cli";
 import { userError } from "./control.ts";
 
-// Step 2 of pots init: give the bot an AI. Logins, keys and endpoints are pi's own (~/.pi/agent), so the pi command
-// line and every bot on this machine share them.
-
-const PI_MODELS_FILE = join(homedir(), ".pi/agent/models.json");
+// Step 2 of pots init: give the bot an AI. Logins, keys and endpoints are pi's own (~/.pi/agent, or
+// PI_CODING_AGENT_DIR), so the pi command line and every bot on this machine share them.
 
 type Way = "existing" | "oauth" | "api_key" | "local";
 
@@ -142,8 +138,7 @@ const login = (models: Models, providerId: string, type: AuthType) =>
  * fails without one.
  */
 async function piDeviceId(): Promise<string> {
-  const { piModule } = await import("../agent/models.ts");
-  const { SettingsManager: Settings } = (await import(piModule("./core/settings-manager.js"))) as { SettingsManager: typeof SettingsManager };
+  const { SettingsManager: Settings } = await import("@earendil-works/pi-coding-agent");
   const settings = Settings.create(process.cwd());
   const id = settings.getOrCreateDeviceId();
   await settings.flush();
@@ -201,9 +196,14 @@ const LOCAL_SERVERS = [
   { title: "Another OpenAI-compatible server", provider: "local", baseUrl: "http://localhost:8000/v1" },
 ] as const;
 
-/** Add an OpenAI-compatible endpoint to pi's models.json, the same file the pi command line reads. */
+/**
+ * Add an OpenAI-compatible endpoint to pi's models.json, the same file the pi command line reads, in the format pi
+ * documents. pi itself has no prompts for this; its documentation has people write the file.
+ */
 const setUpLocal = (models: Models) =>
   Effect.gen(function* () {
+    const { getAgentDir } = yield* Effect.promise(() => import("@earendil-works/pi-coding-agent"));
+    const modelsFile = join(getAgentDir(), "models.json");
     const server = yield* Prompt.run(Prompt.Select({ message: "Which server?", choices: LOCAL_SERVERS.map((item) => ({ title: item.title, value: item })) }));
     const baseUrl = yield* Prompt.run(Prompt.String({ message: "Its OpenAI-compatible base URL", default: server.baseUrl }));
     const apiKey = yield* Prompt.run(Prompt.String({ message: "API key (leave as is when it needs none)", default: "none" }));
@@ -219,7 +219,7 @@ const setUpLocal = (models: Models) =>
     const contextWindow = yield* Prompt.run(
       Prompt.Int({ message: "Its context window in tokens (the bot needs 32768 or more)", min: 8_192, default: 32_768 } as Prompt.IntOptions),
     );
-    const file = existsSync(PI_MODELS_FILE) ? (JSON.parse(readFileSync(PI_MODELS_FILE, "utf8")) as { providers?: Record<string, { models?: { id: string }[] }> }) : {};
+    const file = existsSync(modelsFile) ? (JSON.parse(readFileSync(modelsFile, "utf8")) as { providers?: Record<string, { models?: { id: string }[] }> }) : {};
     const providers = file.providers ?? {};
     const existing = providers[server.provider]?.models?.filter((model) => model.id !== modelId) ?? [];
     providers[server.provider] = {
@@ -229,9 +229,20 @@ const setUpLocal = (models: Models) =>
       compat: { supportsDeveloperRole: false, supportsReasoningEffort: false },
       models: [...existing, { id: modelId, contextWindow }],
     } as (typeof providers)[string];
-    mkdirSync(dirname(PI_MODELS_FILE), { recursive: true });
-    writeFileSync(PI_MODELS_FILE, `${JSON.stringify({ ...file, providers }, null, 2)}\n`);
+    mkdirSync(dirname(modelsFile), { recursive: true });
+    writeFileSync(modelsFile, `${JSON.stringify({ ...file, providers }, null, 2)}\n`);
     yield* Effect.promise(() => models.refresh());
-    yield* Console.log(`Added ${server.provider}/${modelId} to ${PI_MODELS_FILE}.`);
-    return `${server.provider}/${modelId}`;
+    const name = `${server.provider}/${modelId}`;
+    yield* Console.log(`Added ${name} to ${modelsFile}.`);
+    // As with a login: better to learn here than on the bot's first wake that the server is not running.
+    const added = models.getModel(server.provider, modelId);
+    if (!added) return yield* Effect.fail(userError(`pi does not find ${name} in ${modelsFile}`));
+    for (;;) {
+      yield* Console.log(`Trying ${name}…`);
+      const error = yield* tryModel(models, added);
+      if (error === undefined) return name;
+      yield* Console.log(`${name} does not answer: ${error}`);
+      const again = yield* Prompt.run(Prompt.Confirm({ message: "Try again, for example once the server runs?", initial: true }));
+      if (!again) return yield* Effect.fail(userError(`${name} does not answer; it stays in ${modelsFile}. Run pots init again once it does.`));
+    }
   });

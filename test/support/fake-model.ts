@@ -12,7 +12,11 @@ export interface FakeRequest {
   readonly tools: readonly string[];
 }
 
-export type FakeReply = { readonly text: string } | { readonly call: { readonly name: string; readonly arguments: Record<string, unknown> } };
+export type FakeReply =
+  | { readonly text: string }
+  | { readonly call: { readonly name: string; readonly arguments: Record<string, unknown> } }
+  /** An HTTP error, such as 401 for a login that expired. */
+  | { readonly fail: { readonly status: number; readonly message: string } };
 
 export interface FakeModel {
   /** The base URL, for models.json. */
@@ -37,6 +41,11 @@ export async function startFakeModel(script: (request: FakeRequest) => FakeReply
       requests.push(request);
       if (options.delayMs) await new Promise((resolve) => setTimeout(resolve, options.delayMs));
       const reply = script(request);
+      if ("fail" in reply) {
+        res.writeHead(reply.fail.status, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: reply.fail.message, type: "invalid_request_error" } }));
+        return;
+      }
       const id = `fake-${++calls}`;
       const delta = "text" in reply
         ? { role: "assistant", content: reply.text }

@@ -2,6 +2,16 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
+## Unreleased
+
+### Fixed
+- **The local server step of `pots init` writes where pi reads.** It wrote to `~/.pi/agent/models.json` even when `PI_CODING_AGENT_DIR` names another folder. It now also tries the model, as for a login, and asks whether to try again, for example once the server runs. It used to make a bot even when the server was not running.
+- **`pots status` and `pots chat` show a failed run that was followed right away by the next one.** They saw only runs that ended with the bot idle.
+
+### Changed
+- **A bot that cannot use its model says so in the chat.** When its model fails, for example because a login expired, the bot says "I could not work on this" in each place that woke it, once until the model works again or the gateway restarts. It used to stay silent. The reason stays on the bot's computer, in `pots status` and `pots chat`: it can name the model's configuration, and a chat can be shared.
+- **Pots uses pi's model layer, settings and skill loader through pi's public entry**, not pi's internal files, so a pi upgrade is less likely to break them. The gateway starts about 0.3 seconds later.
+
 ## 0.3.2 (2026-10-29)
 
 Found by running `pots init` from npm on a fresh Ubuntu server without a desktop, from the first command to a reply in Slack.

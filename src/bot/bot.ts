@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import type { Models } from "@earendil-works/pi-ai";
 import type { TelemetrySpan } from "@earendil-works/pi-telemetry";
 import { Agent, openDatabase } from "../agent/agent.ts";
+import { type ChildEnd, describeChild, reportRequestId } from "../agent/children.ts";
 import { SCREEN_VARIABLES, screenOf } from "../agent/screen.ts";
 import { createJudge } from "../agent/judge.ts";
 import { openResources } from "../agent/resources.ts";
@@ -24,12 +25,14 @@ import { ControlServer } from "./control.ts";
 import { type BotDefinition, type BotPaths, botPaths } from "./definition.ts";
 import { describeMachine } from "./machine.ts";
 import {
+  childSection,
   folderSection,
   identitySection,
   logSection,
   memorySection,
   type PromptFacts,
   renderCacheUse,
+  renderChildWake,
   renderContext,
   renderHandoff,
   renderPlaceWake,
@@ -213,6 +216,16 @@ export class Bot implements WakeTarget {
     });
     // AGENTS.md and skills as a pi session finds them from the bot's working directory, so its own folder's AGENTS.md.
     const resources = await openResources(paths.workspace, print);
+    // After the bot's own sections, as pi puts them after a custom system prompt. Rendered in this order, so the skills
+    // are those of the same scan.
+    const projectContext = {
+      name: "project_context",
+      render: async () => {
+        await resources.reload();
+        return resources.projectContext() ?? NO_PROJECT_CONTEXT;
+      },
+    };
+    const skills = { name: "skills", render: () => resources.skills() ?? NO_SKILLS };
     const agent = await Agent.open({
       database: sql,
       models: env.models,
@@ -239,17 +252,24 @@ export class Bot implements WakeTarget {
         { name: "log", render: () => logSection(facts()), pin: true },
         { name: "folder", render: () => folderSection(facts()), pin: true },
         { name: "memory", render: () => memorySection(facts()), pin: true },
-        // After the bot's own sections, as pi puts them after a custom system prompt. Rendered in this order, so the
-        // skills are those of the same scan.
-        {
-          name: "project_context",
-          render: async () => {
-            await resources.reload();
-            return resources.projectContext() ?? NO_PROJECT_CONTEXT;
-          },
-        },
-        { name: "skills", render: () => resources.skills() ?? NO_SKILLS },
+        projectContext,
+        skills,
       ],
+      children: {
+        model: () => current().childModel,
+        thinking: () => current().childThinking,
+        max: () => settings().maxChildren,
+        // The same for every child, so children share the start of their requests.
+        sections: [
+          { name: "child", render: () => childSection(facts()) },
+          { name: "log", render: () => logSection(facts()) },
+          { name: "folder", render: () => folderSection(facts()) },
+          projectContext,
+          skills,
+        ],
+        place: () => (bot ? bot.#currentPlace() : undefined),
+        ended: (end) => self().#deliverChildEnd(end),
+      },
       // What a new version says counts at once; without an upgrade, the sections stay as the page began.
       ...(shownVersion === VERSION
         ? {}
@@ -284,6 +304,9 @@ export class Bot implements WakeTarget {
     // Right after the bot took a wake, before the gateway records that. The next start must deliver the same wake again,
     // which the agent counts once, instead of deciding its events anew.
     gateway.waker.afterDeliver = crashTest(paths.crashAfterWake, "crash test: dying after the wake", "wakeId");
+    // Around the report of a child's end to the main agent. The next start must report it once.
+    agent.crashTests.beforeReport = crashTest(paths.crashBeforeChildReport, "crash test: dying before the child's report", "reporter");
+    agent.crashTests.afterReport = crashTest(paths.crashAfterChildReport, "crash test: dying after the child's report", "reporter");
     for (const row of await sql.all<{ submission: string; place: string }>(
       "SELECT submission, place FROM bot_wakes WHERE submission IS NOT NULL AND place IS NOT NULL ORDER BY at DESC LIMIT 1000",
     )) {
@@ -334,6 +357,10 @@ export class Bot implements WakeTarget {
   async applyDefinition(next: BotDefinition): Promise<void> {
     const before = this.#definition;
     if (before.model !== next.model || before.thinking !== next.thinking) await this.#agent.configure(next.model, next.thinking);
+    // Also for the children that exist: those without a model of their own use the main one.
+    if (before.model !== next.model || before.childModel !== next.childModel || before.childThinking !== next.childThinking) {
+      await this.#agent.configureChildren({ model: next.childModel, thinking: next.childThinking });
+    }
     const old = new Map(before.channels.map((channel) => [channel.id, JSON.stringify(channel)]));
     const fresh = new Map(next.channels.map((channel) => [channel.id, JSON.stringify(channel)]));
     const nameChanged = before.name !== next.name;
@@ -365,15 +392,28 @@ export class Bot implements WakeTarget {
   }
 
   isWorkingOn(place: Address): boolean {
+    // A child that works for the place: new events there go to the main agent, which can pass them on.
+    if (this.#workingChildren(place).length > 0) return true;
     const inputs = this.#agent.runInputs;
     if (!inputs) return false;
     if (this.#touched.has(place)) return true;
     return inputs.some((submission) => this.#submissionPlaces.get(submission) === place);
   }
 
+  /** The children that work now, for one place or all. */
+  #workingChildren(place?: Address) {
+    return this.#agent.children.filter((child) => child.since !== undefined && child.stoppedAt === undefined && (place === undefined || child.place === place));
+  }
+
+  /** The place the main agent works on now, when its run is about one place. */
+  #currentPlace(): Address | undefined {
+    const places = new Set((this.#agent.runInputs ?? []).map((submission) => this.#submissionPlaces.get(submission)).filter((place) => place !== undefined));
+    return places.size === 1 ? [...places][0] : undefined;
+  }
+
   async deliver(wake: PlaceWake, caller?: TelemetrySpan): Promise<Delivered> {
     const me = this.#gateway.channels.find((channel) => channel.owns(wake.place.address))?.me;
-    const text = renderPlaceWake(wake, await this.#agent.contextStatus(), me);
+    const text = renderPlaceWake(wake, await this.#agent.contextStatus(), me, this.#workingChildren(wake.place.address));
     return this.#submit(wake.id, wake.reason, wake.place.address, text, wake.reason === "steer", caller);
   }
 
@@ -382,8 +422,21 @@ export class Bot implements WakeTarget {
   }
 
   async #deliverTimer(timer: Timer, caller?: TelemetrySpan): Promise<Delivered> {
-    const text = renderTimerWake(timer, await this.#agent.contextStatus(), this.#definition.settings.fallbackWakeMinutes);
+    const text = renderTimerWake(timer, await this.#agent.contextStatus(), this.#definition.settings.fallbackWakeMinutes, this.#workingChildren());
     return this.#submit(`timer:${timer.id}`, timer.set_by === "fallback" ? "fallback" : "timer", undefined, text, false, caller);
+  }
+
+  /** A child ended: a wake for the main agent, once per reporter, also when this runs again after a restart. */
+  async #deliverChildEnd(end: ChildEnd): Promise<string> {
+    // Handed over before a restart: the same submission, and no second wake in the trace.
+    const id = reportRequestId(end.reporter);
+    const before = (await this.#sql.all<{ submission: string }>("SELECT submission FROM bot_wakes WHERE id = ?", id))[0];
+    if (before) return before.submission;
+    const text = renderChildWake(end, await this.#agent.contextStatus());
+    const delivered = await this.#gateway.wake({ reason: "child", child: end.child.id, ...(end.child.place ? { place: end.child.place } : {}) }, (caller) =>
+      this.#submit(id, "child", end.child.place, text, false, caller),
+    );
+    return delivered.submission;
   }
 
   async #submit(id: string, reason: string, place: Address | undefined, text: string, steer: boolean, caller?: TelemetrySpan): Promise<Delivered> {
@@ -450,7 +503,7 @@ export class Bot implements WakeTarget {
 
   async turnPage(note: string): Promise<{ notesChars: number }> {
     const notes = await readFile(this.paths.notes, "utf8").catch(() => "");
-    await this.#agent.turnPage(renderHandoff(note, notes, this.paths.notes));
+    await this.#agent.turnPage(renderHandoff(note, notes, this.paths.notes, this.#workingChildren()));
     this.#print("turn page", { notesChars: notes.length });
     return { notesChars: notes.length };
   }
@@ -483,12 +536,25 @@ export class Bot implements WakeTarget {
         return { ...status, cache, text: `${renderContext(status)}\n${renderCacheUse(cache)}` };
       },
       "POST /turn-page": async (body: Record<string, unknown>) => this.turnPage(text(body.note, "note")),
+      "GET /children": async () => {
+        const now = Date.now();
+        const children = this.#agent.children;
+        return { children, text: children.length === 0 ? "No children." : children.map((child) => describeChild(child, now)).join("\n") };
+      },
+      "POST /children/stop": async (body: Record<string, unknown>) => {
+        if (body.all === true) {
+          const results = await this.#agent.stopChildren();
+          return results.length === 0 ? "No children to stop." : results.join("\n");
+        }
+        return this.#agent.stopChild(text(body.id, "id"));
+      },
       "GET /status": async () => ({
         id: this.id,
         name: this.#definition.name,
         model: this.#definition.model,
         judge: this.#definition.judge,
         busy: this.#agent.runInputs !== undefined,
+        children: this.#workingChildren().length,
         ...(this.#lastError ? { lastError: this.#lastError } : {}),
         channels: this.#gateway.channels.map((channel) => ({ id: channel.id, me: channel.me?.address })),
       }),

@@ -176,6 +176,11 @@ export class TestGateway {
     writeFileSync(join(this.botDir, "crash-after-send"), "");
   }
 
+  /** Make the gateway die just before, or just after, the next child's end is handed to the main agent. */
+  crashAroundNextChildReport(when: "before" | "after"): void {
+    writeFileSync(join(this.botDir, `crash-${when}-child-report`), "");
+  }
+
   // ---- The test platform ----
 
   /** A person says something. Returns the new message's ID on the platform. */

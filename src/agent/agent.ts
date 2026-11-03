@@ -2,10 +2,11 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT, type Context, withTelemetry } from "@earendil-works/chord/context";
-import { type Message, type Models, Type } from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels, type Message, type Models, type ModelThinkingLevel, Type } from "@earendil-works/pi-ai";
 import { calculateContextTokens, estimateMessageTokens } from "@earendil-works/pi-ai/utils/estimate";
 import {
   type Conversation,
+  type ConversationId,
   createRegistry,
   DEFAULT_COMPACTION_POLICY,
   defineExtension,
@@ -15,6 +16,7 @@ import {
   type PromptInput,
   ROOT_CONVERSATION_ID,
   type SubmissionId,
+  type TaskId,
   SystemEntry,
   section,
 } from "@earendil-works/pi-durable";
@@ -25,6 +27,7 @@ import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlit
 import { type BashExecution, createBashTool, createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
 import type { TelemetryCarrier, TelemetryContext, TelemetrySpan } from "@earendil-works/pi-telemetry";
 import type { Sql } from "../core/sql.ts";
+import { type ChildEnd, type ChildInfo, Children, childInfo, childrenExtension, reportRequestId } from "./children.ts";
 import { modelRef, requireModel } from "./models.ts";
 import { NO_SCREEN, renderBusy, type Screen, ScreenLeases } from "./screen.ts";
 
@@ -79,6 +82,21 @@ export interface AgentOptions {
    * go, or every part is sent again.
    */
   sections: readonly AgentSection[];
+  /** The children the main agent starts with the task tool. */
+  children: {
+    /** "provider/modelId" of children; unset: the main model. */
+    model(): string | undefined;
+    /** Unset: the highest level the children's model has. */
+    thinking(): Thinking | undefined;
+    /** How many children may work at once. */
+    max(): number;
+    /** A child's system prompt parts. They stay the same for every child, so children share the start of their requests. */
+    sections: readonly AgentSection[];
+    /** The place the main agent works on now, when it works on one: a new child works for it unless told otherwise. */
+    place(): string | undefined;
+    /** Hand a child's end to the main agent as a wake; the same reporter is one wake. Returns its submission ID. */
+    ended(end: ChildEnd, context: Context): Promise<string>;
+  };
   /**
    * Set after an upgrade: the first request of each conversation in this process shows the new text of pinned sections,
    * as a new page does, so what the new version tells the agent counts at once. Called when the root's first request
@@ -151,6 +169,10 @@ export class Agent {
   #runInputs: readonly string[] | undefined;
   readonly #runListeners = new Set<(inputs: readonly string[] | undefined) => void>();
   #disposeView?: () => void;
+  #children: readonly ChildInfo[] = [];
+  #disposeChildren?: () => void;
+  /** Crash tests: called just before and just after a child's end is handed to the main agent. */
+  readonly crashTests: { beforeReport?: (reporter: string) => void; afterReport?: (reporter: string) => void } = {};
 
   private constructor(options: AgentOptions, harness: Harness, root: Conversation) {
     this.#options = options;
@@ -173,8 +195,14 @@ export class Agent {
     const text = (value: string) => [{ type: "text" as const, text: value }];
     // Opened at the first screen call, so a bot that never uses the screen leaves no file.
     const leases = () => options.screen.leases ?? ScreenLeases.shared();
+    // The children, as the main conversation's document has them; kept up to date once the harness is open.
+    let children: readonly ChildInfo[] = [];
     // Who holds a screen, as the other agents read it.
-    const describeAgent = (conversation: string) => (conversation === String(ROOT_CONVERSATION_ID) ? "the main agent" : `the agent of conversation ${conversation}`);
+    const describeAgent = (conversation: string) => {
+      if (conversation === String(ROOT_CONVERSATION_ID)) return "the main agent";
+      const child = children.find((each) => each.conversationId === conversation);
+      return child ? `the main agent's child ${child.id} ("${child.title}")` : `the agent of conversation ${conversation}`;
+    };
     // Commands get exactly this environment, not the gateway's: the screen's variables only in the screen tool.
     const base = Object.fromEntries(Object.entries(options.shellEnv).filter((entry): entry is [string, string] => entry[1] !== undefined));
     const environment =
@@ -297,22 +325,49 @@ export class Agent {
       tools,
       sections: options.sections.map((part) => section(part.name, render(part), { tag: false })),
     });
-    const registry = createRegistry();
-    registry.install(
-      defineExtension({
-        name: "coding-tools",
-        tools: [createReadTool({ images: await (images ??= createNodePhotonImages()) }), createWriteTool(), createEditTool(), createBashTool({ prepare: environment() })],
-      }),
-    );
-    registry.install(bot);
-
+    // A child's working tools are the main agent's, with its own prompt and without the task tool.
+    const child = defineExtension({
+      name: "child",
+      tools,
+      sections: options.children.sections.map((part) => section(part.name, render(part), { tag: false })),
+    });
+    const coding = defineExtension({
+      name: "coding-tools",
+      tools: [createReadTool({ images: await (images ??= createNodePhotonImages()) }), createWriteTool(), createEditTool(), createBashTool({ prepare: environment() })],
+    });
     let agent: Agent | undefined;
+    const self = () => {
+      if (!agent) throw new Error("the agent is still starting");
+      return agent;
+    };
+    const tasks = childrenExtension({
+      agent: () => self().#childAgent(),
+      max: () => options.children.max(),
+      place: () => options.children.place(),
+      extensions: () => ({ child: [coding, child] }),
+      ended: (end, context) => options.children.ended(end, context),
+      withdraw: async (submission) => {
+        await self().#harness.abortSubmission(Number(submission) as SubmissionId, context, ROOT_CONVERSATION_ID);
+      },
+      stop: (id) => self().stopChild(id),
+      settled: (conversation) => self().#releaseScreen(conversation),
+      beforeReport: (reporter) => self().crashTests.beforeReport?.(reporter),
+      afterReport: (reporter) => self().crashTests.afterReport?.(reporter),
+    });
+    const registry = createRegistry();
+    registry.install(coding);
+    registry.install(bot);
+    registry.install(tasks);
+    registry.install(child);
+
     harness = await Harness.open(
       storage,
       {
         models,
         registry,
         settings: {
+          // The main agent's; a child selects its own.
+          extensions: [coding, bot, tasks],
           // Several queued wakes go into one run.
           steeringMode: "all",
           followUpMode: "all",
@@ -320,7 +375,12 @@ export class Agent {
           retry: { maxRetries: 4 },
           // The fallback when the agent does not turn the page itself.
           get compaction() {
-            return compactionFor(models, agent ? agent.#model : modelRef(options.model), options.compaction());
+            const main = agent ? agent.#model : modelRef(options.model);
+            const policy = compactionFor(models, main, options.compaction());
+            // Children may have another model, with another window.
+            const childModel = modelRef(options.children.model() ?? `${main.provider}/${main.modelId}`);
+            const key = `${childModel.provider}/${childModel.modelId}`;
+            return key === `${main.provider}/${main.modelId}` ? policy : { ...policy, modelOverrides: { [key]: compactionFor(models, childModel, options.compaction()) } };
           },
         },
         env: () => new NodeExecutionEnv({ cwd: options.workspace, shellEnv: options.shellEnv }),
@@ -334,6 +394,7 @@ export class Agent {
     await root.configure({ model, thinkingLevel: options.thinking, cwd: options.workspace }, context);
     agent = new Agent(options, harness, root);
     await agent.#watchRun();
+    await agent.#watchChildren((list) => (children = list));
     return agent;
   }
 
@@ -361,8 +422,107 @@ export class Agent {
     };
   }
 
+  /** Keep the children list up to date from the main conversation's children document. */
+  async #watchChildren(changed: (children: readonly ChildInfo[]) => void): Promise<void> {
+    // Created empty at the first start, so there is always one to watch.
+    await this.#root.commit(async (tx) => {
+      await tx.doc(Children, ROOT_CONVERSATION_ID);
+    }, context);
+    const state = await this.#harness.documentState(Children, ROOT_CONVERSATION_ID, context);
+    if (!state) return;
+    const update = (value: Readonly<{ children: Readonly<Record<string, Parameters<typeof childInfo>[0]>> }> | null) => {
+      const list = Object.values(value?.children ?? {})
+        .map(childInfo)
+        .sort((a, b) => a.startedAt - b.startedAt);
+      this.#children = list;
+      changed(list);
+    };
+    update(state.value);
+    const unsubscribe = state.subscribe(update);
+    this.#disposeChildren = () => {
+      unsubscribe();
+      state.dispose();
+    };
+  }
+
+  /** The main agent's children, oldest first. */
+  get children(): readonly ChildInfo[] {
+    return this.#children;
+  }
+
+  /** The model and thinking of children: bot.json's, else the main model with the highest level it has. */
+  #childAgent(set: { model: string | undefined; thinking: Thinking | undefined } = this.#childSettings()): { model: ModelRef; thinkingLevel: ModelThinkingLevel } {
+    const model = set.model ? modelRef(set.model) : this.#model;
+    const thinking = set.thinking;
+    if (thinking) return { model, thinkingLevel: thinking };
+    const found = this.#models.getModel(model.provider, model.modelId);
+    return { model, thinkingLevel: found ? (getSupportedThinkingLevels(found).at(-1) ?? "off") : "xhigh" };
+  }
+
+  #childSettings() {
+    return { model: this.#options.children.model(), thinking: this.#options.children.thinking() };
+  }
+
+  /**
+   * Give every child that is not stopped these settings of bot.json for children, which new children get too. Throws for
+   * an unknown model.
+   */
+  async configureChildren(set: { model: string | undefined; thinking: Thinking | undefined }): Promise<void> {
+    if (set.model) await requireChatModel(this.#models, set.model);
+    const change = this.#childAgent(set);
+    for (const child of this.#children) {
+      if (child.stoppedAt !== undefined) continue;
+      await (await this.#harness.conversation(Number(child.conversationId) as ConversationId, context))?.configure(change, context);
+    }
+  }
+
+  /**
+   * Stop a child: its work and what it runs end, the messages it has not taken are withdrawn, and nothing comes back
+   * from it, also a report that waits in the main agent's queue. Returns what happened, in words for the model.
+   */
+  async stopChild(id: string): Promise<string> {
+    const found = await this.#root.commit(async (tx) => {
+      const state = await tx.doc(Children, ROOT_CONVERSATION_ID);
+      const record = Object.hasOwn(state.children, id) ? state.children[id] : undefined;
+      if (!record) return undefined;
+      if (record.stoppedAt !== undefined) return { title: record.title, stopped: true } as const;
+      record.stoppedAt = Date.now();
+      delete record.since;
+      const live = Object.entries(state.live).flatMap(([reporter, child]) => (child === id ? [reporter] : []));
+      return { title: record.title, stopped: false, conversationId: record.conversationId, reporters: [...record.reporters], live } as const;
+    }, context);
+    if (!found) return `No child ${id}.`;
+    if (found.stopped) return `${id} ("${found.title}") was stopped before.`;
+    // Its reporters first, and wait until they ended: then none of them gives the child a message or reports anew.
+    for (const reporter of found.live) {
+      const task = Number(reporter) as TaskId;
+      await this.#harness.abortTask(task, context);
+      await this.#harness.waitForTask(task, context);
+    }
+    await (await this.#harness.conversation(found.conversationId, context))?.abort(context);
+    const queued = await this.#root.commit(async (tx) => {
+      const ids: SubmissionId[] = [];
+      for (const reporter of found.reporters) {
+        const submission = await tx.submissionByRequest(ROOT_CONVERSATION_ID, reportRequestId(reporter));
+        if (submission?.status === "queued") ids.push(submission.id);
+      }
+      return ids;
+    }, context);
+    for (const submission of queued) await this.#harness.abortSubmission(submission, context, ROOT_CONVERSATION_ID);
+    this.#releaseScreen(String(found.conversationId));
+    return `Stopped ${id} ("${found.title}"). Nothing comes back from it.`;
+  }
+
+  /** Stop every child that is not stopped yet. Returns what happened to each. */
+  async stopChildren(): Promise<string[]> {
+    const results: string[] = [];
+    for (const child of this.#children) if (child.stoppedAt === undefined) results.push(await this.stopChild(child.id));
+    return results;
+  }
+
   async close(): Promise<void> {
     this.#disposeView?.();
+    this.#disposeChildren?.();
     try {
       await this.#harness.close(context);
     } finally {

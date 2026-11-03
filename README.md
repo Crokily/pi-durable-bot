@@ -64,9 +64,15 @@ Being woken is not the same as speaking. Each time, the agent reads the log and 
 
 It has a real machine with a shell, files, the internet, and a screen it uses like a person: the browser and the apps on it, with the mouse and keyboard. It does not wait for a plugin. It writes the script it needs, runs it, fixes it, and keeps the useful ones. That covers research, spreadsheets, reports, monitoring a web page, filling a form, or booking a flight, and also code.
 
-This is **code mode**: the agent gets a few general tools (`read`, `write`, `edit`, `bash`, `screen`) plus three channel actions (`send`, `react`, `call`), and builds the rest itself.
+This is **code mode**: the agent gets a few general tools (`read`, `write`, `edit`, `bash`, `screen`) plus three channel actions (`send`, `react`, `call`), and builds the rest itself. One more tool, `task`, hands work to its helpers (below).
 
 `screen` is `bash` with the screen's environment, such as `DISPLAY`; `bash` does not have it. A screen runs one task at a time, as a person's desktop does: the first `screen` command of an agent takes the screen until its work ends, also across bots and the Pots processes of the same user on the machine. Another agent that tries then learns who has it, since when, and when it frees, and decides itself what to do. A bot that sets up its own desktop, such as an Xvfb display, writes its environment into `screen` in its `bot.json`.
+
+### 👥 Its own helpers
+
+Longer work does not keep it from talking. With its `task` tool the bot starts **children**: agents that work in the background with the same tools, except `task`, on a brief it writes for them. It answers the person first, hands the work to a child, and stays free for the next message. A child starts from an empty conversation and its brief, so the bot's own context stays small. When a child ends, done, failed or with a question for a person, its final message comes back to the bot as a wake, exactly once, also across crashes and restarts; the bot passes on what matters, and sends the child the answer to its question. While a child works for a place, new messages there go to the bot, so it can pass them on. Its timed and fallback wakes list the children that work and how long each has run. A stopped child reports nothing.
+
+Children use the bot's model with its highest thinking level, or the `childModel` and `childThinking` of `bot.json`; a change counts for new children and those that exist. `settings.maxChildren` (8 by default) caps how many work at once. `pots children` lists them, and `pots children --stop <id>` or `--stop-all` stops them.
 
 It works like a [pi](https://github.com/earendil-works/pi) session: it reads `AGENTS.md` and uses [Agent Skills](https://agentskills.io) from the same places pi does, so the skills you give pi, the bot can use too. Screenshots and photos are shrunk to fit the model, as in pi.
 
@@ -135,7 +141,8 @@ It joins only the places it is invited to, like a new hire who is added to the r
 | `pots service install \| uninstall \| restart \| logs` | The gateway as a background service: launchd on macOS, systemd on Linux (`--system` for a server), Task Scheduler on Windows |
 | `pots start` | Run the gateway in this terminal instead |
 | `pots bot new \| list` | Create and list bots |
-| `pots trace` | What a bot did: its last wakes, or one wake from the events to its run and the messages it sent, with how much of each model request the provider's prompt cache served |
+| `pots trace` | What a bot did: its last wakes, or one wake from the events to its run, the runs of the children it started, and the messages it sent, with how much of each model request the provider's prompt cache served |
+| `pots children [--stop <id> \| --stop-all]` | The children a bot started for longer work, or stop them |
 
 To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`. To remove it, run `pots service uninstall`, then `npm uninstall -g pi-durable-bot`. The bots stay in `~/.pots/` until you delete that folder.
 
@@ -146,6 +153,8 @@ To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service resta
 | Field | What it does | Values |
 |---|---|---|
 | `model` | The agent that reads, thinks and acts | Any pi model as `provider/modelId`, for example `openai/gpt-6.1-sol` or `anthropic/claude-opus-5-5` |
+| `thinking` | How hard the agent thinks | `off`, `minimal`, `low`, `medium` (default), `high`, `xhigh` |
+| `childModel`, `childThinking` | The children that do longer work in the background | Unset (default): the bot's `model` with the highest thinking level it has |
 | `judge` | Decides which messages that do not mention the bot should wake it | `off` (default): every message wakes the bot, and the agent decides<br>`provider/modelId` of a classifier: `typesafe/jev-latest`, `openrouter/typesafe/jev-1.14`, `opencode/jev-1.13-free`, or a llama.cpp model<br>`main`: the bot's own model judges, no extra account, but slower |
 
 With `off`, each group of messages is a wake of the main model, which then decides. A fast classifier keeps the messages that are not for the bot away from it, and is cheaper and quicker than the main model: Jev answers in about 0.3 seconds. With `main`, each group of messages costs one short request to the main model before the bot hears of it.
@@ -191,7 +200,7 @@ flowchart LR
 ```
 
 - Messages that arrive close together are grouped: it waits 3 seconds after the last one (20 seconds at most) before it decides.
-- If it is already working in a place, new messages there are handed to it as it works, so it can change course.
+- If it is already working in a place, itself or with a child, new messages there are handed to it as it works, so it can change course.
 - The wake message says where, who, why and when, and gives each new message's text, the start of its thread when it is a reply, and its files. The gateway downloads files as soon as a message comes, so the wake gives their paths on the machine. Earlier messages and other details are in the log.
 
 ## How it works
@@ -210,7 +219,9 @@ flowchart LR
   end
   subgraph Bot[Bot]
     P[Persona, responsibilities, notes, timers]
-    A[pi-durable agent<br/>read write edit bash screen<br/>send react call]
+    A[pi-durable agent<br/>read write edit bash screen<br/>send react call task]
+    C[Children<br/>same tools, no task]
+    A --> C
   end
   S --> I
   T --> I
@@ -233,7 +244,7 @@ One gateway process runs every bot on the machine. Everything lives in `~/.pots/
 
 | File | What it is |
 |---|---|
-| `bot.json` | Name, model, judge, channel accounts, its screen, settings. Edits apply within seconds. |
+| `bot.json` | Name, model, children's model, judge, channel accounts, its screen, settings. Edits apply within seconds. |
 | `AGENTS.md` | Personality and voice, read the way pi reads AGENTS.md. The bot maintains it. |
 | `responsibilities.md` | What it is responsible for. The judge reads it. The bot maintains it. |
 | `notes.md` | Notes it carries across pages. |
@@ -242,7 +253,7 @@ One gateway process runs every bot on the machine. Everything lives in `~/.pots/
 | `terminal/` | Its terminal channel: what you and the bot say in `pots chat`. |
 | `bot.sqlite` | Message log, timers and the agent's journal in one file. |
 
-The same `pots` command gives the bot (and its scripts and cron jobs) its actions from a shell: `pots send`, `pots react`, `pots call`, `pots wake`, `pots context`, `pots turn-page`. Tokens stay inside the running gateway; the agent never sees them.
+The same `pots` command gives the bot (and its scripts and cron jobs) its actions from a shell: `pots send`, `pots react`, `pots call`, `pots wake`, `pots context`, `pots turn-page`, `pots children`. Tokens stay inside the running gateway; the agent never sees them.
 
 The bot sends its whole conversation with each model request, so the provider's prompt cache matters: a request whose start the provider has cached costs a fraction. The system prompt holds only facts that stay the same, and the bot's own parts of it keep their text for the whole page; a change, such as a new `settings` value in `bot.json`, shows after the page turns, after pi compacts, or after an upgrade. What changes from one wake to the next, such as the time, the context use and the bot's own address in a channel, is in the wake. `pots trace` and `pots context` show how much of the input the cache served and what the requests that missed it cost.
 
@@ -259,6 +270,7 @@ pi-durable-bot runs every day as a teammate in a real workspace. What works toda
 - [x] `pots init`: name, AI and one sentence, then the bot sets up its own chat apps from the terminal
 - [x] macOS, Linux and Windows, as a background service of the user
 - [x] The screen, mouse and keyboard of its computer, used like a person (computer use), or no screen on a server
+- [x] Children for longer work in the background, reported back once, also across restarts
 - [x] Any model pi can use: subscription logins, API keys, OpenAI-compatible endpoints, local models
 - [x] A judge you choose: the bot's own model, Jev or another classifier, a local llama.cpp model, or none
 - [x] `AGENTS.md`, Agent Skills and images as in a pi session

@@ -1,4 +1,5 @@
 import type { CacheUse, ContextStatus } from "../agent/agent.ts";
+import { age, type ChildEnd, type ChildInfo, describeChild } from "../agent/children.ts";
 import type { PersonInfo } from "../core/channel.ts";
 import { formatTime } from "../core/time.ts";
 import type { PlaceWake, WakeEvent, WakeFile } from "../core/wake.ts";
@@ -34,8 +35,15 @@ export function workSection(facts: PromptFacts): string {
 - You are a coworker on a team. You listen to every message in the places you were invited to (channels, DMs, group chats). Every event goes into the message log: messages that do not mention you, edits, deletions, reactions, people joining, and your own messages.
 - You are woken when there is something for you: someone mentions you or sends you a DM; the judge finds that people are talking about something you are responsible for and you need to respond (with the judge off, every message that does not mention you comes to you); a time you set comes; or the fallback check-in. A wake message tells you where, who, why and the time now, and gives the new events: the text of each message, the start of its thread when it is a reply, and its files, saved on this computer. Earlier messages and other details are in the message log.
 - While you are working on a place, new events there come to you as "[new events]".
-- You decide whether to speak, what to say, where and when. You also decide whether a message is out of date and whether it still needs anything. A coworker does not need to answer in seconds: you can think and do the work first, then reply.
+- You decide whether to speak, what to say, where and when. You also decide whether a message is out of date and whether it still needs anything.
 - Your answer text is not sent to anyone. To speak in a channel, use send. To add a reaction, use react. For other platform features, use call.
+
+# Children
+- With the task tool you start children: agents that work in the background, with your tools except task. A child starts with an empty conversation and the brief you give it. When it ends (done, failed, or with a question for a person), its final message comes back to you as a wake; to answer its question or give it more, send it a message.
+- Before you hand work to a child, reply to the person first. Longer work goes to children, so you stay free to talk.
+- A brief gives the child what it cannot find itself, such as the person's words and the place. Not the method or the steps: the child is usually the stronger model.
+- Only one agent can use a screen at a time, so give screen work to one child at a time.
+- While a child works for a place, new events there come to you as "[new events]". Timed and fallback wakes list the children that work.
 
 # Addresses
 - An address is an opaque string that points to a place, thread, message or person. It starts with the channel account. Copy addresses from wake messages or the log; do not build them yourself.
@@ -44,7 +52,7 @@ export function workSection(facts: PromptFacts): string {
 - A wake from a place gives your own address in its channel account.
 
 # Tools and command line
-- Tools: read, write, edit, bash, screen, and send, react, call.
+- Tools: read, write, edit, bash, screen, send, react, call, and task.
 - The command line pots does the same channel actions, and also handles timed wakes, turning the page and context use. Your scripts and scheduled jobs can use it too:
   pots send <address> <text, or - to read stdin> [--id <send ID>]   a send ID is sent only once; use the same ID when you redo
   pots react <message address> <emoji> [--remove]
@@ -55,13 +63,36 @@ export function workSection(facts: PromptFacts): string {
   pots turn-page --note <text>
   Outside your own bash (for example in cron), write it in full: ${facts.pots} <command> --bot ${facts.id}
 
-# This computer
+${computerSection(facts)}`;
+}
+
+/** What every agent of the bot knows about the computer it runs on. */
+function computerSection(facts: PromptFacts): string {
+  return `# This computer
 - It is yours to work on: ${facts.machine.os}, host ${facts.machine.hostname}, user ${facts.machine.user}. The bash tool runs ${facts.machine.shell}.
 - You have all the permissions of this user${facts.machine.os.startsWith("Windows") ? "" : "; sudo -n true tells you whether sudo works without a password"}. Your actions need no approval. You can install what you need.
 - The screen: if this computer has a desktop, use it like a person. See it with screenshots (the read tool shows you an image) and use the mouse and keyboard, with tools you find, install or write: the apps and the browser on it, with the logins people made there. People can watch it and take over at any time.
 - The screen tool is for anything on the screen. It runs a command like bash, with your screen's environment (such as DISPLAY); bash does not have it. Only one agent can use a screen at a time, and the screen tool tells you who has it. Your screen is the screen setting in bot.json; without it, the gateway's own environment. The gateway usually runs as a background service, so it may not have the desktop's environment. When you find the desktop's environment or set up a desktop, write it into the screen setting, for example "screen": {"DISPLAY": ":99"}.
 - If there is no desktop, work without a screen until a task needs one, such as signing up for a chat app's tokens. Then ask the person which way they want, and say what each costs: a virtual desktop (for example Xvfb and a browser, with a VNC or noVNC server) works like a real one, and they can watch it and sign in themselves over VNC, but it needs sudo, several hundred MB of packages, and an SSH tunnel or an open port for them to see it; a browser-only tool such as agent-browser is lighter, but it drives only the browser, they cannot watch it or take over, sites detect it more often, and sign-ins go through you; or they do the browser steps on their own computer while you guide them, and give you what you need.
 - Working directory: ${facts.paths.workspace}`;
+}
+
+/**
+ * The start of a child's prompt. Only facts it needs and two lines about how its work comes back; nothing else that
+ * limits how it works. The same for every child, so children share the start of their requests.
+ */
+export function childSection(facts: PromptFacts): string {
+  return `# Who you are
+You are a child agent of ${facts.name}, the bot whose folder is ${facts.paths.dir}. ${facts.name}'s main agent talks with people and started you for a piece of work: your first message is its brief, and more messages from it may follow. You start with only the brief; what people said is in the message log.
+- Your final message goes to the main agent, not to people.
+- When a person must decide, end with one short question. The answer comes back to you.
+- Do not send messages in the chat unless the brief asks you to.
+
+# Tools and command line
+- Tools: read, write, edit, bash, screen, and send, react, call. An address is an opaque string that points to a place, thread, message or person; copy it from the brief or the log. send to a thread or message replies in its thread; to mention a person, write <person address>.
+- The command line pots does the same channel actions: pots send <address> <text, or -> [--id <send ID>], pots react <message address> <emoji> [--remove], pots call <channel> <method> [JSON params]. Outside your own bash, write it in full: ${facts.pots} <command> --bot ${facts.id}
+
+${computerSection(facts)}`;
 }
 
 export function logSection(facts: PromptFacts): string {
@@ -79,7 +110,7 @@ ${LOG_SCHEMA}
 export function folderSection(facts: PromptFacts): string {
   const paths = facts.paths;
   return `# Your folder: ${paths.dir}
-- bot.json: your definition: name, model, thinking, judge, channels (channel accounts), screen (the environment of your screen, which the screen tool runs with), settings. model is "provider/modelId". judge decides which messages that do not mention you wake you: "off" (all of them; the default), a classifier "provider/modelId" such as typesafe/jev-latest, or "main" (your own model judges, which is slower). Models and logins are pi's: ~/.pi/agent/auth.json, and ~/.pi/agent/models.json for OpenAI-compatible and local endpoints. Changes take effect within a few seconds. If it has an error, the error goes into bot.json.error and the old definition stays in use.
+- bot.json: your definition: name, model, thinking, childModel and childThinking (for children; unset, they use your model with its highest thinking level), judge, channels (channel accounts), screen (the environment of your screen, which the screen tool runs with), settings (settings.maxChildren: how many children may work at once). model is "provider/modelId". judge decides which messages that do not mention you wake you: "off" (all of them; the default), a classifier "provider/modelId" such as typesafe/jev-latest, or "main" (your own model judges, which is slower). Models and logins are pi's: ~/.pi/agent/auth.json, and ~/.pi/agent/models.json for OpenAI-compatible and local endpoints. Changes take effect within a few seconds. If it has an error, the error goes into bot.json.error and the old definition stays in use.
 - AGENTS.md: your personality, how you talk, and anything else you want to know at every request. Context files are found as pi finds them: AGENTS.md (or AGENTS.override.md, CLAUDE.md) in ~/.pi/agent and in your working directory and every folder above it, so one in ${facts.botsDir} is for every bot there. They are read before each request, so changes take effect at once.
 - Skills, as in pi: a skill is a folder with a SKILL.md. They are found in ~/.pi/agent/skills, ~/.agents/skills, .pi/skills in your working directory, .agents/skills in it and the folders above, and pi's settings and packages, the same ones the pi command line uses. The ones found are listed below with where they are. You can write or install your own; new ones show at the next request.
 - responsibilities.md: what you are responsible for. The judge uses it to decide whether an event that does not mention you is about you. When your responsibilities change, update it.
@@ -163,8 +194,14 @@ function renderEvent(event: WakeEvent): string {
   return lines.join("\n");
 }
 
-/** me: the bot's own person in the place's channel account, once it is connected. */
-export function renderPlaceWake(wake: PlaceWake, status: ContextStatus, me?: PersonInfo): string {
+/** The children that work now, with how long each has run. */
+function renderChildren(children: readonly ChildInfo[], label: string, now = Date.now()): string[] {
+  const working = children.filter((child) => child.since !== undefined && child.stoppedAt === undefined);
+  return working.length === 0 ? [] : [`${label} (${working.length}):`, ...working.map((child) => `- ${describeChild(child, now)}`)];
+}
+
+/** me: the bot's own person in the place's channel account, once it is connected. children: those that work for the place. */
+export function renderPlaceWake(wake: PlaceWake, status: ContextStatus, me?: PersonInfo, children: readonly ChildInfo[] = []): string {
   let why: string;
   switch (wake.reason) {
     case "mention":
@@ -194,26 +231,43 @@ export function renderPlaceWake(wake: PlaceWake, status: ContextStatus, me?: Per
     ...(me ? [`You here: ${me.address}`] : []),
     `New events (${wake.events.length}):`,
     ...wake.events.map(renderEvent),
+    ...renderChildren(children, "Your children working for this place"),
     renderContext(status),
   ];
   return lines.join("\n");
 }
 
-export function renderTimerWake(timer: Timer, status: ContextStatus, fallbackMinutes: number): string {
+export function renderTimerWake(timer: Timer, status: ContextStatus, fallbackMinutes: number, children: readonly ChildInfo[] = []): string {
   const why =
     timer.set_by === "fallback"
       ? `fallback check-in: you have no timed wake, so one comes every ${fallbackMinutes} minutes`
       : `timed wake (you set it at ${formatTime(timer.created_at)})`;
   const lines = [`[wake] ${why}`, `Now: ${formatTime(Date.now())}`, `Due: ${formatTime(timer.due_at)}`];
   if (timer.note) lines.push(`Note: ${timer.note}`);
+  lines.push(...renderChildren(children, "Your children working now"));
   lines.push(renderContext(status));
   return lines.join("\n");
 }
 
-export function renderHandoff(note: string, notes: string, notesPath: string): string {
+/** A child ended: its final message, or why it failed. */
+export function renderChildWake(end: ChildEnd, status: ContextStatus, now = Date.now()): string {
+  const child = end.child;
+  const ran = child.since === undefined ? "" : `, ran ${age(now - child.since)}`;
+  const lines = [
+    end.status === "answered" ? `[wake] your child ${child.id} ended` : `[wake] your child ${child.id} failed: ${end.text}`,
+    `Now: ${formatTime(now)}`,
+    `Child: ${child.id} "${child.title}"${child.place ? `, for ${child.place}` : ""}, started ${formatTime(child.startedAt)}${ran}`,
+  ];
+  if (end.status === "answered") lines.push(block("Its final message", end.text.trim() || "(empty)").trimStart());
+  lines.push(renderContext(status));
+  return lines.join("\n");
+}
+
+export function renderHandoff(note: string, notes: string, notesPath: string, children: readonly ChildInfo[] = []): string {
+  const working = renderChildren(children, "Your children working now");
   return `[turned the page] A new context starts here. You ended the previous context yourself.
 Now: ${formatTime(Date.now())}
-
+${working.length > 0 ? `${working.join("\n")}\n` : ""}
 ## What you wrote to yourself when you turned the page
 ${note.trim() || "(empty)"}
 

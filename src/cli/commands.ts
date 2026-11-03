@@ -45,9 +45,10 @@ const status = Command.make("status", {}, () =>
     for (const id of listBots()) {
       const line = yield* control(id, "GET", "/status").pipe(
         Effect.map((result) => {
-          const bot = result as { name: string; model: string; busy: boolean; channels: { id: string }[]; lastError?: { at: number; error: string } };
+          const bot = result as { name: string; model: string; busy: boolean; children?: number; channels: { id: string }[]; lastError?: { at: number; error: string } };
           const error = bot.lastError ? `; last failed run ${new Date(bot.lastError.at).toLocaleString()}: ${bot.lastError.error}` : "";
-          return `${id}: ${bot.name}, ${bot.model}, ${bot.busy ? "working" : "idle"}, channels ${bot.channels.map((channel) => channel.id).join(", ") || "none"}${error}`;
+          const children = bot.children ? `, ${bot.children} child${bot.children === 1 ? "" : "ren"} working` : "";
+          return `${id}: ${bot.name}, ${bot.model}, ${bot.busy ? "working" : "idle"}${children}, channels ${bot.channels.map((channel) => channel.id).join(", ") || "none"}${error}`;
         }),
         Effect.orElseSucceed(() => `${id}: not running`),
       );

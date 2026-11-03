@@ -1,8 +1,8 @@
-import { Clock, Context, Effect, FiberHandle, FiberSet, Layer, ManagedRuntime, Schedule } from "effect";
+import { Clock, Context, Effect, FiberHandle, FiberSet, Layer, ManagedRuntime, Option, Schedule } from "effect";
 import type { TelemetrySpan } from "@earendil-works/pi-telemetry";
 import type { Address, ChannelAdapter, ChannelSink } from "../core/channel.ts";
 import type { Sql } from "../core/sql.ts";
-import type { WakeTarget } from "../core/wake.ts";
+import type { Delivered, WakeTarget } from "../core/wake.ts";
 import { Channels, platform } from "./channels.ts";
 import { GatewayConfig, type GatewayOptions } from "./config.ts";
 import type { LogError } from "./errors.ts";
@@ -208,6 +208,24 @@ export class Gateway {
   adapterFor(address: Address): ChannelAdapter {
     if (this.#stopping) throw stopped();
     return this.#runtime.runSync(this.#channels.adapterFor(address));
+  }
+
+  /**
+   * Wake the bot for something of its own, such as a child that ended: deliver hands it to the bot inside a wake span,
+   * as a timer does, so pots trace lists it with the agent's run for it.
+   */
+  wake(attributes: Record<string, string>, deliver: (caller: TelemetrySpan | undefined) => Promise<Delivered>): Promise<Delivered> {
+    const telemetry = this.telemetry;
+    const wakeSpans = this.#wakeSpans;
+    return this.#run(
+      Effect.gen(function* () {
+        const span = Option.getOrUndefined(yield* Effect.option(Effect.currentSpan));
+        const delivered = yield* Effect.tryPromise({ try: () => deliver(span && telemetry.view(span)), catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))) });
+        if (span) wakeSpans.remember(delivered.submission, span, telemetry.spanOfCarrier(delivered.run));
+        yield* Effect.annotateCurrentSpan({ submission: delivered.submission });
+        return delivered;
+      }).pipe(Effect.withSpan("wake", { root: true, attributes })),
+    );
   }
 
   // ---- Actions ----

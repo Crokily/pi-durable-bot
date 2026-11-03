@@ -94,7 +94,24 @@ const turnPage = Command.make("turn-page", { note: Flag.String("note").pipe(Flag
   }),
 ).pipe(Command.withDescription("Start a fresh context. Write notes.md first."));
 
-export const agentCommands = [send, react, call, wake, context, turnPage] as const;
+const children = Command.make(
+  "children",
+  {
+    stop: Flag.String("stop").pipe(Flag.optional, Flag.withDescription("Stop the child with this ID, and what it runs.")),
+    all: Flag.Boolean("stop-all").pipe(Flag.withDefault(false), Flag.withDescription("Stop every child.")),
+    bot,
+  },
+  (input) =>
+    Effect.gen(function* () {
+      const id = yield* resolveBot(input.bot);
+      if (input.all) return yield* printResult(yield* control(id, "POST", "/children/stop", { all: true }));
+      if (Option.isSome(input.stop)) return yield* printResult(yield* control(id, "POST", "/children/stop", { id: input.stop.value }));
+      const result = (yield* control(id, "GET", "/children")) as { text: string };
+      yield* printResult(result.text);
+    }),
+).pipe(Command.withDescription("List the children the bot's main agent started, or stop one or all. A stopped child reports nothing."));
+
+export const agentCommands = [send, react, call, wake, context, turnPage, children] as const;
 
 function duration(text: string) {
   const match = /^(\d+(?:\.\d+)?)(s|m|h|d)$/.exec(text.trim());

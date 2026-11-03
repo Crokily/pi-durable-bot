@@ -21,6 +21,7 @@ Run `npm run check` and `npm test` before every commit. Run `npm run tla` too wh
 | `test/terminal.test.ts` | `pots init` and `pots chat` in a real terminal: keys typed into a pseudo-terminal from Python's `pty` module, a moment apart like a person types, and the screen read back. Skipped on Windows and without `python3`. |
 | `test/waker.test.ts`, `test/timers.test.ts` | The waker (grouping, reasons, the judge and its retries, waiting for files) and the timers, on Effect's `TestClock`: every wake happens at an exact time, with no waiting. |
 | `test/properties.test.ts` | Properties on many random cases with [fast-check](https://fast-check.dev): grouping against a plain model of the rule, one message per send ID when the process dies before or after the platform send, timers on time and in order, and the inbox dropping repeats. |
+| `test/children.test.ts` | Children, from outside like the gateway tests: a child's final message reaches the main agent exactly once, also when the process dies just before or just after the report, and nothing comes back after a stop, from the task tool or `pots children`. The child runs show in `pots trace`. |
 | `test/screen.test.ts` | The screen lease: one conversation at a time on a screen, and a lease frees when its holder gives it up, stops using the screen or its process is gone, also a process that is not the test's. |
 | `test/inbox.test.ts`, `test/gateway.test.ts` | What adapters give the inbox, the `Gateway` class as the bot uses it, and the traces, also over OTLP. |
 | `test/telemetry.test.ts` | pi-telemetry's own conformance suite for the bridge from pi's telemetry to the gateway's spans. |
@@ -33,6 +34,7 @@ Run `npm run check` and `npm test` before every commit. Run `npm run tla` too wh
 |---|---|
 | `crash-after-send` | right after the platform accepted a send, before the outbox recorded it |
 | `crash-after-wake` | right after the bot took a wake, before the gateway recorded that |
+| `crash-before-child-report`, `crash-after-child-report` | just before, or just after, a child's end was handed to the main agent, before its reporter task ended |
 
 After the restart the bot must send once and be woken once.
 
@@ -62,7 +64,7 @@ The gateway records what it does as spans, and so do [pi-durable](https://github
 Every span goes to the `gw_spans` table in the bot's `bot.sqlite`, for 7 days. The agent can read it with SQL too.
 
 ```sh
-pots trace                  # the last wakes: reason, place, events, sends, model tokens and cache share, time; then the totals
+pots trace                  # the last wakes: reason, place, events, sends, model tokens (with the children a wake's run started) and cache share, time; then the totals
 pots trace <id>             # one wake as a tree; <id> is a trace ID (its first characters), a send ID or a wake ID
 pots trace --bot <bot> -n 50
 ```
@@ -89,6 +91,8 @@ events:
 
 In a model request, `in` counts all input tokens, and `cached` is the share the provider read from its prompt cache. After the list of wakes, `pots trace` adds up their requests: input, cache share, cost, and how many requests read less than half from the cache, with what they cost. `pots context` gives the same for the current context. These numbers are for people; the wakes do not carry them.
 
+A child's runs (`src/agent/children.ts`) start traces of their own, linked to the phase of the reporter task that gave the child its message. `pots trace` counts them with the wake whose run started or messaged the child, and `pots trace <id>` shows them as "child run". A child's end is a wake of its own, with reason `child`.
+
 **OpenTelemetry.** Set the standard variable `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`) for the gateway, and the same spans also go over OTLP (HTTP, JSON) to any tool that takes it: an OpenTelemetry Collector, Jaeger, Grafana Tempo, Honeycomb and others. The service is `pots`; the resource attribute `pots.bot` names the bot. `OTEL_EXPORTER_OTLP_HEADERS` sets headers, for example an API key; `OTEL_TRACES_EXPORTER=none` or `OTEL_SDK_DISABLED=true` turn the export off. A wrong value does not stop the bot: the gateway logs `trace export off` and runs without the export. The variables must be set for the gateway's process; for the background service, in its systemd unit, launchd plist or scheduled task.
 
 ## The system prompt and the prompt cache
@@ -99,6 +103,7 @@ The system prompt is made of sections (`src/bot/bot.ts`). pi-durable renders the
 - The bot's own sections are pinned (`pin: true`): they keep the text they had when the page began, from pi-durable's `PromptInput.shown`, and show the new text when the page turns or pi compacts, and once after an upgrade (`bot_state.prompt_version`). The name, AGENTS.md and skills are not pinned: people change them on purpose and expect the change at once.
 - A new section goes at the end, and a section always has a text. A section in the middle that comes or goes makes pi-durable send every section again.
 - The tool list stays the same.
+- Children have sections of their own (`child`, then the log, the folder, AGENTS.md and skills), the same for every child, so their requests share a start too. The main agent selects the extensions `coding-tools`, `bot` and `tasks`; a child selects `coding-tools` and `child`.
 
 ```sh
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 pots start

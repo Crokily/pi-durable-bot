@@ -183,6 +183,7 @@ export class Bot implements WakeTarget {
       settings,
       fallbackWakeMinutes: () => settings().fallbackWakeMinutes,
       fireTimer: (timer, caller) => self().#deliverTimer(timer, caller),
+      filesDir: paths.files,
       print,
     });
     const timers = gateway.timers;

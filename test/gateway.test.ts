@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { openDatabase } from "../src/agent/agent.ts";
 import type { WakeTarget } from "../src/core/wake.ts";
 import { Gateway } from "../src/gateway/gateway.ts";
-import { MemoryChannel, SETTINGS } from "./support/core.ts";
+import { FILES_DIR, MemoryChannel, SETTINGS } from "./support/core.ts";
 
 // The Gateway class as the bot uses it: promises in, promises out.
 
@@ -27,6 +27,7 @@ async function openGateway() {
     settings: () => SETTINGS,
     fallbackWakeMinutes: () => 120,
     fireTimer: async () => ({ submission: "timer" }),
+    filesDir: FILES_DIR,
     print: (message) => prints.push(message),
   });
   return { sql, gateway, prints };
@@ -108,7 +109,7 @@ describe("Gateway", () => {
     await gateway.stop();
     await sql.run("INSERT INTO gw_spans (span_id, trace_id, name, start_at, end_at, status) VALUES ('old', 'old', 'wake', ?, ?, 'ok')", Date.now() - 8 * 86_400_000, Date.now());
     await sql.run("INSERT INTO gw_spans (span_id, trace_id, name, start_at, end_at, status) VALUES ('new', 'new', 'wake', ?, ?, 'ok')", Date.now() - 6 * 86_400_000, Date.now());
-    const again = await Gateway.open(sql, { bot: "coworker", judge: () => undefined, settings: () => SETTINGS, fallbackWakeMinutes: () => 120, fireTimer: async () => ({ submission: "t" }), print: () => {} });
+    const again = await Gateway.open(sql, { bot: "coworker", judge: () => undefined, settings: () => SETTINGS, fallbackWakeMinutes: () => 120, fireTimer: async () => ({ submission: "t" }), filesDir: FILES_DIR, print: () => {} });
     await again.stop();
     expect((await sql.all<{ span_id: string }>("SELECT span_id FROM gw_spans WHERE span_id IN ('old', 'new')")).map((row) => row.span_id)).toEqual(["new"]);
     await sql.close();
@@ -165,7 +166,7 @@ describe("Gateway", () => {
     await until(() => woken);
     await gateway.stop();
 
-    const again = await Gateway.open(sql, { bot: "coworker", judge: () => undefined, settings: () => SETTINGS, fallbackWakeMinutes: () => 120, fireTimer: async () => ({ submission: "t" }), print: () => {} });
+    const again = await Gateway.open(sql, { bot: "coworker", judge: () => undefined, settings: () => SETTINGS, fallbackWakeMinutes: () => 120, fireTimer: async () => ({ submission: "t" }), filesDir: FILES_DIR, print: () => {} });
     await again.start(target, [new MemoryChannel()]);
     await again.send("tool:9", "mem:#general", "after the restart", ["submission-7"]);
     await again.stop();

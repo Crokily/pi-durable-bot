@@ -6,6 +6,7 @@ import type { WakeTarget } from "../core/wake.ts";
 import { Channels, platform } from "./channels.ts";
 import { GatewayConfig, type GatewayOptions } from "./config.ts";
 import type { LogError } from "./errors.ts";
+import { Attachments } from "./files.ts";
 import { Inbox } from "./inbox.ts";
 import { MessageLog } from "./log.ts";
 import { Outbox, type OutboxHooks, type SendResult } from "./outbox.ts";
@@ -16,7 +17,7 @@ import { Waker, type WakerHooks } from "./waker.ts";
 
 const HEARTBEAT_MS = 60_000;
 
-/** The gateway core of one bot as Effect services: log, channels, inbox, waker, outbox, timers. */
+/** The gateway core of one bot as Effect services: log, channels, files, inbox, waker, outbox, timers. */
 export function gatewayLayer(sql: Sql, options: GatewayOptions) {
   const config = Layer.succeed(GatewayConfig, options);
   const tracing = tracingLayer(sql, options.bot).pipe(Layer.provide(config));
@@ -24,13 +25,14 @@ export function gatewayLayer(sql: Sql, options: GatewayOptions) {
     Layer.provideMerge(config),
     Layer.provideMerge(tracing),
   );
-  const waker = Waker.layer.pipe(Layer.provideMerge(base));
+  const files = Attachments.layer.pipe(Layer.provideMerge(base));
+  const waker = Waker.layer.pipe(Layer.provideMerge(files));
   const inbox = Inbox.layer.pipe(Layer.provideMerge(waker));
   const core = Layer.mergeAll(Outbox.layer, Timers.layer(sql)).pipe(Layer.provideMerge(inbox));
   return Background.layer.pipe(Layer.provideMerge(core));
 }
 
-type Core = Channels | GatewayConfig | Inbox | MessageLog | Outbox | Telemetry | Timers | WakeSpans | Waker;
+type Core = Attachments | Channels | GatewayConfig | Inbox | MessageLog | Outbox | Telemetry | Timers | WakeSpans | Waker;
 type Services = Core | Background;
 
 /** Tasks of the gateway that run in the background, and effects started by adapters' callbacks. Both stop with it. */

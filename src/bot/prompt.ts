@@ -1,6 +1,6 @@
 import type { ContextStatus } from "../agent/agent.ts";
 import type { PersonInfo } from "../core/channel.ts";
-import type { PlaceWake, WakeEvent } from "../core/wake.ts";
+import type { PlaceWake, WakeEvent, WakeFile } from "../core/wake.ts";
 import { LOG_SCHEMA } from "../gateway/log.ts";
 import type { Timer } from "../gateway/timers.ts";
 import type { BotPaths } from "./definition.ts";
@@ -33,7 +33,7 @@ export function workSection(facts: PromptFacts): string {
   const accounts = facts.accounts.map((account) => `  - ${account.channel}: ${account.me ? account.me.address : "(not connected yet)"}`).join("\n");
   return `# How you work
 - You are a coworker on a team. You listen to every message in the places you were invited to (channels, DMs, group chats). Every event goes into the message log: messages that do not mention you, edits, deletions, reactions, people joining, and your own messages.
-- You are woken when there is something for you: someone mentions you or sends you a DM; the judge finds that people are talking about something you are responsible for and you need to respond (with the judge off, every message that does not mention you comes to you); a time you set comes; or the fallback check-in. A wake message tells you only where, who, why, the time of each new event and the time now. Read the content yourself in the log.
+- You are woken when there is something for you: someone mentions you or sends you a DM; the judge finds that people are talking about something you are responsible for and you need to respond (with the judge off, every message that does not mention you comes to you); a time you set comes; or the fallback check-in. A wake message tells you where, who, why and the time now, and gives the new events: the text of each message, the start of its thread when it is a reply, and its files, saved on this computer. Earlier messages and other details are in the message log.
 - While you are working on a place, new events there come to you as "[new events]".
 - You decide whether to speak, what to say, where and when. You also decide whether a message is out of date and whether it still needs anything. A coworker does not need to answer in seconds: you can think and do the work first, then reply.
 - Your answer text is not sent to anyone. To speak in a channel, use send. To add a reaction, use react. For other platform features, use call.
@@ -85,6 +85,7 @@ export function folderSection(facts: PromptFacts): string {
 - responsibilities.md: what you are responsible for. The judge uses it to decide whether an event that does not mention you is about you. When your responsibilities change, update it.
 - notes.md: your notes. After you turn the page, you find what you need again from them and the message log.
 - workspace/: your working directory.
+- files/: the files of messages people send, one folder per message. They are saved when the message comes, and the wake gives each file's path.
 - Channel types: slack, terminal (the person who set you up, in their terminal), test. How to connect a new chat app yourself is in ${facts.docs}/channels/; put its tokens in ${facts.secretsDir}, readable only by this user. When the person has to give you secrets, such as tokens they copied, ask in the terminal channel with call <its channel id> ask-secret {"text": "…", "file": "<app>.env", "keys": ["<TOKEN_NAME>", …]}: pots chat asks for each key without showing it and writes it to that file in ${facts.secretsDir}, and you get a message that names the keys it wrote. You never see the values, so they stay out of your log.
 - Other bots are in ${facts.botsDir}, one subfolder per bot. You can change their definitions. A new folder with a bot.json is a new bot.`;
 }
@@ -138,13 +139,34 @@ const KINDS: Record<string, string> = {
 
 const PLACE_KINDS = { channel: "channel", dm: "DM", group: "group chat" } as const;
 
+/** A labelled text under an event: later lines indented, so the text cannot look like the next line of the wake. */
+function block(label: string, text: string): string {
+  return `  ${label}: ${text.replace(/\r?\n/g, "\n    ")}`;
+}
+
+function renderFile(file: WakeFile): string {
+  const name = `${file.name ?? "(no name)"}${file.type ? ` (${file.type})` : ""}`;
+  if (file.path) return `  File: ${name}, saved at ${file.path}`;
+  return `  File: ${name}, not saved: ${file.error ?? "unknown"}${file.url ? `. URL: ${file.url}` : ""}`;
+}
+
 function renderEvent(event: WakeEvent): string {
   const parts = [`${formatTime(event.at)} ${KINDS[event.kind] ?? event.kind}`];
   if (event.person) parts.push(`${event.person.name ?? "?"} (${event.person.address})`);
   if (event.message) parts.push(`message ${event.message}`);
   if (event.thread && event.thread !== event.message) parts.push(`thread ${event.thread}`);
   if (event.mentionsMe) parts.push("mentions you");
-  return `- ${parts.join(", ")}`;
+  if (event.edited) parts.push("edited since");
+  if (event.deleted) parts.push("deleted since");
+  const lines = [`- ${parts.join(", ")}`];
+  const start = event.threadStart;
+  if (start) {
+    const author = start.fromMe ? "you" : `${start.person?.name ?? "?"}${start.person ? ` (${start.person.address})` : ""}`;
+    lines.push(block(`Thread started by ${author}${start.deleted ? ", deleted since" : ""}`, start.text));
+  }
+  if (event.text !== undefined) lines.push(block("Text", event.text));
+  for (const file of event.files ?? []) lines.push(renderFile(file));
+  return lines.join("\n");
 }
 
 export function renderPlaceWake(wake: PlaceWake, status: ContextStatus): string {

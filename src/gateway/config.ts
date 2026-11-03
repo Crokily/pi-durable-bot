@@ -18,6 +18,8 @@ export interface GatewayOptions {
   readonly fallbackWakeMinutes: () => number;
   /** Hand a due timer to the bot. Resolves once the wake is durable. caller: the wake's span. */
   readonly fireTimer: (timer: Timer, caller?: TelemetrySpan) => Promise<Delivered>;
+  /** Where the files of messages are saved, one folder per message. */
+  readonly filesDir: string;
   readonly print: Print;
 }
 

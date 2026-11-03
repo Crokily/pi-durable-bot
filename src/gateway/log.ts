@@ -131,6 +131,8 @@ export interface UndecidedEvent {
   from_me: number;
   mentions_me: number;
   text: string | null;
+  /** The files of the message the event is about, as JSON, from gw_messages. */
+  files: string | null;
 }
 
 export interface LoggedMessage {
@@ -194,6 +196,8 @@ export class MessageLog extends Context.Service<
     /** Messages in a place before an event, oldest first. */
     messagesBefore(place: Address, at: number, limit: number): Effect.Effect<LoggedMessage[], LogError>;
     message(address: Address): Effect.Effect<LoggedMessage | undefined, LogError>;
+    /** The messages with these addresses that the log has. */
+    messages(addresses: readonly Address[]): Effect.Effect<LoggedMessage[], LogError>;
     // Outbox
     outbox(sendId: string): Effect.Effect<OutboxRecord | undefined, LogError>;
     outboxStart(sendId: string, to: Address, text: string): Effect.Effect<void, LogError>;
@@ -311,6 +315,17 @@ function makeLog(sql: Sql): MessageLog["Service"] {
         ),
       ),
 
+    messages: (addresses) =>
+      addresses.length === 0
+        ? Effect.succeed([])
+        : db(() =>
+            sql.all<LoggedMessage>(
+              `SELECT m.address, m.place, m.thread, m.person, p.name AS person_name, m.from_me, m.text, m.at, m.edited_at, m.deleted_at
+               FROM gw_messages m LEFT JOIN gw_people p ON p.address = m.person WHERE m.address IN (SELECT value FROM json_each(?))`,
+              JSON.stringify(addresses),
+            ),
+          ),
+
     outbox: (sendId) => db(() => sql.get<OutboxRecord>("SELECT send_id, to_address, state, message, created_at FROM gw_outbox WHERE send_id = ?", sendId)),
 
     outboxStart: (sendId, to, text) =>
@@ -331,8 +346,9 @@ const decide = (sql: SqlExecutor, ids: readonly number[], wake: string) =>
   sql.run("UPDATE gw_events SET wake = ? WHERE id IN (SELECT value FROM json_each(?))", wake, JSON.stringify(ids));
 
 const UNDECIDED_SELECT = `SELECT e.id, e.channel, e.kind, e.at, e.place, pl.name AS place_name, pl.kind AS place_kind, e.thread, e.message,
-  e.person, pe.name AS person_name, e.from_me, e.mentions_me, e.text
-  FROM gw_events e LEFT JOIN gw_places pl ON pl.address = e.place LEFT JOIN gw_people pe ON pe.address = e.person`;
+  e.person, pe.name AS person_name, e.from_me, e.mentions_me, e.text, m.files
+  FROM gw_events e LEFT JOIN gw_places pl ON pl.address = e.place LEFT JOIN gw_people pe ON pe.address = e.person
+  LEFT JOIN gw_messages m ON m.address = e.message`;
 
 /**
  * Apply one happening. Returns the new event row ID, or undefined when it adds nothing (a message already logged,

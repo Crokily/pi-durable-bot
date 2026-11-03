@@ -114,6 +114,11 @@ export interface ChannelAdapter {
   react(message: Address, emoji: string, remove: boolean): Promise<void>;
   /** Call a platform API method directly. The token stays in the adapter. */
   call(method: string, params: Record<string, unknown>): Promise<unknown>;
+  /**
+   * The content of a file of a message, for platforms where getting it needs the adapter (a token, for example). The
+   * gateway saves it. Without this method the gateway does not download files, and the wake gives their URL.
+   */
+  fetchFile?(file: FileInfo, signal: AbortSignal): Promise<Uint8Array | AsyncIterable<Uint8Array>>;
 }
 
 /** What a channel module exports: a factory from the channel's entry in bot.json. */

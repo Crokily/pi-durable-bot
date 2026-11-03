@@ -1,8 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { appendFile, readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
-import type { Address, ChannelAdapter, ChannelConfig, ChannelEnv, ChannelSink, Happening, PersonInfo, PlaceInfo, SentMessage } from "../../core/channel.ts";
+import { join, resolve } from "node:path";
+import type {
+  Address,
+  ChannelAdapter,
+  ChannelConfig,
+  ChannelEnv,
+  ChannelSink,
+  FileInfo,
+  Happening,
+  PersonInfo,
+  PlaceInfo,
+  SentMessage,
+} from "../../core/channel.ts";
 import { expandHome } from "../../core/env-file.ts";
 
 /**
@@ -11,10 +22,11 @@ import { expandHome } from "../../core/env-file.ts";
  * It exists to show that adding a channel only adds an adapter.
  *
  * Records: { id, type, at, place, person, ... } with type
- *   message (text, thread?, send_id?), edit (message, text), delete (message),
+ *   message (text, thread?, send_id?, files?), edit (message, text), delete (message),
  *   reaction_added / reaction_removed (message, emoji), join, leave.
  * Places are plain names. A name starting with "dm-" is a one-to-one DM, "group-" a group chat, others are channels.
  * Addresses: <id>:#<place>, <id>:#<place>/<message id>, <id>:@<person>.
+ * files: [{ name, type, url }], where url is a file path, relative to the directory; fetchFile reads it.
  */
 export function createChannel(config: ChannelConfig, env: ChannelEnv): ChannelAdapter {
   if (typeof config.dir !== "string") throw new Error(`channel ${config.id}: "dir" must name the test platform directory`);
@@ -32,12 +44,14 @@ interface PlatformRecord {
   message?: string;
   emoji?: string;
   send_id?: string;
+  files?: FileInfo[];
 }
 
 const POLL_MS = 300;
 
 class TestChannel implements ChannelAdapter {
   readonly id: string;
+  readonly #dir: string;
   readonly #file: string;
   readonly #me: string;
   readonly #env: ChannelEnv;
@@ -47,6 +61,7 @@ class TestChannel implements ChannelAdapter {
 
   constructor(id: string, dir: string, me: string, env: ChannelEnv) {
     this.id = id;
+    this.#dir = dir;
     this.#file = join(dir, "platform.jsonl");
     this.#me = me;
     this.#env = env;
@@ -142,6 +157,7 @@ class TestChannel implements ChannelAdapter {
             mentionsMe: mentions.includes(this.#me),
             mentions: mentions.map((name) => `${this.id}:@${name}`),
             ...(record.send_id ? { sendId: record.send_id } : {}),
+            ...(record.files?.length ? { files: record.files } : {}),
           },
         ];
       case "reaction_added":
@@ -190,6 +206,10 @@ class TestChannel implements ChannelAdapter {
     const parsed = this.#parse(message);
     if (!("place" in parsed) || !parsed.message) throw new Error(`not a message address: ${message}`);
     await this.#append({ type: remove ? "reaction_removed" : "reaction_added", place: parsed.place, message: parsed.message, emoji: emoji.replace(/^:|:$/g, "") });
+  }
+
+  async fetchFile(file: FileInfo): Promise<Uint8Array> {
+    return readFile(resolve(this.#dir, file.url ?? ""));
   }
 
   /** Platform methods: edit { message, text }, delete { message }, records {}. */

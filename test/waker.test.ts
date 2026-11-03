@@ -1,9 +1,12 @@
 import { assert, describe, it } from "@effect/vitest";
 import { Effect } from "effect";
 import type { JudgeAnswer, JudgeInput } from "../src/core/judge.ts";
+import type { ChannelSink } from "../src/core/channel.ts";
+import { Channels } from "../src/gateway/channels.ts";
+import { DOWNLOAD_MS } from "../src/gateway/files.ts";
 import { MessageLog } from "../src/gateway/log.ts";
 import { Waker } from "../src/gateway/waker.ts";
-import { advance, logHappening, message, settle, withCore } from "./support/core.ts";
+import { advance, logHappening, MemoryChannel, message, settle, withCore } from "./support/core.ts";
 
 // The waker on Effect's TestClock: the debounce and the judge's retries happen at exact times, without waiting.
 
@@ -20,6 +23,35 @@ const arrive = (place: string, text: string) =>
 /** For each event: "decided", or null while it waits for a decision. */
 const decisions = (ids: readonly number[]) =>
   MessageLog.use((log) => log.undecided).pipe(Effect.map((undecided) => ids.map((id) => (undecided.some((event) => event.id === id) ? null : "decided"))));
+
+describe("files", () => {
+  it.effect("a download that never ends holds the wake no longer than DOWNLOAD_MS, and the place's next group comes after it", () =>
+    withCore({}, (recorder) =>
+      Effect.gen(function* () {
+        const channel = new MemoryChannel();
+        channel.fetchFile = () => new Promise(() => {});
+        yield* (yield* Channels).connect([channel], () => ({}) as ChannelSink);
+        const waker = yield* Waker;
+        waker.setTarget(recorder.target());
+        const url = "https://files.example/report.pdf";
+        yield* waker.add(yield* logHappening({ ...message("general", "@bot the report"), files: [{ name: "report.pdf", url }] }));
+        yield* advance(10_000, 1_000);
+        yield* arrive("general", "@bot did you see it?");
+
+        yield* advance(DOWNLOAD_MS - 10_000 - 1_000, 1_000);
+        assert.strictEqual(recorder.wakes.length, 0);
+        yield* advance(1_000);
+        assert.deepStrictEqual(
+          recorder.wakes.map(({ wake, at }) => ({ text: wake.events[0]!.text, at })),
+          [
+            { text: "@bot the report", at: DOWNLOAD_MS },
+            { text: "@bot did you see it?", at: DOWNLOAD_MS },
+          ],
+        );
+        assert.deepStrictEqual(recorder.wakes[0]!.wake.events[0]!.files, [{ name: "report.pdf", url, error: "download failed: it took longer than 60 s" }]);
+      }),
+    ));
+});
 
 describe("debounce", () => {
   it.effect("waits 3 seconds after the last event of a place, then wakes once for all of them", () =>

@@ -36,6 +36,8 @@ export interface PlatformRecord {
   readonly text?: string;
   readonly thread?: string;
   readonly send_id?: string;
+  /** url: a path relative to the platform directory. */
+  readonly files?: readonly { name?: string; type?: string; url?: string }[];
 }
 
 export class TestGateway {
@@ -179,6 +181,11 @@ export class TestGateway {
   /** A person says something. Returns the new message's ID on the platform. */
   say(place: string, person: string, text: string, thread?: string): string {
     return this.#append({ type: "message", place, person, text, ...(thread ? { thread } : {}) });
+  }
+
+  /** A person sends a message with files. Returns the new message's ID on the platform. */
+  share(place: string, person: string, text: string, files: NonNullable<PlatformRecord["files"]>, thread?: string): string {
+    return this.#append({ type: "message", place, person, text, files, ...(thread ? { thread } : {}) });
   }
 
   #append(record: Omit<PlatformRecord, "id" | "at">): string {

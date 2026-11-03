@@ -183,14 +183,14 @@ flowchart LR
   J -- yes --> W
   J -- no --> Q[Stay quiet, remember it]
   T[Its own timers] --> W
-  W --> A{Agent reads the log<br/>and decides}
+  W --> A{Agent reads the wake<br/>and decides}
   A --> S[Speak, react or act]
   A --> N[Do nothing]
 ```
 
 - Messages that arrive close together are grouped: it waits 3 seconds after the last one (20 seconds at most) before it judges.
 - If it is already working in a place, new messages there are handed to it as it works, so it can change course.
-- The wake message says only where, who, why and when. The agent reads the content itself.
+- The wake message says where, who, why and when, and gives each new message's text, the start of its thread when it is a reply, and its files. The gateway downloads files as soon as a message comes, so the wake gives their paths on the machine. Earlier messages and other details are in the log.
 
 ## How it works
 
@@ -236,6 +236,7 @@ One gateway process runs every bot on the machine. Everything lives in `~/.pots/
 | `responsibilities.md` | What it is responsible for. The judge reads it. The bot maintains it. |
 | `notes.md` | Notes it carries across pages. |
 | `workspace/` | Its working directory. |
+| `files/` | Files people sent in messages, one folder per message. |
 | `terminal/` | Its terminal channel: what you and the bot say in `pots chat`. |
 | `bot.sqlite` | Message log, timers and the agent's journal in one file. |
 

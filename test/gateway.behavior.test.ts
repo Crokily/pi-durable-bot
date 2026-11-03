@@ -1,3 +1,5 @@
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { agentRequests, coworker, type FakeModel, judgeRequests, startFakeModel, wakeLine, wakes } from "./support/fake-model.ts";
 import { CHANNEL, ME, pause, TestGateway, waitFor } from "./support/gateway.ts";
@@ -105,6 +107,31 @@ describe("receive, log, wake, send", { timeout: 60_000 }, () => {
 
     await waitFor(() => gateway.sent().length === 2, { what: "two replies" });
     expect(gateway.sent().map((record) => record.place).sort()).toEqual(["general", "random"]);
+  });
+});
+
+describe("what a wake gives", { timeout: 60_000 }, () => {
+  it("gives each message's text, the start of its thread and its files, saved when the message came", async () => {
+    await setUp();
+    mkdirSync(gateway.platformDir, { recursive: true });
+    writeFileSync(join(gateway.platformDir, "report.txt"), "the numbers");
+    const root = gateway.say("general", "bob", "here is the plan\nsecond line");
+    await waitFor(() => gateway.sent().length === 1, { what: "the first reply" });
+    const files = [
+      { name: "report.txt", type: "text/plain", url: "report.txt" },
+      { name: "gone.png", type: "image/png", url: "gone.png" },
+    ];
+    gateway.share("general", "alice", `@${ME} see these`, files, root);
+
+    await waitFor(() => gateway.sent().length === 2, { what: "the second reply" });
+    const wake = wakes(model)[1]!;
+    expect(wake).toContain(`Thread started by bob (${CHANNEL}:@bob): here is the plan\n    second line`);
+    expect(wake).toContain(`  Text: @${ME} see these`);
+    const saved = /^ {2}File: report\.txt \(text\/plain\), saved at (.+)$/m.exec(wake)?.[1];
+    expect(saved?.startsWith(join(gateway.botDir, "files"))).toBe(true);
+    expect(readFileSync(saved!, "utf8")).toBe("the numbers");
+    // A download that fails does not hold up the wake: it says so and gives the URL.
+    expect(wake).toMatch(/^ {2}File: gone\.png \(image\/png\), not saved: download failed: .*\. URL: gone\.png$/m);
   });
 });
 

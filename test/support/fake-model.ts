@@ -51,7 +51,8 @@ export async function startFakeModel(script: (request: FakeRequest) => FakeReply
         ? { role: "assistant", content: reply.text }
         : { role: "assistant", tool_calls: [{ index: 0, id: `call_${calls}`, type: "function", function: { name: reply.call.name, arguments: JSON.stringify(reply.call.arguments) } }] };
       const finish = "text" in reply ? "stop" : "tool_calls";
-      const usage = { prompt_tokens: 100, completion_tokens: 10, total_tokens: 110 };
+      // As a provider whose prompt cache served most of the input.
+      const usage = { prompt_tokens: 100, completion_tokens: 10, total_tokens: 110, prompt_tokens_details: { cached_tokens: 80 } };
       if (body.stream === false) {
         const { role, ...rest } = delta;
         res.writeHead(200, { "content-type": "application/json" });

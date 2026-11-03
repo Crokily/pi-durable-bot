@@ -12,6 +12,7 @@ import { openResources } from "../agent/resources.ts";
 import { loadChannel } from "../channels/load.ts";
 import type { Address, ChannelAdapter, ChannelConfig } from "../core/channel.ts";
 import { SECRETS_DIR } from "../core/home.ts";
+import { VERSION } from "../core/version.ts";
 import type { Judge } from "../core/judge.ts";
 import type { Sql } from "../core/sql.ts";
 import type { Delivered, PlaceWake, WakeTarget } from "../core/wake.ts";
@@ -27,6 +28,7 @@ import {
   logSection,
   memorySection,
   type PromptFacts,
+  renderCacheUse,
   renderContext,
   renderHandoff,
   renderPlaceWake,
@@ -43,6 +45,10 @@ CREATE TABLE IF NOT EXISTS bot_wakes (
   text TEXT NOT NULL,
   submission TEXT
 );
+CREATE TABLE IF NOT EXISTS bot_state (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 `;
 
 export interface BotEnvironment {
@@ -56,6 +62,9 @@ export interface BotEnvironment {
 
 /** What the agent is told about the computer it runs on. Checked once per process, from when the gateway loads. */
 const MACHINE = describeMachine();
+/** In place of pi's sections when there is nothing to list, so that the sections after them stay where they are. */
+const NO_PROJECT_CONTEXT = "Project-specific instructions and guidelines: none found.";
+const NO_SKILLS = "Skills: none found.";
 /** What the bot says where it was woken when its model fails. */
 const FAILURE_NOTICE = "I could not work on this: my model did not answer. The reason is in pots status on the computer I run on.";
 /** docs/ of this package, next to src/ or dist/. */
@@ -168,6 +177,8 @@ export class Bot implements WakeTarget {
     opened: (agent: Agent) => void,
   ): Promise<Bot> {
     await sql.exec(WAKES_SCHEMA);
+    // The version whose prompt the conversation shows.
+    const shownVersion = (await sql.all<{ value: string }>("SELECT value FROM bot_state WHERE key = 'prompt_version'"))[0]?.value;
 
     let bot: Bot | undefined;
     const self = () => {
@@ -198,7 +209,6 @@ export class Bot implements WakeTarget {
       docs: DOCS_DIR,
       secretsDir: SECRETS_DIR,
       fallbackWakeMinutes: current().settings.fallbackWakeMinutes,
-      accounts: gateway.channels.map((channel) => ({ channel: channel.id, ...(channel.me ? { me: channel.me } : {}) })),
     });
     // AGENTS.md and skills as a pi session finds them from the bot's working directory, so its own folder's AGENTS.md.
     const resources = await openResources(paths.workspace, print);
@@ -215,23 +225,34 @@ export class Bot implements WakeTarget {
         PATH: `${dirname(env.potsCommand)}${delimiter}${process.env.PATH ?? ""}`,
         HOME: process.env.HOME ?? homedir(),
       },
+      // The start of every request, so the provider's prompt cache can keep it: only facts that stay the same. What
+      // changes from one wake to the next (the time, the context use, the bot's own address in a channel) is in the
+      // wake. The bot's own sections are pinned for the page; a new name shows at once, as AGENTS.md and skills do,
+      // since people change them on purpose. New sections go at the end, and every section always has a text.
       sections: [
         { name: "identity", render: () => identitySection(facts()) },
-        { name: "work", render: () => workSection(facts()) },
-        { name: "log", render: () => logSection(facts()) },
-        { name: "folder", render: () => folderSection(facts()) },
-        { name: "memory", render: () => memorySection(facts()) },
+        { name: "work", render: () => workSection(facts()), pin: true },
+        { name: "log", render: () => logSection(facts()), pin: true },
+        { name: "folder", render: () => folderSection(facts()), pin: true },
+        { name: "memory", render: () => memorySection(facts()), pin: true },
         // After the bot's own sections, as pi puts them after a custom system prompt. Rendered in this order, so the
         // skills are those of the same scan.
         {
           name: "project_context",
           render: async () => {
             await resources.reload();
-            return resources.projectContext();
+            return resources.projectContext() ?? NO_PROJECT_CONTEXT;
           },
         },
-        { name: "skills", render: () => resources.skills() },
+        { name: "skills", render: () => resources.skills() ?? NO_SKILLS },
       ],
+      // What a new version says counts at once; without an upgrade, the sections stay as the page began.
+      ...(shownVersion === VERSION
+        ? {}
+        : {
+            refreshPinned: () =>
+              sql.run("INSERT INTO bot_state (key, value) VALUES ('prompt_version', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", VERSION),
+          }),
       actions: {
         send: (to, text, sendId, trace) => self().send(to, text, sendId, trace),
         react: (message, emoji, remove, trace) => self().react(message, emoji, remove, trace),
@@ -347,7 +368,8 @@ export class Bot implements WakeTarget {
   }
 
   async deliver(wake: PlaceWake, caller?: TelemetrySpan): Promise<Delivered> {
-    const text = renderPlaceWake(wake, await this.#agent.contextStatus());
+    const me = this.#gateway.channels.find((channel) => channel.owns(wake.place.address))?.me;
+    const text = renderPlaceWake(wake, await this.#agent.contextStatus(), me);
     return this.#submit(wake.id, wake.reason, wake.place.address, text, wake.reason === "steer", caller);
   }
 
@@ -453,8 +475,8 @@ export class Bot implements WakeTarget {
         return "cancelled";
       },
       "GET /context": async () => {
-        const status = await this.#agent.contextStatus();
-        return { ...status, text: renderContext(status) };
+        const [status, cache] = await Promise.all([this.#agent.contextStatus(), this.#agent.cacheUse()]);
+        return { ...status, cache, text: `${renderContext(status)}\n${renderCacheUse(cache)}` };
       },
       "POST /turn-page": async (body: Record<string, unknown>) => this.turnPage(text(body.note, "note")),
       "GET /status": async () => ({

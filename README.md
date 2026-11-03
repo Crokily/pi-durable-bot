@@ -133,7 +133,7 @@ It joins only the places it is invited to, like a new hire who is added to the r
 | `pots service install \| uninstall \| restart \| logs` | The gateway as a background service: launchd on macOS, systemd on Linux (`--system` for a server), Task Scheduler on Windows |
 | `pots start` | Run the gateway in this terminal instead |
 | `pots bot new \| list` | Create and list bots |
-| `pots trace` | What a bot did: its last wakes, or one wake from the events to its run and the messages it sent |
+| `pots trace` | What a bot did: its last wakes, or one wake from the events to its run and the messages it sent, with how much of each model request the provider's prompt cache served |
 
 To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`. To remove it, run `pots service uninstall`, then `npm uninstall -g pi-durable-bot`. The bots stay in `~/.pots/` until you delete that folder.
 
@@ -241,6 +241,8 @@ One gateway process runs every bot on the machine. Everything lives in `~/.pots/
 | `bot.sqlite` | Message log, timers and the agent's journal in one file. |
 
 The same `pots` command gives the bot (and its scripts and cron jobs) its actions from a shell: `pots send`, `pots react`, `pots call`, `pots wake`, `pots context`, `pots turn-page`. Tokens stay inside the running gateway; the agent never sees them.
+
+The bot sends its whole conversation with each model request, so the provider's prompt cache matters: a request whose start the provider has cached costs a fraction. The system prompt holds only facts that stay the same, and the bot's own parts of it keep their text for the whole page; a change, such as a new `settings` value in `bot.json`, shows after the page turns, after pi compacts, or after an upgrade. What changes from one wake to the next, such as the time, the context use and the bot's own address in a channel, is in the wake. `pots trace` and `pots context` show how much of the input the cache served and what the requests that missed it cost.
 
 ## Status
 

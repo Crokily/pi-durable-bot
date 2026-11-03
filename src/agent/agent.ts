@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { JsonValue } from "@earendil-works/chord";
-import { BACKGROUND_CONTEXT, withTelemetry } from "@earendil-works/chord/context";
+import { BACKGROUND_CONTEXT, type Context, withTelemetry } from "@earendil-works/chord/context";
 import { type Message, type Models, Type } from "@earendil-works/pi-ai";
 import { calculateContextTokens, estimateMessageTokens } from "@earendil-works/pi-ai/utils/estimate";
 import {
@@ -12,7 +12,10 @@ import {
   defineTool,
   Harness,
   type ModelRef,
+  type PromptInput,
+  ROOT_CONVERSATION_ID,
   type SubmissionId,
+  SystemEntry,
   section,
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
@@ -60,12 +63,33 @@ export interface AgentOptions {
   workspace: string;
   /** Environment of bash commands. */
   shellEnv: NodeJS.ProcessEnv;
-  /** System prompt parts, rendered before each request in this order. */
-  sections: readonly { name: string; render: () => Promise<string | undefined> | string | undefined }[];
+  /**
+   * System prompt parts, rendered before each request in this order. pi-durable sends only the parts that changed, at
+   * the end of the conversation. Keep the order: a new part goes at the end, and a part in the middle must not come and
+   * go, or every part is sent again.
+   */
+  sections: readonly AgentSection[];
+  /**
+   * Set after an upgrade: the first request of each conversation in this process shows the new text of pinned sections,
+   * as a new page does, so what the new version tells the agent counts at once. Called when the root's first request
+   * did that.
+   */
+  refreshPinned?: () => Promise<void>;
   actions: AgentActions;
   /** Where pi-durable's and pi-ai's spans go: submissions, task phases, tool calls, model requests. */
   telemetry?: TelemetryContext;
   log: (message: string, data?: Record<string, unknown>) => void;
+}
+
+export interface AgentSection {
+  name: string;
+  render: () => Promise<string | undefined> | string | undefined;
+  /**
+   * Keep the text it had when the page began: a new text shows after the page turns or pi compacts. A change in the
+   * middle of a page is sent again at the end of the conversation; on a model that takes system text only at the start,
+   * it changes the start of every request, and the provider's prompt cache misses.
+   */
+  pin?: boolean;
 }
 
 export interface ContextStatus {
@@ -74,6 +98,20 @@ export interface ContextStatus {
   window: number;
   /** Where pi starts compacting on its own. */
   compactAt: number;
+}
+
+/** How the model requests of the current context used the provider's prompt cache. */
+export interface CacheUse {
+  requests: number;
+  /** Input tokens of all requests, read from the cache or not. */
+  input: number;
+  /** Of them, read from the cache. */
+  cacheRead: number;
+  /** In USD, as pi prices the model. */
+  cost: number;
+  /** Requests that read less than half of their input from the cache, and what they cost. */
+  missed: number;
+  missedCost: number;
 }
 
 /** Call results longer than this go to a file in the workspace. */
@@ -166,17 +204,56 @@ export class Agent {
       }),
     ];
 
+    let harness: Harness | undefined;
+    // All sections of one request preparation get the same input, so these answers are per preparation.
+    // Whether it is the first preparation of its conversation in this process, when that refreshes the pinned sections.
+    const refreshed = new Set<string>();
+    const refreshes = new WeakMap<PromptInput, boolean>();
+    const refreshing = (input: PromptInput) => {
+      let answer = refreshes.get(input);
+      if (answer === undefined) {
+        answer = options.refreshPinned !== undefined && !refreshed.has(String(input.conversationId));
+        refreshed.add(String(input.conversationId));
+        refreshes.set(input, answer);
+        if (answer && input.conversationId === ROOT_CONVERSATION_ID) {
+          void options.refreshPinned!().catch((error: unknown) => options.log("could not record the refresh", { error: String(error) }));
+        }
+      }
+      return answer;
+    };
+    // Whether the request starts a page: pi-durable then writes every section anew (planSystemEntries). Asked only when
+    // a pinned section has a new text.
+    const pageStarts = new WeakMap<PromptInput, Promise<boolean>>();
+    const startsPage = (input: PromptInput, context: Context) => {
+      let answer = pageStarts.get(input);
+      if (!answer) {
+        answer = (async () => {
+          const view = await (await harness?.conversation(input.conversationId, context))?.context(context);
+          const head = view?.head;
+          return head !== undefined && !view!.entries.some((entry) => entry.id > head.id && SystemEntry.is(entry));
+        })();
+        pageStarts.set(input, answer);
+      }
+      return answer;
+    };
+    const render = (part: AgentSection) => async (input: PromptInput, context: Context) => {
+      const text = await part.render();
+      if (!part.pin) return text;
+      const shown = input.shown[part.name];
+      if (refreshing(input) || shown === undefined || shown === text) return text;
+      return (await startsPage(input, context)) ? text : shown;
+    };
     const bot = defineExtension({
       name: "bot",
       tools,
-      sections: options.sections.map((part) => section(part.name, () => part.render(), { tag: false })),
+      sections: options.sections.map((part) => section(part.name, render(part), { tag: false })),
     });
     const registry = createRegistry();
     registry.install(createCodingTools({ images: await (images ??= createNodePhotonImages()) }));
     registry.install(bot);
 
     let agent: Agent | undefined;
-    const harness = await Harness.open(
+    harness = await Harness.open(
       storage,
       {
         models,
@@ -279,6 +356,26 @@ export class Agent {
   /** Start a new context whose first message is the handoff. While busy, the current run ends at the next boundary. */
   async turnPage(handoff: string): Promise<void> {
     await this.#root.reset(handoff, context);
+  }
+
+  /** The prompt cache use of the model requests in the current context, from the usage pi recorded for each answer. */
+  async cacheUse(): Promise<CacheUse> {
+    const use: CacheUse = { requests: 0, input: 0, cacheRead: 0, cost: 0, missed: 0, missedCost: 0 };
+    for (const message of (await this.#root.context(context)).messages) {
+      if (message.role !== "assistant") continue;
+      const { input, cacheRead, cacheWrite, cost } = message.usage;
+      const all = input + cacheRead + cacheWrite;
+      if (all === 0) continue;
+      use.requests++;
+      use.input += all;
+      use.cacheRead += cacheRead;
+      use.cost += cost.total;
+      if (cacheRead * 2 < all) {
+        use.missed++;
+        use.missedCost += cost.total;
+      }
+    }
+    return use;
   }
 
   /** Change the model ("provider/modelId") or the thinking level. Throws for an unknown model. */

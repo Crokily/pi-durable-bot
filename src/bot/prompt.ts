@@ -1,4 +1,4 @@
-import type { ContextStatus } from "../agent/agent.ts";
+import type { CacheUse, ContextStatus } from "../agent/agent.ts";
 import type { PersonInfo } from "../core/channel.ts";
 import type { PlaceWake, WakeEvent, WakeFile } from "../core/wake.ts";
 import { LOG_SCHEMA } from "../gateway/log.ts";
@@ -6,7 +6,8 @@ import type { Timer } from "../gateway/timers.ts";
 import type { BotPaths } from "./definition.ts";
 import type { Machine } from "./machine.ts";
 
-// Everything the agent is told. Facts and mechanisms only; the judgment is the agent's.
+// Everything the agent is told. Facts and mechanisms only; the judgment is the agent's. The sections are the start of
+// every request, so they hold only facts that stay the same; what changes is in the wake.
 
 export interface PromptFacts {
   id: string;
@@ -21,8 +22,6 @@ export interface PromptFacts {
   docs: string;
   secretsDir: string;
   fallbackWakeMinutes: number;
-  /** This bot's own person address in each channel account. */
-  accounts: readonly { channel: string; me?: PersonInfo }[];
 }
 
 export function identitySection(facts: PromptFacts): string {
@@ -30,7 +29,6 @@ export function identitySection(facts: PromptFacts): string {
 }
 
 export function workSection(facts: PromptFacts): string {
-  const accounts = facts.accounts.map((account) => `  - ${account.channel}: ${account.me ? account.me.address : "(not connected yet)"}`).join("\n");
   return `# How you work
 - You are a coworker on a team. You listen to every message in the places you were invited to (channels, DMs, group chats). Every event goes into the message log: messages that do not mention you, edits, deletions, reactions, people joining, and your own messages.
 - You are woken when there is something for you: someone mentions you or sends you a DM; the judge finds that people are talking about something you are responsible for and you need to respond (with the judge off, every message that does not mention you comes to you); a time you set comes; or the fallback check-in. A wake message tells you where, who, why and the time now, and gives the new events: the text of each message, the start of its thread when it is a reply, and its files, saved on this computer. Earlier messages and other details are in the message log.
@@ -42,8 +40,7 @@ export function workSection(facts: PromptFacts): string {
 - An address is an opaque string that points to a place, thread, message or person. It starts with the channel account. Copy addresses from wake messages or the log; do not build them yourself.
 - The "to" of send: a place gives a new message; a thread or message gives a reply in that thread; a person gives a DM.
 - To mention a person in text, put their address in angle brackets: <person address>.
-- Your own address in each channel account:
-${accounts}
+- A wake from a place gives your own address in its channel account.
 
 # Tools and command line
 - Tools: read, write, edit, bash, and send, react, call.
@@ -59,7 +56,7 @@ ${accounts}
 
 # This computer
 - It is yours to work on: ${facts.machine.os}, host ${facts.machine.hostname}, user ${facts.machine.user}. The bash tool runs ${facts.machine.shell}.
-- You have all the permissions of this user${facts.machine.sudo ? ", and sudo works without a password" : ""}. Your actions need no approval. You can install what you need.
+- You have all the permissions of this user${facts.machine.os.startsWith("Windows") ? "" : "; sudo -n true tells you whether sudo works without a password"}. Your actions need no approval. You can install what you need.
 - The screen: if this computer has a desktop, use it like a person. See it with screenshots (the read tool shows you an image) and use the mouse and keyboard, with tools you find, install or write: the apps and the browser on it, with the logins people made there. People can watch it and take over at any time. The gateway usually runs as a background service, so your shell may not have the desktop's environment (such as DISPLAY). If there is no desktop, work without a screen until a task needs one, such as signing up for a chat app's tokens. Then ask the person which way they want, and say what each costs: a virtual desktop (for example Xvfb and a browser, with a VNC or noVNC server) works like a real one, and they can watch it and sign in themselves over VNC, but it needs sudo, several hundred MB of packages, and an SSH tunnel or an open port for them to see it; a browser-only tool such as agent-browser is lighter, but it drives only the browser, they cannot watch it or take over, sites detect it more often, and sign-ins go through you; or they do the browser steps on their own computer while you guide them, and give you what you need.
 - Working directory: ${facts.paths.workspace}`;
 }
@@ -126,6 +123,19 @@ export function renderContext(status: ContextStatus): string {
   return `Context: about ${k(status.used)} tokens used, window ${k(status.window)}; pi compacts automatically at about ${k(status.compactAt)}.`;
 }
 
+/** For people (pots context), not for wakes: the agent cannot steer the provider's cache. */
+export function renderCacheUse(use: CacheUse): string {
+  if (use.requests === 0) return "Prompt cache: no model requests in this context yet.";
+  const k = (tokens: number) => `${Math.round(tokens / 1000)}k`;
+  const share = (part: number, all: number) => `${all > 0 ? Math.round((100 * part) / all) : 0}%`;
+  const usd = (cost: number) => `$${cost.toFixed(4)}`;
+  const requests = (count: number) => `${count} request${count === 1 ? "" : "s"}`;
+  return (
+    `Prompt cache in this context: ${requests(use.requests)}, ${k(use.input)} input tokens, ${share(use.cacheRead, use.input)} read from the cache, ${usd(use.cost)}. ` +
+    `${requests(use.missed)} read less than half from the cache: ${usd(use.missedCost)}${use.cost > 0 ? ` (${share(use.missedCost, use.cost)} of the cost)` : ""}.`
+  );
+}
+
 const KINDS: Record<string, string> = {
   message: "message",
   edit: "edit",
@@ -169,7 +179,8 @@ function renderEvent(event: WakeEvent): string {
   return lines.join("\n");
 }
 
-export function renderPlaceWake(wake: PlaceWake, status: ContextStatus): string {
+/** me: the bot's own person in the place's channel account, once it is connected. */
+export function renderPlaceWake(wake: PlaceWake, status: ContextStatus, me?: PersonInfo): string {
   let why: string;
   switch (wake.reason) {
     case "mention":
@@ -196,6 +207,7 @@ export function renderPlaceWake(wake: PlaceWake, status: ContextStatus): string 
     `${wake.reason === "steer" ? "[new events]" : "[wake]"} ${why}`,
     `Now: ${formatTime(Date.now())}`,
     `Place: ${place.name ?? "?"} (${place.address}, ${PLACE_KINDS[place.kind]})`,
+    ...(me ? [`You here: ${me.address}`] : []),
     `New events (${wake.events.length}):`,
     ...wake.events.map(renderEvent),
     renderContext(status),

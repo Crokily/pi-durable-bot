@@ -106,10 +106,16 @@ describe("pots", { timeout: 120_000 }, () => {
   });
 
   it("shows the context and turns the page", async () => {
-    const context = JSON.parse(await pots("context")) as { used: number; window: number; compactAt: number; text: string };
+    const context = JSON.parse(await pots("context")) as { used: number; window: number; compactAt: number; cache: { requests: number }; text: string };
     expect(context.window).toBe(128_000);
     expect(context.compactAt).toBeLessThan(context.window);
-    expect(context.text).toMatch(/^Context: about \d+k tokens used, window 128k; pi compacts automatically at about \d+k\.$/);
+    const [use, cache] = context.text.split("\n");
+    expect(use).toMatch(/^Context: about \d+k tokens used, window 128k; pi compacts automatically at about \d+k\.$/);
+    expect(cache).toMatch(
+      context.cache.requests === 0
+        ? /^Prompt cache: no model requests in this context yet\.$/
+        : /^Prompt cache in this context: \d+ requests?, \d+k input tokens, 80% read from the cache, \$0\.0000\. 0 requests read less than half from the cache: \$0\.0000\.$/,
+    );
     expect(JSON.parse(await pots("turn-page", "--note", "a fresh start"))).toEqual({ notesChars: 0 });
   });
 

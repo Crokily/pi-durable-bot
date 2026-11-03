@@ -52,7 +52,13 @@ export const traceCommand = Command.make(
       if (Option.isNone(input.id)) {
         const wakes = all("SELECT * FROM gw_spans WHERE name = 'wake' AND parent_id IS NULL ORDER BY start_at DESC LIMIT ?", input.last).reverse();
         if (wakes.length === 0) return yield* Console.log("No wakes in the last 7 days.");
-        for (const wake of wakes) yield* Console.log(summary(wake, [...trace(wake.trace_id), ...runs(linking, wake).flatMap(trace)]));
+        const requests = new Map<string, Span>();
+        for (const wake of wakes) {
+          const spans = [...trace(wake.trace_id), ...runs(linking, wake).flatMap(trace)];
+          for (const span of spans) if (span.name === "pi.ai.request") requests.set(span.span_id, span);
+          yield* Console.log(summary(wake, spans));
+        }
+        yield* Console.log(cacheTotals([...requests.values()]));
         return;
       }
       const key = input.id.value;
@@ -137,13 +143,56 @@ function runs(linking: (id: string) => Span[], wake: Span): string[] {
   return [...traces];
 }
 
+/** A model request's tokens: all input (pi's usage.input is only the part not read from the cache), and the output. */
+function usage(span: Span) {
+  const facts = attributes(span);
+  const count = (key: string) => Number(facts[key] ?? 0);
+  const cacheRead = count("usage.cache_read");
+  return { input: count("usage.input") + cacheRead + count("usage.cache_write"), cacheRead, output: count("usage.output"), cost: count("cost.total") };
+}
+
+/** "92% cached": the share of input the provider read from its prompt cache. */
+function cached(cacheRead: number, input: number): string {
+  return `${input > 0 ? Math.round((100 * cacheRead) / input) : 0}% cached`;
+}
+
+/**
+ * The model requests of the listed wakes together: how much input the prompt cache served, and what the requests that
+ * missed it cost. For people; the agent is not told, as it cannot steer the provider's cache.
+ */
+function cacheTotals(requests: Span[]): string {
+  if (requests.length === 0) return "No model requests.";
+  let input = 0;
+  let cacheRead = 0;
+  let cost = 0;
+  let missed = 0;
+  let missedCost = 0;
+  for (const span of requests) {
+    const use = usage(span);
+    input += use.input;
+    cacheRead += use.cacheRead;
+    cost += use.cost;
+    if (use.cacheRead * 2 < use.input) {
+      missed++;
+      missedCost += use.cost;
+    }
+  }
+  const share = cost > 0 ? ` (${Math.round((100 * missedCost) / cost)}% of the cost)` : "";
+  return (
+    `Model requests: ${requests.length}, ${input} input tokens, ${cached(cacheRead, input)}, $${cost.toFixed(4)}. ` +
+    `${missed} read less than half from the cache: $${missedCost.toFixed(4)}${share}.`
+  );
+}
+
 /** One line per wake: when, why, where, events, sends, model requests, how long, and its trace ID. */
 function summary(wake: Span, spans: Span[]): string {
   const facts = attributes(wake);
   const events = typeof facts.events === "string" && facts.events ? facts.events.split(",").length : 0;
   const sends = spans.filter((span) => span.name === "send").length;
-  const requests = spans.filter((span) => span.name === "pi.ai.request");
-  const tokens = requests.reduce((sum, span) => sum + Number(attributes(span)["usage.input"] ?? 0) + Number(attributes(span)["usage.output"] ?? 0), 0);
+  const requests = spans.filter((span) => span.name === "pi.ai.request").map(usage);
+  const tokens = requests.reduce((sum, use) => sum + use.input + use.output, 0);
+  const input = requests.reduce((sum, use) => sum + use.input, 0);
+  const cacheRead = requests.reduce((sum, use) => sum + use.cacheRead, 0);
   const end = Math.max(...spans.map((span) => span.end_at));
   const failed = spans.some((span) => span.status === "error");
   return [
@@ -152,7 +201,7 @@ function summary(wake: Span, spans: Span[]): string {
     String(facts.place ?? (facts.timer !== undefined ? `timer ${String(facts.timer)}` : "-")).padEnd(28),
     (events ? `${events} event${events === 1 ? "" : "s"}` : "").padEnd(10),
     (sends ? `sent ${sends}` : "").padEnd(8),
-    (requests.length ? `model ${requests.length}×, ${tokens} tokens` : "").padEnd(24),
+    (requests.length ? `model ${requests.length}×, ${tokens} tokens, ${cached(cacheRead, input)}` : "").padEnd(36),
     duration(end - wake.start_at).padStart(8),
     wake.trace_id.slice(0, 12),
     failed ? "  (an error; see the trace)" : "",
@@ -209,8 +258,9 @@ function label(span: Span): string {
       return `${task}${tool} ${String(facts.phase ?? "")} → ${String(facts.outcome ?? "?")}${facts.resumed === true ? " (resumed)" : ""}`;
     }
     case "pi.ai.request": {
-      const cost = Number(facts["cost.total"] ?? 0);
-      return `model ${String(facts.provider)}/${String(facts.model)}, ${String(facts["usage.input"] ?? "?")} in, ${String(facts["usage.output"] ?? "?")} out${cost ? `, $${cost.toFixed(4)}` : ""}, ${String(facts.stop ?? "?")}`;
+      if (facts["usage.input"] === undefined) return `model ${String(facts.provider)}/${String(facts.model)}, ${String(facts.stop ?? "no answer")}`;
+      const use = usage(span);
+      return `model ${String(facts.provider)}/${String(facts.model)}, ${use.input} in (${cached(use.cacheRead, use.input)}), ${use.output} out${use.cost ? `, $${use.cost.toFixed(4)}` : ""}, ${String(facts.stop ?? "?")}`;
     }
     default:
       return [span.name, ...Object.entries(facts).map(([key, value]) => `${key}=${typeof value === "string" ? value : JSON.stringify(value)}`)].join(" ");

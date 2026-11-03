@@ -55,12 +55,13 @@ describe("receive, log, wake, send", { timeout: 60_000 }, () => {
     // pots trace shows the whole wake: the event, the decision, the agent's run with its model requests, and the send
     // under the send tool's call.
     await gateway.stop();
-    expect(gateway.pots("trace")).toMatch(/mention\s+test:#general\s+1 event\s+sent 1\s+model 2×, 220 tokens/);
+    expect(gateway.pots("trace")).toMatch(/mention\s+test:#general\s+1 event\s+sent 1\s+model 2×, 220 tokens, 80% cached/);
+    expect(gateway.pots("trace")).toMatch(/^Model requests: 2, 200 input tokens, 80% cached, \$0\.0000\. 0 read less than half from the cache: \$0\.0000\.$/m);
     const trace = gateway.pots("trace", reply!.send_id!);
     expect(trace).toMatch(/^wake .*reason=mention/m);
     expect(trace).toMatch(/^agent run, trace /m);
     expect(trace).toMatch(/^submission \d+ \(placed\)/m);
-    expect(trace).toMatch(/─ model fake\/coworker, 100 in, 10 out, toolUse/);
+    expect(trace).toMatch(/─ model fake\/coworker, 100 in \(80% cached\), 10 out, toolUse/);
     expect(trace).toMatch(/─ tool send call → done[^\n]*\n[│ ]*└─ send send=tool:\d+ .*result=sent/);
     expect(trace).toContain(`event=${id}`);
   });
@@ -125,6 +126,9 @@ describe("what a wake gives", { timeout: 60_000 }, () => {
 
     await waitFor(() => gateway.sent().length === 2, { what: "the second reply" });
     const wake = wakes(model)[1]!;
+    // The bot's own address is in the wake, not in the system prompt, which stays the same while a channel connects.
+    expect(wake).toContain(`\nYou here: ${CHANNEL}:@${ME}\n`);
+    expect(agentRequests(model).at(-1)!.system).not.toContain(`${CHANNEL}:@${ME}`);
     expect(wake).toContain(`Thread started by bob (${CHANNEL}:@bob): here is the plan\n    second line`);
     expect(wake).toContain(`  Text: @${ME} see these`);
     const saved = /^ {2}File: report\.txt \(text\/plain\), saved at (.+)$/m.exec(wake)?.[1];
@@ -202,7 +206,7 @@ describe("crashes and restarts", { timeout: 90_000 }, () => {
     expect(gateway.pots("trace")).toMatch(/mention\s+test:#general\s+1 event\s+sent 1\s+model \d+×/);
     const trace = gateway.pots("trace", "mention:test:#general:1");
     expect(trace).toMatch(/^agent run, trace /m);
-    expect(trace).toMatch(/─ model fake\/coworker, 100 in, 10 out, toolUse/);
+    expect(trace).toMatch(/─ model fake\/coworker, 100 in \(80% cached\), 10 out, toolUse/);
     expect(trace).toMatch(/└─ send send=tool:\d+ .*result=sent/);
   });
 

@@ -1,8 +1,8 @@
 import { Cause, ConfigProvider, Context, Effect, Exit, Layer, Option, Tracer } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { OtlpSerialization, OtlpTracer } from "effect/observability";
-import { readFileSync } from "node:fs";
 import type { Sql } from "../core/sql.ts";
+import { VERSION } from "../core/version.ts";
 import { GatewayConfig } from "./config.ts";
 import { failureText } from "./errors.ts";
 import { db } from "./log.ts";
@@ -28,9 +28,6 @@ CREATE TABLE IF NOT EXISTS gw_spans (
 CREATE INDEX IF NOT EXISTS gw_spans_trace ON gw_spans (trace_id);
 CREATE INDEX IF NOT EXISTS gw_spans_name ON gw_spans (name, start_at);
 `;
-
-/** This package's version, next to src/ or dist/. */
-const VERSION = (JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { version: string }).version;
 
 /** Spans older than this are deleted. */
 const SPAN_RETENTION_DAYS = 7;

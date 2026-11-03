@@ -1,4 +1,4 @@
-import type { DefaultResourceLoader, Skill } from "@earendil-works/pi-coding-agent";
+import type { Skill } from "@earendil-works/pi-coding-agent";
 import { piModule } from "./models.ts";
 
 type BuildSections = (input: {
@@ -23,12 +23,11 @@ export interface PiResources {
 }
 
 export async function openResources(cwd: string, log: (message: string, data?: Record<string, unknown>) => void): Promise<PiResources> {
-  // The modules themselves: the package's index also loads pi's terminal interface.
-  const [{ DefaultResourceLoader: Loader }, { buildSystemPromptSections }, { getAgentDir }] = (await Promise.all([
-    import(piModule("./core/resource-loader.js")),
-    import(piModule("./core/system-prompt.js")),
-    import(piModule("./config.js")),
-  ])) as [{ DefaultResourceLoader: typeof DefaultResourceLoader }, { buildSystemPromptSections: BuildSections }, { getAgentDir(): string }];
+  // The loader from pi's public entry; pi does not export how it writes the two sections.
+  const [{ DefaultResourceLoader: Loader, getAgentDir }, { buildSystemPromptSections }] = await Promise.all([
+    import("@earendil-works/pi-coding-agent"),
+    import(piModule("./core/system-prompt.js")) as Promise<{ buildSystemPromptSections: BuildSections }>,
+  ]);
   // Only what a pi session puts in its system prompt; pi's extensions, prompt templates and themes are for its terminal.
   const loader = new Loader({ cwd, agentDir: getAgentDir(), noExtensions: true, noPromptTemplates: true, noThemes: true });
   let sections: Record<string, string> = {};

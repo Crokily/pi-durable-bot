@@ -56,6 +56,8 @@ export interface BotEnvironment {
 
 /** What the agent is told about the computer it runs on. Checked once per process, from when the gateway loads. */
 const MACHINE = describeMachine();
+/** What the bot says where it was woken when its model fails. */
+const FAILURE_NOTICE = "I could not work on this: my model did not answer. The reason is in pots status on the computer I run on.";
 /** docs/ of this package, next to src/ or dist/. */
 const DOCS_DIR = fileURLToPath(new URL("../../docs", import.meta.url));
 
@@ -80,6 +82,12 @@ export class Bot implements WakeTarget {
   readonly #submissionPlaces = new Map<string, Address>();
   /** How the last failed run ended, for pots status and pots chat. */
   #lastError: { at: number; error: string } | undefined;
+  /**
+   * The notices that the agent could not work, by place, until a run works again or the gateway restarts. Without its
+   * model, the agent cannot say so itself; the people who woke it would see only silence. A notice that could not be
+   * sent is sent again, with the same send ID, after the next failed run there.
+   */
+  readonly #failureNotices = new Map<Address, { sendId: string; state: "sending" | "sent" | "unsent" }>();
   /** Places the agent sent or reacted to in its current busy period. */
   readonly #touched = new Set<Address>();
 
@@ -110,14 +118,19 @@ export class Bot implements WakeTarget {
     this.#agent.onRunChange((inputs) => {
       if (!inputs) this.#touched.clear();
       this.#print(inputs ? "agent working" : "agent idle", inputs ? { inputs } : {});
-      if (inputs) {
-        working = inputs;
-        return;
-      }
-      void this.#agent.runError(working).then((error) => {
-        if (!error) return;
+      // A run grows by the inputs that come while it works, and it ended when its first input changes: pi-durable can
+      // end one run and start the next in one commit, with no idle between.
+      const ran = working.length > 0 && inputs?.[0] !== working[0] ? working : undefined;
+      working = inputs ?? [];
+      if (!ran) return;
+      void this.#agent.runError(ran).then((error) => {
+        if (!error) {
+          this.#failureNotices.clear();
+          return;
+        }
         this.#lastError = { at: Date.now(), error };
         this.#print("agent run failed", { error });
+        this.#tellFailure(ran);
       });
     });
   }
@@ -359,6 +372,30 @@ export class Bot implements WakeTarget {
       submission,
     );
     return { submission, run: trace };
+  }
+
+  /**
+   * Say in each place that woke this run, once until a run works again, that the agent could not work. Not why: the
+   * reason can name the model's configuration, such as the command that gives its key, and the place can be shared.
+   * pots status and pots chat show it on this computer.
+   */
+  #tellFailure(inputs: readonly string[]): void {
+    const places = new Set(inputs.map((submission) => this.#submissionPlaces.get(submission)).filter((place) => place !== undefined));
+    for (const place of places) {
+      if ((this.#failureNotices.get(place)?.state ?? "unsent") !== "unsent") continue;
+      const notice = { sendId: this.#failureNotices.get(place)?.sendId ?? `failed:${inputs[0]}:${place}`, state: "sending" as const };
+      this.#failureNotices.set(place, notice);
+      const settle = (state: "sent" | "unsent") => {
+        if (this.#failureNotices.get(place)?.sendId === notice.sendId) this.#failureNotices.set(place, { ...notice, state });
+      };
+      this.#gateway.send(notice.sendId, place, FAILURE_NOTICE, inputs).then(
+        () => settle("sent"),
+        (cause: unknown) => {
+          settle("unsent");
+          this.#print("could not say that the run failed", { place, error: String(cause) });
+        },
+      );
+    }
   }
 
   // ---- Actions, for the agent's tools and the command line ----

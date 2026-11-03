@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,8 +40,15 @@ for wait, action in steps:
     else:
         os.write(fd, action.encode())
 read_until("never", 2)
-if os.waitpid(pid, os.WNOHANG)[0]: screen += b"\\n<<exited>>"
-else: os.kill(pid, 9)
+# The terminal closes a moment before the command can be reaped.
+end = time.time() + 2
+while not os.waitpid(pid, os.WNOHANG)[0]:
+    if time.time() > end:
+        os.kill(pid, 9)
+        break
+    time.sleep(0.05)
+else:
+    screen += b"\\n<<exited>>"
 sys.stdout.write(screen.decode(errors="replace"))
 `;
 
@@ -116,6 +123,33 @@ describe.skipIf(!python)("pots in a terminal", { timeout: 90_000 }, () => {
     );
     expect(screen).toContain("login failed: ChatGPT authorization failed: access_denied");
     expect(screen).toContain("<<exited>>");
+  });
+
+  it("init adds a local server to pi's models.json and tries it", () => {
+    home = mkdtempSync(join(tmpdir(), "pots-terminal-"));
+    const screen = inTerminal(
+      ["init", "--no-service", "--no-chat"],
+      [
+        ["Continue?", "y"],
+        ["What is its name?", "\r"],
+        ["How should your bot get its AI?", DOWN.repeat(2)],
+        ["How should your bot get its AI?", "\r"],
+        ["Which server?", DOWN.repeat(3)],
+        ["Which server?", "\r"],
+        ["base URL", "\x7f".repeat(40) + "http://127.0.0.1:9/v1\r"],
+        ["API key", "\r"],
+        ["Model ID", "m\r"],
+        ["context window", "\r"],
+        ["Try again", "n"],
+        ["<<the command ends>>", null],
+      ],
+    );
+    const file = JSON.parse(readFileSync(join(home, "pi", "models.json"), "utf8")) as { providers: Record<string, { baseUrl: string; models: { id: string }[] }> };
+    expect(file.providers.local).toMatchObject({ baseUrl: "http://127.0.0.1:9/v1", models: [{ id: "m" }] });
+    expect(screen).toContain("local/m does not answer:");
+    expect(screen).toContain(`local/m does not answer; it stays in ${join(home, "pi", "models.json")}. Run pots init again once it does.`);
+    expect(screen).toContain("<<exited>>");
+    expect(existsSync(join(home, "pots", "bots"))).toBe(false);
   });
 
   it("chat takes a secret apart from what the person was typing, and forgets it", () => {

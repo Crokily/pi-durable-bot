@@ -103,12 +103,13 @@ export class Waker extends Context.Service<
             ? { address: first.place, kind: first.place_kind ?? "channel", ...(first.place_name ? { name: first.place_name } : {}) }
             : { address: `${first.channel}:`, kind: "channel", name: first.channel };
           const ids = events.map((event) => event.id);
-          const wakeEvents = yield* withContent(events);
+          const files = yield* Effect.forEach(events, (event) => attachments.files(event));
           const id = (reason: string) => `${reason}:${place.address}:${ids.at(-1)}`;
           yield* Effect.annotateCurrentSpan({ place: place.address, events: ids.join(",") });
 
           const deliver = (reason: PlaceWakeReason, decision: string, judged?: PlaceWake["judged"]) =>
             Effect.gen(function* () {
+              const wakeEvents = yield* withContent(events, files);
               const wake: PlaceWake = { id: id(reason), reason, place, events: wakeEvents, ...(judged ? { judged } : {}) };
               yield* log.recordWake(wake, ids, decision);
               yield* handOver(bot, wake);
@@ -167,8 +168,8 @@ export class Waker extends Context.Service<
           Effect.withSpan("wake.judge"),
         );
 
-      /** The events as the wake gives them: their text and thread start as they are now, and their files once saved. */
-      const withContent = (events: UndecidedEvent[]) =>
+      /** The events as the wake gives them, with their saved files: their text and thread start as they are now. */
+      const withContent = (events: UndecidedEvent[], files: readonly (readonly WakeFile[])[]) =>
         Effect.gen(function* () {
           const addresses = new Set<string>();
           for (const event of events) {
@@ -176,9 +177,7 @@ export class Waker extends Context.Service<
             if (event.thread && event.thread !== event.message) addresses.add(event.thread);
           }
           const messages = new Map((yield* log.messages([...addresses])).map((logged) => [logged.address, logged]));
-          const wakeEvents: WakeEvent[] = [];
-          for (const event of events) wakeEvents.push(toWakeEvent(event, messages, yield* attachments.files(event)));
-          return wakeEvents;
+          return events.map((event, index): WakeEvent => toWakeEvent(event, messages, files[index]!));
         });
 
       /** An event as the judge sees it: what happened, with the current state of the message it is about. */

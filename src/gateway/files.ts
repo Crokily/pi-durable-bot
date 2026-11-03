@@ -20,9 +20,10 @@ const KINDS = new Set(["message", "edit", "update"]);
 
 /**
  * Saves the files of messages people send, as soon as the event comes, so the wake can give each file's local path.
- * One folder per message in the bot's files folder; a file already there is not downloaded again. A download that
- * fails or takes too long gives the file's URL and why instead. Nothing here holds up the adapter's acknowledgement:
- * the event is in the inbox before the download starts.
+ * One folder per message in the bot's files folder, and in it one numbered folder per file, so two files never share a
+ * path; a file already there is not downloaded again. A download that fails or takes too long gives the file's URL and
+ * why instead. Nothing here holds up the adapter's acknowledgement: the event is in the inbox before the download
+ * starts. Before the event's channel runs, nothing starts: the wake saves the files when it asks for them.
  */
 export class Attachments extends Context.Service<
   Attachments,
@@ -43,12 +44,12 @@ export class Attachments extends Context.Service<
       const running = yield* FiberSet.make<readonly WakeFile[]>();
       const saving = new Map<number, Fiber.Fiber<readonly WakeFile[]>>();
 
-      const save = (event: UndecidedEvent, list: readonly FileInfo[]) =>
+      const save = (event: UndecidedEvent, list: readonly FileInfo[], adapter: ChannelAdapter | undefined) =>
         Effect.gen(function* () {
-          const adapter = channels.running(event.channel);
           const folder = join(config.filesDir, folderName(event.message!));
-          const names = new Set<string>();
-          const files = yield* Effect.forEach(list, (file, index) => saveOne(adapter, file, join(folder, uniqueName(file, index, names))), { concurrency: "unbounded" });
+          const files = yield* Effect.forEach(list, (file, index) => saveOne(adapter, file, join(folder, String(index + 1), fileName(file, index))), {
+            concurrency: "unbounded",
+          });
           const failed = files.filter((file) => file.error).length;
           yield* Effect.annotateCurrentSpan({ saved: files.length - failed, failed });
           if (failed) config.print("file not saved", { channel: event.channel, event: event.id, failed, error: files.find((file) => file.error)!.error });
@@ -60,13 +61,15 @@ export class Attachments extends Context.Service<
           const known = saving.get(event.id);
           if (known) return known;
           const list = filesOf(event);
-          const fiber = yield* FiberSet.run(running, list.length ? save(event, list) : Effect.succeed([]));
-          saving.set(event.id, fiber);
+          const adapter = channels.running(event.channel);
+          const fiber = yield* FiberSet.run(running, list.length ? save(event, list, adapter) : Effect.succeed([]));
+          // Without its channel, the result is not kept: the next ask tries again.
+          if (adapter) saving.set(event.id, fiber);
           return fiber;
         });
 
       return Attachments.of({
-        start: (event) => (filesOf(event).length ? Effect.asVoid(start(event)) : Effect.void),
+        start: (event) => (filesOf(event).length && channels.running(event.channel) ? Effect.asVoid(start(event)) : Effect.void),
         files: (event) =>
           filesOf(event).length
             ? Effect.flatMap(start(event), Fiber.join).pipe(Effect.ensuring(Effect.sync(() => saving.delete(event.id))))
@@ -125,8 +128,8 @@ function folderName(address: string): string {
   return address.replace(/[^\w.-]+/g, "_");
 }
 
-/** A file name that is safe on every system and not yet used in this message. */
-function uniqueName(file: FileInfo, index: number, used: Set<string>): string {
+/** A file name that is safe on every system. */
+function fileName(file: FileInfo, index: number): string {
   let name = basename((file.name ?? "").replace(/\\/g, "/"))
     .replace(/[\u0000-\u001f<>:"|?*]+/g, "_")
     .trim();
@@ -136,7 +139,5 @@ function uniqueName(file: FileInfo, index: number, used: Set<string>): string {
     const extension = dot > 0 && name.length - dot <= 12 ? name.slice(dot) : "";
     name = name.slice(0, 120 - extension.length) + extension;
   }
-  if (used.has(name)) name = `${index + 1}-${name}`;
-  used.add(name);
   return name;
 }

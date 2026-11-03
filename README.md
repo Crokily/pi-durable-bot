@@ -251,7 +251,7 @@ One gateway process runs every bot on the machine. Everything lives in `~/.pots/
 | `responsibilities.md` | What it is responsible for. The judge reads it. The bot maintains it. |
 | `notes.md` | Its handoff to the next page: what it is doing and what it promised. |
 | `workspace/` | Its working directory. |
-| `files/` | Files people sent in messages, one folder per message. |
+| `files/` | Files people sent in messages: one folder per message, and in it one numbered folder per file. |
 | `terminal/` | Its terminal channel: what you and the bot say in `pots chat`. |
 | `bot.sqlite` | Message log, timers, its memory and the agent's journal in one file. |
 

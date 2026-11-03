@@ -1,3 +1,4 @@
+import { readFileSync, rmSync } from "node:fs";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect } from "effect";
 import type { JudgeAnswer, JudgeInput } from "../src/core/judge.ts";
@@ -6,7 +7,7 @@ import { Channels } from "../src/gateway/channels.ts";
 import { DOWNLOAD_MS } from "../src/gateway/files.ts";
 import { MessageLog } from "../src/gateway/log.ts";
 import { Waker } from "../src/gateway/waker.ts";
-import { advance, logHappening, MemoryChannel, message, settle, withCore } from "./support/core.ts";
+import { advance, FILES_DIR, logHappening, MemoryChannel, message, settle, withCore } from "./support/core.ts";
 
 // The waker on Effect's TestClock: the debounce and the judge's retries happen at exact times, without waiting.
 
@@ -18,6 +19,12 @@ const arrive = (place: string, text: string) =>
     yield* waker.add(event);
     yield* settle;
     return event;
+  });
+
+/** Let real work, such as writing files, finish while the TestClock stands still. */
+const settleUntil = (done: () => boolean) =>
+  Effect.gen(function* () {
+    for (let tries = 0; tries < 200 && !done(); tries++) yield* settle;
   });
 
 /** For each event: "decided", or null while it waits for a decision. */
@@ -49,6 +56,68 @@ describe("files", () => {
           ],
         );
         assert.deepStrictEqual(recorder.wakes[0]!.wake.events[0]!.files, [{ name: "report.pdf", url, error: "download failed: it took longer than 60 s" }]);
+      }),
+    ));
+  it.effect("two files of one message never share a path, also when their names differ only in case", () =>
+    withCore({}, (recorder) =>
+      Effect.gen(function* () {
+        rmSync(FILES_DIR, { recursive: true, force: true });
+        const channel = new MemoryChannel();
+        channel.fetchFile = async (file) => new TextEncoder().encode(`content of ${file.url}`);
+        yield* (yield* Channels).connect([channel], () => ({}) as ChannelSink);
+        const waker = yield* Waker;
+        waker.setTarget(recorder.target());
+        const files = ["3-x.txt", "x.txt", "x.txt", "X.txt"].map((name, index) => ({ name, url: `url-${index}` }));
+        yield* waker.add(yield* logHappening({ ...message("general", "@bot four files"), files }));
+        yield* advance(3_000);
+        yield* settleUntil(() => recorder.wakes.length > 0);
+
+        const saved = recorder.wakes[0]!.wake.events[0]!.files!;
+        assert.strictEqual(new Set(saved.map((file) => file.path!.toLowerCase())).size, 4);
+        assert.deepStrictEqual(
+          saved.map((file) => readFileSync(file.path!, "utf8")),
+          files.map((file) => `content of ${file.url}`),
+        );
+      }),
+    ));
+
+  it.effect("files of events from before a start are saved once their channel connects", () =>
+    withCore({}, (recorder) =>
+      Effect.gen(function* () {
+        rmSync(FILES_DIR, { recursive: true, force: true });
+        const waker = yield* Waker;
+        waker.setTarget(recorder.target());
+        yield* waker.add(yield* logHappening({ ...message("general", "@bot the report"), files: [{ name: "report.txt", url: "report" }] }));
+        const channel = new MemoryChannel();
+        channel.fetchFile = async () => new TextEncoder().encode("the numbers");
+        yield* (yield* Channels).connect([channel], () => ({}) as ChannelSink);
+        yield* advance(3_000);
+        yield* settleUntil(() => recorder.wakes.length > 0);
+
+        const [file] = recorder.wakes[0]!.wake.events[0]!.files!;
+        assert.strictEqual(file!.error, undefined);
+        assert.strictEqual(readFileSync(file!.path!, "utf8"), "the numbers");
+      }),
+    ));
+
+  it.effect("a message deleted while its files download comes as deleted", () =>
+    withCore({}, (recorder) =>
+      Effect.gen(function* () {
+        rmSync(FILES_DIR, { recursive: true, force: true });
+        let finish = () => {};
+        const channel = new MemoryChannel();
+        channel.fetchFile = () => new Promise((resolve) => (finish = () => resolve(new TextEncoder().encode("the numbers"))));
+        yield* (yield* Channels).connect([channel], () => ({}) as ChannelSink);
+        const waker = yield* Waker;
+        waker.setTarget(recorder.target());
+        const sent = { ...message("general", "@bot the report"), files: [{ name: "report.txt", url: "report" }] };
+        yield* waker.add(yield* logHappening(sent));
+        yield* advance(3_000);
+        yield* logHappening({ ...message("general", ""), kind: "delete", message: sent.message });
+        finish();
+        yield* settleUntil(() => recorder.wakes.length > 0);
+
+        assert.strictEqual(recorder.wakes[0]!.wake.events[0]!.deleted, true);
       }),
     ));
 });

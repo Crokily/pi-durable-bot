@@ -64,7 +64,9 @@ Being woken is not the same as speaking. Each time, the agent reads the log and 
 
 It has a real machine with a shell, files, the internet, and a screen it uses like a person: the browser and the apps on it, with the mouse and keyboard. It does not wait for a plugin. It writes the script it needs, runs it, fixes it, and keeps the useful ones. That covers research, spreadsheets, reports, monitoring a web page, filling a form, or booking a flight, and also code.
 
-This is **code mode**: the agent gets a few general tools (`read`, `write`, `edit`, `bash`) plus three channel actions (`send`, `react`, `call`), and builds the rest itself.
+This is **code mode**: the agent gets a few general tools (`read`, `write`, `edit`, `bash`, `screen`) plus three channel actions (`send`, `react`, `call`), and builds the rest itself.
+
+`screen` is `bash` with the screen's environment, such as `DISPLAY`; `bash` does not have it. A screen runs one task at a time, as a person's desktop does: the first `screen` command of an agent takes the screen until its work ends, also across bots and the Pots processes of the same user on the machine. Another agent that tries then learns who has it, since when, and when it frees, and decides itself what to do. A bot that sets up its own desktop, such as an Xvfb display, writes its environment into `screen` in its `bot.json`.
 
 It works like a [pi](https://github.com/earendil-works/pi) session: it reads `AGENTS.md` and uses [Agent Skills](https://agentskills.io) from the same places pi does, so the skills you give pi, the bot can use too. Screenshots and photos are shrunk to fit the model, as in pi.
 
@@ -208,7 +210,7 @@ flowchart LR
   end
   subgraph Bot[Bot]
     P[Persona, responsibilities, notes, timers]
-    A[pi-durable agent<br/>read write edit bash<br/>send react call]
+    A[pi-durable agent<br/>read write edit bash screen<br/>send react call]
   end
   S --> I
   T --> I
@@ -231,7 +233,7 @@ One gateway process runs every bot on the machine. Everything lives in `~/.pots/
 
 | File | What it is |
 |---|---|
-| `bot.json` | Name, model, judge, channel accounts, settings. Edits apply within seconds. |
+| `bot.json` | Name, model, judge, channel accounts, its screen, settings. Edits apply within seconds. |
 | `AGENTS.md` | Personality and voice, read the way pi reads AGENTS.md. The bot maintains it. |
 | `responsibilities.md` | What it is responsible for. The judge reads it. The bot maintains it. |
 | `notes.md` | Notes it carries across pages. |

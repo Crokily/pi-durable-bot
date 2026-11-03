@@ -16,6 +16,11 @@ export interface BotDefinition {
   /** Who judges events that do not mention the bot: "off" (every event wakes it), a classifier "provider/modelId", or "main" (its own model). */
   judge: JudgeSetting;
   channels: ChannelConfig[];
+  /**
+   * The environment of the bot's screen, such as {"DISPLAY": ":99"}, which the screen tool runs with. The bot writes it
+   * when it sets up or finds a desktop. Unset: the gateway's own screen variables.
+   */
+  screen?: Record<string, string>;
   settings: BotSettings;
 }
 
@@ -98,6 +103,7 @@ const Definition = Schema.Struct({
       Schema.Record(Schema.String, Schema.Unknown),
     ]),
   ),
+  screen: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
   settings: Schema.Struct({
     debounceMs: Schema.Finite.pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_SETTINGS.debounceMs))),
     debounceMaxMs: Schema.Finite.pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_SETTINGS.debounceMaxMs))),
@@ -127,6 +133,8 @@ function problem(raw: unknown, issue: { message: string; path?: readonly (Proper
       return `"model" must be "provider/modelId"`;
     case "judge":
       return `"judge" must be "main", "off" or "provider/modelId"`;
+    case "screen":
+      return `"screen" must be an object of environment variables with text values, such as {"DISPLAY": ":99"}`;
     case "thinking":
       return `"thinking" must be off, minimal, low, medium, high or xhigh`;
     case "channels":
@@ -159,6 +167,7 @@ export function readDefinition(file: string): { definition: BotDefinition; text:
       thinking: decoded.thinking,
       judge: decoded.judge,
       channels: decoded.channels.map((channel) => ({ ...channel })),
+      ...(decoded.screen === undefined ? {} : { screen: { ...decoded.screen } }),
       settings: { ...decoded.settings, compaction: { ...decoded.settings.compaction } },
     },
   };

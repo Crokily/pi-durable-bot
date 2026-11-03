@@ -22,10 +22,11 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { createCodingTools } from "@earendil-works/pi-durable/tools";
+import { type BashExecution, createBashTool, createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
 import type { TelemetryCarrier, TelemetryContext, TelemetrySpan } from "@earendil-works/pi-telemetry";
 import type { Sql } from "../core/sql.ts";
 import { modelRef, requireModel } from "./models.ts";
+import { NO_SCREEN, renderBusy, type Screen, ScreenLeases } from "./screen.ts";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -61,8 +62,17 @@ export interface AgentOptions {
   thinking: Thinking;
   compaction: () => Compaction;
   workspace: string;
-  /** Environment of bash commands. */
+  /** Environment of bash commands, without the screen's variables. */
   shellEnv: NodeJS.ProcessEnv;
+  /** The bot's screen for the screen tool, read at each call, and the bot as other agents see it when it holds a lease. */
+  screen: {
+    current(): Screen;
+    /** The bot's folder. */
+    bot: string;
+    name(): string;
+    /** The leases; by default the one store of this process. */
+    leases?: ScreenLeases;
+  };
   /**
    * System prompt parts, rendered before each request in this order. pi-durable sends only the parts that changed, at
    * the end of the conversation. Keep the order: a new part goes at the end, and a part in the middle must not come and
@@ -128,8 +138,9 @@ const RESERVE_TOKENS = 32_768;
 let images: ReturnType<typeof createNodePhotonImages> | undefined;
 
 /**
- * The bot's agent: one long-lived pi-durable conversation (the root). Tools: read, write, edit, bash, and the
- * channel actions send, react and call. Everything else the agent does with code.
+ * The bot's agent: one long-lived pi-durable conversation (the root). Tools: read, write, edit, bash, screen (bash with
+ * the screen's environment and a lease on the screen), and the channel actions send, react and call. Everything else
+ * the agent does with code.
  */
 export class Agent {
   readonly #options: AgentOptions;
@@ -160,6 +171,18 @@ export class Agent {
     const storage = await SqliteStorage.open(connection, { prefix: "pi_" });
     await requireChatModel(models, options.model);
     const text = (value: string) => [{ type: "text" as const, text: value }];
+    // Opened at the first screen call, so a bot that never uses the screen leaves no file.
+    const leases = () => options.screen.leases ?? ScreenLeases.shared();
+    // Who holds a screen, as the other agents read it.
+    const describeAgent = (conversation: string) => (conversation === String(ROOT_CONVERSATION_ID) ? "the main agent" : `the agent of conversation ${conversation}`);
+    // Commands get exactly this environment, not the gateway's: the screen's variables only in the screen tool.
+    const base = Object.fromEntries(Object.entries(options.shellEnv).filter((entry): entry is [string, string] => entry[1] !== undefined));
+    const environment =
+      (extra: Record<string, string> = {}) =>
+      (execution: BashExecution) => {
+        execution.inheritEnv = false;
+        execution.env = { ...base, ...extra, ...execution.env };
+      };
     const tools = [
       defineTool({
         name: "send",
@@ -200,6 +223,32 @@ export class Agent {
           const file = join(dir, `${api.taskId}.json`);
           await writeFile(file, result);
           return { output: text(`The answer is ${result.length} characters; full JSON in ${file}. First part:\n${result.slice(0, 4_000)}`) };
+        },
+      }),
+      defineTool({
+        ...createBashTool(),
+        name: "screen",
+        description:
+          "Run a bash command on your screen: like bash, with the screen's environment (such as DISPLAY), which bash does not have. " +
+          "Use it for anything on the screen: screenshots, mouse, keyboard, and the apps and the browser on it. Only one agent uses a screen at a time: " +
+          "your first call takes the screen until your work ends, and while another agent has it, the command does not run and you learn who has it.",
+        // A rerun after a crash could click twice: the model gets an interrupted result instead.
+        replay: "unsafe",
+        execute: async (args, api, call) => {
+          const screen = options.screen.current();
+          if (screen.key === undefined) return { output: text(NO_SCREEN), isError: true };
+          const taken = leases().take(screen.key, {
+            bot: options.screen.bot,
+            name: options.screen.name(),
+            agent: describeAgent(String(api.conversationId)),
+            conversation: String(api.conversationId),
+          });
+          if (!taken.ok) return { output: text(renderBusy(screen, taken.lease, leases().idleMs, options.screen.bot)), isError: true };
+          try {
+            return await createBashTool({ prepare: environment(screen.env) }).execute(args, api, call);
+          } finally {
+            taken.done();
+          }
         },
       }),
     ];
@@ -249,7 +298,12 @@ export class Agent {
       sections: options.sections.map((part) => section(part.name, render(part), { tag: false })),
     });
     const registry = createRegistry();
-    registry.install(createCodingTools({ images: await (images ??= createNodePhotonImages()) }));
+    registry.install(
+      defineExtension({
+        name: "coding-tools",
+        tools: [createReadTool({ images: await (images ??= createNodePhotonImages()) }), createWriteTool(), createEditTool(), createBashTool({ prepare: environment() })],
+      }),
+    );
     registry.install(bot);
 
     let agent: Agent | undefined;
@@ -294,6 +348,8 @@ export class Agent {
       const live = value.docs["pi.live"] as { run?: { inputs?: unknown[] } } | undefined;
       const inputs = live?.run ? (live.run.inputs ?? []).map(String) : undefined;
       const changed = (inputs === undefined) !== (this.#runInputs === undefined) || inputs?.join() !== this.#runInputs?.join();
+      // A run ended (pi-durable can end one and start the next in one commit): the main agent's screen lease ends with it.
+      if (this.#runInputs !== undefined && inputs?.[0] !== this.#runInputs[0]) this.#releaseScreen(String(ROOT_CONVERSATION_ID));
       this.#runInputs = inputs;
       if (changed) for (const listener of this.#runListeners) listener(inputs);
     };
@@ -307,7 +363,20 @@ export class Agent {
 
   async close(): Promise<void> {
     this.#disposeView?.();
-    await this.#harness.close(context);
+    try {
+      await this.#harness.close(context);
+    } finally {
+      this.#releaseScreen();
+    }
+  }
+
+  /** Give up the screen lease of one conversation of the bot, or of all of them. */
+  #releaseScreen(conversation?: string): void {
+    try {
+      (this.#options.screen.leases ?? ScreenLeases.opened)?.release(this.#options.screen.bot, conversation);
+    } catch (error) {
+      this.#options.log("could not give up the screen", { error: String(error) });
+    }
   }
 
   /**

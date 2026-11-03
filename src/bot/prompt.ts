@@ -1,5 +1,6 @@
 import type { CacheUse, ContextStatus } from "../agent/agent.ts";
 import type { PersonInfo } from "../core/channel.ts";
+import { formatTime } from "../core/time.ts";
 import type { PlaceWake, WakeEvent, WakeFile } from "../core/wake.ts";
 import { LOG_SCHEMA } from "../gateway/log.ts";
 import type { Timer } from "../gateway/timers.ts";
@@ -43,7 +44,7 @@ export function workSection(facts: PromptFacts): string {
 - A wake from a place gives your own address in its channel account.
 
 # Tools and command line
-- Tools: read, write, edit, bash, and send, react, call.
+- Tools: read, write, edit, bash, screen, and send, react, call.
 - The command line pots does the same channel actions, and also handles timed wakes, turning the page and context use. Your scripts and scheduled jobs can use it too:
   pots send <address> <text, or - to read stdin> [--id <send ID>]   a send ID is sent only once; use the same ID when you redo
   pots react <message address> <emoji> [--remove]
@@ -57,7 +58,9 @@ export function workSection(facts: PromptFacts): string {
 # This computer
 - It is yours to work on: ${facts.machine.os}, host ${facts.machine.hostname}, user ${facts.machine.user}. The bash tool runs ${facts.machine.shell}.
 - You have all the permissions of this user${facts.machine.os.startsWith("Windows") ? "" : "; sudo -n true tells you whether sudo works without a password"}. Your actions need no approval. You can install what you need.
-- The screen: if this computer has a desktop, use it like a person. See it with screenshots (the read tool shows you an image) and use the mouse and keyboard, with tools you find, install or write: the apps and the browser on it, with the logins people made there. People can watch it and take over at any time. The gateway usually runs as a background service, so your shell may not have the desktop's environment (such as DISPLAY). If there is no desktop, work without a screen until a task needs one, such as signing up for a chat app's tokens. Then ask the person which way they want, and say what each costs: a virtual desktop (for example Xvfb and a browser, with a VNC or noVNC server) works like a real one, and they can watch it and sign in themselves over VNC, but it needs sudo, several hundred MB of packages, and an SSH tunnel or an open port for them to see it; a browser-only tool such as agent-browser is lighter, but it drives only the browser, they cannot watch it or take over, sites detect it more often, and sign-ins go through you; or they do the browser steps on their own computer while you guide them, and give you what you need.
+- The screen: if this computer has a desktop, use it like a person. See it with screenshots (the read tool shows you an image) and use the mouse and keyboard, with tools you find, install or write: the apps and the browser on it, with the logins people made there. People can watch it and take over at any time.
+- The screen tool is for anything on the screen. It runs a command like bash, with your screen's environment (such as DISPLAY); bash does not have it. Only one agent can use a screen at a time, and the screen tool tells you who has it. Your screen is the screen setting in bot.json; without it, the gateway's own environment. The gateway usually runs as a background service, so it may not have the desktop's environment. When you find the desktop's environment or set up a desktop, write it into the screen setting, for example "screen": {"DISPLAY": ":99"}.
+- If there is no desktop, work without a screen until a task needs one, such as signing up for a chat app's tokens. Then ask the person which way they want, and say what each costs: a virtual desktop (for example Xvfb and a browser, with a VNC or noVNC server) works like a real one, and they can watch it and sign in themselves over VNC, but it needs sudo, several hundred MB of packages, and an SSH tunnel or an open port for them to see it; a browser-only tool such as agent-browser is lighter, but it drives only the browser, they cannot watch it or take over, sites detect it more often, and sign-ins go through you; or they do the browser steps on their own computer while you guide them, and give you what you need.
 - Working directory: ${facts.paths.workspace}`;
 }
 
@@ -76,7 +79,7 @@ ${LOG_SCHEMA}
 export function folderSection(facts: PromptFacts): string {
   const paths = facts.paths;
   return `# Your folder: ${paths.dir}
-- bot.json: your definition: name, model, thinking, judge, channels (channel accounts), settings. model is "provider/modelId". judge decides which messages that do not mention you wake you: "off" (all of them; the default), a classifier "provider/modelId" such as typesafe/jev-latest, or "main" (your own model judges, which is slower). Models and logins are pi's: ~/.pi/agent/auth.json, and ~/.pi/agent/models.json for OpenAI-compatible and local endpoints. Changes take effect within a few seconds. If it has an error, the error goes into bot.json.error and the old definition stays in use.
+- bot.json: your definition: name, model, thinking, judge, channels (channel accounts), screen (the environment of your screen, which the screen tool runs with), settings. model is "provider/modelId". judge decides which messages that do not mention you wake you: "off" (all of them; the default), a classifier "provider/modelId" such as typesafe/jev-latest, or "main" (your own model judges, which is slower). Models and logins are pi's: ~/.pi/agent/auth.json, and ~/.pi/agent/models.json for OpenAI-compatible and local endpoints. Changes take effect within a few seconds. If it has an error, the error goes into bot.json.error and the old definition stays in use.
 - AGENTS.md: your personality, how you talk, and anything else you want to know at every request. Context files are found as pi finds them: AGENTS.md (or AGENTS.override.md, CLAUDE.md) in ~/.pi/agent and in your working directory and every folder above it, so one in ${facts.botsDir} is for every bot there. They are read before each request, so changes take effect at once.
 - Skills, as in pi: a skill is a folder with a SKILL.md. They are found in ~/.pi/agent/skills, ~/.agents/skills, .pi/skills in your working directory, .agents/skills in it and the folders above, and pi's settings and packages, the same ones the pi command line uses. The ones found are listed below with where they are. You can write or install your own; new ones show at the next request.
 - responsibilities.md: what you are responsible for. The judge uses it to decide whether an event that does not mention you is about you. When your responsibilities change, update it.
@@ -97,25 +100,6 @@ export function memorySection(facts: PromptFacts): string {
 # Timed wakes
 - Use pots wake to set timed wakes. You can have several at once, and you choose the times: look in now and then at what people are talking about, or do something you promised when its time comes.
 - When you have no timed wake, a fallback check-in comes every ${facts.fallbackWakeMinutes} minutes.`;
-}
-
-/** One formatter for every time the agent reads: making one takes far longer than formatting with it. */
-const TIME_FORMAT = new Intl.DateTimeFormat("en-US", {
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-  weekday: "long",
-  hourCycle: "h23",
-  timeZoneName: "short",
-});
-
-/** "2026-10-27 17:04:07 Tuesday (GMT+11)", in the machine's time zone. */
-function formatTime(ms: number): string {
-  const parts = Object.fromEntries(TIME_FORMAT.formatToParts(new Date(ms)).map((part) => [part.type, part.value]));
-  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} ${parts.weekday} (${parts.timeZoneName})`;
 }
 
 export function renderContext(status: ContextStatus): string {

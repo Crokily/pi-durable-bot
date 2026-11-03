@@ -21,6 +21,7 @@ Run `npm run check` and `npm test` before every commit. Run `npm run tla` too wh
 | `test/terminal.test.ts` | `pots init` and `pots chat` in a real terminal: keys typed into a pseudo-terminal from Python's `pty` module, a moment apart like a person types, and the screen read back. Skipped on Windows and without `python3`. |
 | `test/waker.test.ts`, `test/timers.test.ts` | The waker (grouping, reasons, the judge and its retries, waiting for files) and the timers, on Effect's `TestClock`: every wake happens at an exact time, with no waiting. |
 | `test/properties.test.ts` | Properties on many random cases with [fast-check](https://fast-check.dev): grouping against a plain model of the rule, one message per send ID when the process dies before or after the platform send, timers on time and in order, and the inbox dropping repeats. |
+| `test/screen.test.ts` | The screen lease: one conversation at a time on a screen, and a lease frees when its holder gives it up, stops using the screen or its process is gone, also a process that is not the test's. |
 | `test/inbox.test.ts`, `test/gateway.test.ts` | What adapters give the inbox, the `Gateway` class as the bot uses it, and the traces, also over OTLP. |
 | `test/telemetry.test.ts` | pi-telemetry's own conformance suite for the bridge from pi's telemetry to the gateway's spans. |
 

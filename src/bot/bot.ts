@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import type { Models } from "@earendil-works/pi-ai";
 import type { TelemetrySpan } from "@earendil-works/pi-telemetry";
 import { Agent, openDatabase } from "../agent/agent.ts";
+import { SCREEN_VARIABLES, screenOf } from "../agent/screen.ts";
 import { createJudge } from "../agent/judge.ts";
 import { openResources } from "../agent/resources.ts";
 import { loadChannel } from "../channels/load.ts";
@@ -219,12 +220,15 @@ export class Bot implements WakeTarget {
       thinking: definition.thinking,
       compaction: () => settings().compaction,
       workspace: paths.workspace,
+      // Without the screen's variables: a command that uses the screen goes through the screen tool, which holds the
+      // screen for one agent at a time.
       shellEnv: {
-        ...process.env,
+        ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !(SCREEN_VARIABLES as readonly string[]).includes(name))),
         POTS_BOT: id,
         PATH: `${dirname(env.potsCommand)}${delimiter}${process.env.PATH ?? ""}`,
         HOME: process.env.HOME ?? homedir(),
       },
+      screen: { current: () => screenOf(current().screen, process.env), bot: paths.dir, name: () => current().name },
       // The start of every request, so the provider's prompt cache can keep it: only facts that stay the same. What
       // changes from one wake to the next (the time, the context use, the bot's own address in a channel) is in the
       // wake. The bot's own sections are pinned for the page; a new name shows at once, as AGENTS.md and skills do,

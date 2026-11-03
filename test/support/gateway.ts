@@ -187,6 +187,11 @@ export class TestGateway {
     writeFileSync(join(this.botDir, `crash-${when}-child-report`), "");
   }
 
+  /** Make the gateway die right after the next stop marks a child stopped, before the child's work ends. */
+  crashAfterNextChildStop(): void {
+    writeFileSync(join(this.botDir, "crash-after-child-stop"), "");
+  }
+
   // ---- The test platform ----
 
   /** A person says something. Returns the new message's ID on the platform. */

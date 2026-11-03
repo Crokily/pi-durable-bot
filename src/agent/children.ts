@@ -33,13 +33,15 @@ export type ChildRecord = {
   /** When it last ended. */
   endedAt?: number;
   stoppedAt?: number;
+  /** The stop ended all its work; a stop that a crash cut off is finished at the next start, or by another stop. */
+  stopFinished?: boolean;
   /** Every reporter made for it, to find its reports that still wait in the main agent's inbox when it is stopped. */
   reporters: string[];
   /** Answers already reported: several messages can end in one answer, which is reported once. */
   reported: EntryId[];
 };
 
-type ChildrenState = {
+export type ChildrenState = {
   next: number;
   children: Record<string, ChildRecord>;
   /** Reporters that have not ended yet, and their child. */
@@ -177,6 +179,12 @@ export function childrenExtension(host: ChildrenHost): Extension {
     phases: {
       deliver: async (reporter, runtime, context) => {
         const { conversationId, message } = reporter.input;
+        // Stopped before its message reached the child: the child does not get it.
+        const state = await runtime.snapshot(Children, runtime.conversationId, context);
+        if (state?.children[reporter.input.child]?.stoppedAt !== undefined) {
+          await runtime.commit(() => ({ status: "running", checkpoint: { phase: "report" } }), context);
+          return;
+        }
         const child = (await runtime.conversation(conversationId, context))!;
         const submission = await child.submit(
           { type: "input", content: message, whenBusy: "steer", requestId: `child:${reporter.id}`, entry: { kind: "bot.brief" } },
@@ -230,6 +238,16 @@ export function childrenExtension(host: ChildrenHost): Extension {
   });
 
   const text = (value: string) => ({ output: [{ type: "text" as const, text: value }] });
+  const isWorking = (child: Readonly<ChildRecord> | ChildInfo) => child.since !== undefined && child.stoppedAt === undefined;
+  /** At the cap, what the model learns instead; checked in the commit that would make one more child work. */
+  const atCap = (state: Readonly<ChildrenState>, not: string, now: number) => {
+    const working = Object.values(state.children).filter(isWorking);
+    if (working.length < host.max()) return undefined;
+    return (
+      `${not}: ${working.length} children work now, as many as the cap (settings.maxChildren in bot.json). They are:\n` +
+      working.map((child) => describeChild(childInfo(child), now)).join("\n")
+    );
+  };
   const background = { ownership: { kind: "conversation" }, background: true } as const;
 
   const task = defineTool({
@@ -253,7 +271,7 @@ export function childrenExtension(host: ChildrenHost): Extension {
     execute: async (args, api, call) => {
       const state = (await api.snapshot(Children, api.conversationId, call)) ?? { next: 1, children: {}, live: {} };
       const all = Object.values(state.children).map(childInfo);
-      const working = all.filter((child) => child.since !== undefined && child.stoppedAt === undefined);
+      const working = all.filter(isWorking);
       if (args.action === "list") {
         if (all.length === 0) return text("No children.");
         const others = all.filter((child) => !working.includes(child)).slice(-20);
@@ -261,16 +279,12 @@ export function childrenExtension(host: ChildrenHost): Extension {
       }
       if (args.action === "start") {
         if (!args.title?.trim() || !args.brief?.trim()) return text("start needs a title and a brief.");
-        if (working.length >= host.max()) {
-          return text(
-            `Not started: ${working.length} children work now, as many as the cap (settings.maxChildren in bot.json). They are:\n` +
-              working.map((child) => describeChild(child, api.now())).join("\n"),
-          );
-        }
         const place = args.place?.trim() || host.place();
         const { model, thinkingLevel } = host.agent();
-        const id = await api.commit(async (tx) => {
+        const started = await api.commit(async (tx) => {
           const state = await tx.doc(Children, api.conversationId);
+          const full = atCap(state, "Not started", api.now());
+          if (full !== undefined) return { full, id: undefined };
           const id = `c${state.next++}`;
           const anchor = await tx.createTask(Anchor, null, background);
           const conversation = await tx.createConversation({ ownership: { kind: "task", taskId: anchor } });
@@ -289,9 +303,10 @@ export function childrenExtension(host: ChildrenHost): Extension {
             reported: [],
           };
           state.live[String(reporter)] = id;
-          return id;
+          return { id, full: undefined };
         }, call);
-        return text(`Started ${id} ("${args.title!.trim()}")${place ? ` for ${place}` : ""}. Its final message comes back to you as a wake.`);
+        if (started.id === undefined) return text(started.full);
+        return text(`Started ${started.id} ("${args.title!.trim()}")${place ? ` for ${place}` : ""}. Its final message comes back to you as a wake.`);
       }
       if (!args.child) return text(`${args.action} needs a child ID.`);
       const child = Object.hasOwn(state.children, args.child) ? state.children[args.child] : undefined;
@@ -299,9 +314,15 @@ export function childrenExtension(host: ChildrenHost): Extension {
       if (args.action === "stop") return text(await host.stop(child.id));
       if (child.stoppedAt !== undefined) return text(`${child.id} was stopped; start a new child.`);
       if (!args.message?.trim()) return text("send needs a message.");
-      await api.commit(async (tx) => {
+      const refused = await api.commit(async (tx) => {
         const state = await tx.doc(Children, api.conversationId);
         const record = state.children[child.id]!;
+        // Again in the commit: a stop or other children may have come since the look above.
+        if (record.stoppedAt !== undefined) return `${child.id} was stopped; start a new child.`;
+        if (record.since === undefined) {
+          const full = atCap(state, "Not sent", api.now());
+          if (full !== undefined) return full;
+        }
         const reporter = await tx.createTask(
           Reporter,
           { child: child.id, conversationId: record.conversationId, message: `[message from the main agent]\n${args.message}` },
@@ -310,8 +331,9 @@ export function childrenExtension(host: ChildrenHost): Extension {
         record.reporters.push(String(reporter));
         record.since ??= api.now();
         state.live[String(reporter)] = child.id;
+        return undefined;
       }, call);
-      return text(`Sent to ${child.id}.`);
+      return text(refused ?? `Sent to ${child.id}.`);
     },
   });
 

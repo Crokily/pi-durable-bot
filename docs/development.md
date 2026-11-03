@@ -21,7 +21,7 @@ Run `npm run check` and `npm test` before every commit. Run `npm run tla` too wh
 | `test/terminal.test.ts` | `pots init` and `pots chat` in a real terminal: keys typed into a pseudo-terminal from Python's `pty` module, a moment apart like a person types, and the screen read back. Skipped on Windows and without `python3`. |
 | `test/waker.test.ts`, `test/timers.test.ts` | The waker (grouping, reasons, the judge and its retries, waiting for files) and the timers, on Effect's `TestClock`: every wake happens at an exact time, with no waiting. |
 | `test/properties.test.ts` | Properties on many random cases with [fast-check](https://fast-check.dev): grouping against a plain model of the rule, one message per send ID when the process dies before or after the platform send, timers on time and in order, and the inbox dropping repeats. |
-| `test/children.test.ts` | Children, from outside like the gateway tests: a child's final message reaches the main agent exactly once, also when the process dies just before or just after the report, and nothing comes back after a stop, from the task tool or `pots children`. The child runs show in `pots trace`. |
+| `test/children.test.ts` | Children, from outside like the gateway tests: a child's final message reaches the main agent exactly once, also when the process dies just before or just after the report, and nothing comes back after a stop, from the task tool or `pots children`, also when the process dies in the middle of the stop. The child runs show in `pots trace`. |
 | `test/memory.test.ts` | The memory pass, from outside: its request starts as the main agent's last one, with the same provider session; it reaches neither the chat nor the main conversation; the memory section shows the new memory only on the next page; a forgotten fact is not saved again; and a pass is saved once when the process dies right after it saved. |
 | `test/screen.test.ts` | The screen lease: one conversation at a time on a screen, and a lease frees when its holder gives it up, stops using the screen or its process is gone, also a process that is not the test's. |
 | `test/inbox.test.ts`, `test/gateway.test.ts` | What adapters give the inbox, the `Gateway` class as the bot uses it, and the traces, also over OTLP. |
@@ -36,9 +36,10 @@ Run `npm run check` and `npm test` before every commit. Run `npm run tla` too wh
 | `crash-after-send` | right after the platform accepted a send, before the outbox recorded it |
 | `crash-after-wake` | right after the bot took a wake, before the gateway recorded that |
 | `crash-before-child-report`, `crash-after-child-report` | just before, or just after, a child's end was handed to the main agent, before its reporter task ended |
+| `crash-after-child-stop` | right after a stop marked a child stopped, before the child's work ended |
 | `crash-after-memory-pass` | right after a memory pass saved its answer, before the pass ended |
 
-After the restart the bot must send once, be woken once, and save a memory pass once.
+After the restart the bot must send once, be woken once, and save a memory pass once, and a stopped child must do nothing more.
 
 ## TLA+ models
 

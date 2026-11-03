@@ -326,6 +326,8 @@ export class Bot implements WakeTarget {
     // Around the report of a child's end to the main agent. The next start must report it once.
     agent.crashTests.beforeReport = crashTest(paths.crashBeforeChildReport, "crash test: dying before the child's report", "reporter");
     agent.crashTests.afterReport = crashTest(paths.crashAfterChildReport, "crash test: dying after the child's report", "reporter");
+    // Right after a stop marked a child stopped, before its work ended. The next start must end that work.
+    agent.crashTests.afterStopMark = crashTest(paths.crashAfterChildStop, "crash test: dying after marking the child stopped", "child");
     // Right after a memory pass saved its answer, before the pass ended. The next start must not save it again.
     agent.crashTests.afterMemoryPass = crashTest(paths.crashAfterMemoryPass, "crash test: dying after the memory pass saved", "pass");
     for (const row of await sql.all<{ submission: string; place: string }>(
@@ -337,7 +339,7 @@ export class Bot implements WakeTarget {
     try {
       adapters = await Promise.all(definition.channels.map((channel) => bot!.#loadChannel(channel)));
       await gateway.start(bot, adapters);
-      agent.resume();
+      await agent.resume();
       await timers.start();
       if (existsSync(paths.firstWake)) {
         await timers.add(Date.now(), await readFile(paths.firstWake, "utf8"));

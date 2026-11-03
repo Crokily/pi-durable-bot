@@ -5,6 +5,7 @@ import { BACKGROUND_CONTEXT, type Context, withTelemetry } from "@earendil-works
 import { getSupportedThinkingLevels, type Message, type Models, type ModelThinkingLevel, Type } from "@earendil-works/pi-ai";
 import { calculateContextTokens, estimateMessageTokens } from "@earendil-works/pi-ai/utils/estimate";
 import {
+  configure,
   type Conversation,
   type ConversationId,
   createRegistry,
@@ -28,12 +29,23 @@ import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlit
 import { type BashExecution, createBashTool, createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
 import type { TelemetryCarrier, TelemetryContext, TelemetrySpan } from "@earendil-works/pi-telemetry";
 import type { Sql } from "../core/sql.ts";
-import { type ChildEnd, type ChildInfo, Children, childInfo, childrenExtension, reportRequestId } from "./children.ts";
+import { type ChildEnd, type ChildInfo, type ChildRecord, type ChildrenState, Children, childInfo, childrenExtension, reportRequestId } from "./children.ts";
 import { lastAnswer, type MemoryHost, memoryExtensions } from "./memory.ts";
 import { modelRef, requireModel } from "./models.ts";
 import { NO_SCREEN, renderBusy, type Screen, ScreenLeases } from "./screen.ts";
 
 const context = BACKGROUND_CONTEXT;
+
+/** A stopped child, with what its stop must end. */
+interface Stop {
+  id: string;
+  title: string;
+  conversationId: ConversationId;
+  /** All its reporters, to find their reports in the main agent's queue. */
+  reporters: readonly string[];
+  /** Those that have not ended yet. */
+  live: readonly string[];
+}
 
 /**
  * What the agent's channel tools do. The bot provides them; the agent knows no platform. trace: the tool call's span,
@@ -177,11 +189,19 @@ export class Agent {
   #disposeChildren?: () => void;
   #memory: ReturnType<typeof memoryExtensions> | undefined;
   #closing = false;
+  /** Stops the last process did not finish; resume() finishes them. */
+  #unfinishedStops: Stop[] = [];
   /**
-   * Crash tests: called just before and just after a child's end is handed to the main agent, and right after a memory
-   * pass applied its answer, before the pass ended.
+   * Crash tests: called just before and just after a child's end is handed to the main agent, right after a stop
+   * marked a child stopped, before its work ended, and right after a memory pass applied its answer, before the pass
+   * ended.
    */
-  readonly crashTests: { beforeReport?: (reporter: string) => void; afterReport?: (reporter: string) => void; afterMemoryPass?: (pass: string) => void } = {};
+  readonly crashTests: {
+    beforeReport?: (reporter: string) => void;
+    afterReport?: (reporter: string) => void;
+    afterStopMark?: (child: string) => void;
+    afterMemoryPass?: (pass: string) => void;
+  } = {};
 
   private constructor(options: AgentOptions, harness: Harness, root: Conversation) {
     this.#options = options;
@@ -417,6 +437,9 @@ export class Agent {
     agent.#memory = memory;
     await agent.#watchRun();
     await agent.#watchChildren((list) => (children = list));
+    await agent.#holdUnfinishedStops();
+    // bot.json may have changed while the bot was stopped: the children that go on get what new children get.
+    await agent.#configureChildren(agent.#childAgent());
     // A run that ended just before the last process stopped, before its memory pass was started.
     if (memory && agent.#runInputs === undefined) {
       const at = await lastAnswer(root, context);
@@ -426,8 +449,33 @@ export class Agent {
   }
 
   /** Continue the work the last process left unfinished. Call once the channels are up, so its tools can act. */
-  resume(): void {
+  async resume(): Promise<void> {
     this.#harness.resume();
+    for (const stop of this.#unfinishedStops.splice(0)) await this.#finishStop(stop);
+  }
+
+  /**
+   * A stop that the last process did not finish: before any work runs, mark the child's work and its reporters to end
+   * and withdraw what waits for the child or comes from it, so the child does not go on for a moment after the start.
+   * None of this runs work. resume() then finishes these stops.
+   */
+  async #holdUnfinishedStops(): Promise<void> {
+    const state = await this.#harness.snapshot(Children, ROOT_CONVERSATION_ID, context);
+    const stops = Object.values(state?.children ?? {}).flatMap((record) => (record.stoppedAt !== undefined && !record.stopFinished ? [stopOf(state!, record)] : []));
+    if (stops.length === 0) return;
+    const conversations = new Set(stops.map((stop) => stop.conversationId));
+    const { tasks, submissions } = await this.#harness.inspect(context);
+    for (const { record } of tasks) {
+      if (conversations.has(record.conversationId) && record.owner === undefined && !record.background) await this.#harness.abortTask(record.id, context);
+    }
+    for (const submission of submissions) {
+      if (conversations.has(submission.conversationId) && submission.status === "queued") await this.#harness.abortSubmission(submission.id, context);
+    }
+    for (const stop of stops) {
+      for (const reporter of stop.live) await this.#harness.abortTask(Number(reporter) as TaskId, context);
+      await this.#withdrawReports(stop);
+    }
+    this.#unfinishedStops = stops;
   }
 
   async #watchRun(): Promise<void> {
@@ -515,11 +563,15 @@ export class Agent {
    */
   async configureChildren(set: { model: string | undefined; thinking: Thinking | undefined }): Promise<void> {
     if (set.model) await requireChatModel(this.#models, set.model);
-    const change = this.#childAgent(set);
-    for (const child of this.#children) {
-      if (child.stoppedAt !== undefined) continue;
-      await (await this.#harness.conversation(Number(child.conversationId) as ConversationId, context))?.configure(change, context);
-    }
+    await this.#configureChildren(this.#childAgent(set));
+  }
+
+  async #configureChildren(change: { model: ModelRef; thinkingLevel: ModelThinkingLevel }): Promise<void> {
+    const children = this.#children.filter((child) => child.stoppedAt === undefined);
+    if (children.length === 0) return;
+    await this.#root.commit(async (tx) => {
+      for (const child of children) await configure(tx, Number(child.conversationId) as ConversationId, change);
+    }, context);
   }
 
   /**
@@ -531,32 +583,48 @@ export class Agent {
       const state = await tx.doc(Children, ROOT_CONVERSATION_ID);
       const record = Object.hasOwn(state.children, id) ? state.children[id] : undefined;
       if (!record) return undefined;
-      if (record.stoppedAt !== undefined) return { title: record.title, stopped: true } as const;
-      record.stoppedAt = Date.now();
+      if (record.stopFinished) return { title: record.title, stopped: true } as const;
+      // A stop that a crash cut off is done again from here.
+      const marked = record.stoppedAt === undefined;
+      record.stoppedAt ??= Date.now();
       delete record.since;
-      const live = Object.entries(state.live).flatMap(([reporter, child]) => (child === id ? [reporter] : []));
-      return { title: record.title, stopped: false, conversationId: record.conversationId, reporters: [...record.reporters], live } as const;
+      return { stopped: false, marked, ...stopOf(state, record) } as const;
     }, context);
     if (!found) return `No child ${id}.`;
     if (found.stopped) return `${id} ("${found.title}") was stopped before.`;
+    if (found.marked) this.crashTests.afterStopMark?.(id);
+    await this.#finishStop(found);
+    return `Stopped ${id} ("${found.title}"). Nothing comes back from it.`;
+  }
+
+  /** End a stopped child's work, then record that, so a stop cut off by a crash is finished at the next start. */
+  async #finishStop(stop: Stop): Promise<void> {
     // Its reporters first, and wait until they ended: then none of them gives the child a message or reports anew.
-    for (const reporter of found.live) {
+    for (const reporter of stop.live) {
       const task = Number(reporter) as TaskId;
       await this.#harness.abortTask(task, context);
       await this.#harness.waitForTask(task, context);
     }
-    await (await this.#harness.conversation(found.conversationId, context))?.abort(context);
+    await (await this.#harness.conversation(stop.conversationId, context))?.abort(context);
+    await this.#withdrawReports(stop);
+    this.#releaseScreen(String(stop.conversationId));
+    await this.#root.commit(async (tx) => {
+      const record = (await tx.doc(Children, ROOT_CONVERSATION_ID)).children[stop.id];
+      if (record) record.stopFinished = true;
+    }, context);
+  }
+
+  /** Withdraw the reports of a stopped child that wait in the main agent's queue. */
+  async #withdrawReports(stop: Stop): Promise<void> {
     const queued = await this.#root.commit(async (tx) => {
       const ids: SubmissionId[] = [];
-      for (const reporter of found.reporters) {
+      for (const reporter of stop.reporters) {
         const submission = await tx.submissionByRequest(ROOT_CONVERSATION_ID, reportRequestId(reporter));
         if (submission?.status === "queued") ids.push(submission.id);
       }
       return ids;
     }, context);
     for (const submission of queued) await this.#harness.abortSubmission(submission, context, ROOT_CONVERSATION_ID);
-    this.#releaseScreen(String(found.conversationId));
-    return `Stopped ${id} ("${found.title}"). Nothing comes back from it.`;
   }
 
   /** Stop every child that is not stopped yet. Returns what happened to each. */
@@ -688,6 +756,17 @@ export class Agent {
     const compactAt = window - policy.reserveTokens - (policy.backgroundTokens > 0 ? policy.backgroundTokens : 0);
     return { used, window, compactAt };
   }
+}
+
+/** A stopped child as its stop sees it: its reporters, and those still live. */
+function stopOf(state: Readonly<ChildrenState>, record: Readonly<ChildRecord>): Stop {
+  return {
+    id: record.id,
+    title: record.title,
+    conversationId: record.conversationId,
+    reporters: [...record.reporters],
+    live: Object.entries(state.live).flatMap(([reporter, child]) => (child === record.id ? [reporter] : [])),
+  };
 }
 
 /**

@@ -19,12 +19,17 @@ const lastUser = (request: FakeRequest) => request.messages.findLast((message) =
 
 /**
  * The main agent starts a child for "please research" and stops it for "stop the research"; a child's end it passes
- * on in the place. The child answers its brief at once, or for "wait long" runs a long command first.
+ * on in the place. The child answers its brief at once, or for "wait long" runs a long command first and then says so
+ * in the place.
  */
 function script(request: FakeRequest): FakeReply {
   const last = request.messages.at(-1);
   if (isChild(request)) {
-    if (last?.role !== "user") return { text: "done waiting" };
+    if (last?.role !== "user") {
+      const said = request.messages.some((message) => message.toolCalls?.includes("send"));
+      if (request.messages[0]?.content.includes("wait long") && !said) return { call: { name: "send", arguments: { to: "test:#general", text: "child: waited" } } };
+      return { text: "done waiting" };
+    }
     if (last.content.includes("wait long")) return { call: { name: "bash", arguments: { command: "sleep 60" } } };
     return { text: "the answer is 42" };
   }
@@ -116,5 +121,26 @@ describe("children", { timeout: 90_000 }, () => {
     expect(reports()).toHaveLength(0);
     expect(gateway.query<{ id: string }>("SELECT id FROM bot_wakes WHERE reason = 'child'")).toHaveLength(0);
     expect(wakeLine(gateway.pots("children"))).toMatch(/^c1 "research": stopped/);
+  });
+
+  it("does nothing more when the gateway dies between marking a child stopped and ending its work", async () => {
+    await setUp();
+    gateway.say("general", "alice", `@${ME} please research slowly`);
+    await waitFor(() => model.requests.some(isChild), { what: "the child to start" });
+    await pause(500);
+    gateway.crashAfterNextChildStop();
+    gateway.say("general", "alice", `@${ME} stop the research`);
+    await gateway.exited();
+    expect(gateway.output.some((line) => line.message === "crash test: dying after marking the child stopped")).toBe(true);
+
+    // After the restart the stop is finished: the child's command is not taken up again, and nothing comes from it.
+    await gateway.start();
+    await pause(3_000);
+    expect(gateway.pots("children")).toMatch(/^c1 "research": stopped/m);
+    expect(model.requests.filter(isChild)).toHaveLength(1);
+    expect(gateway.sent().filter((record) => record.text?.startsWith("child:"))).toHaveLength(0);
+    expect(reports()).toHaveLength(0);
+    expect(gateway.query<{ id: string }>("SELECT id FROM bot_wakes WHERE reason = 'child'")).toHaveLength(0);
+    expect(gateway.pots("children", "--stop", "c1")).toMatch(/c1 \("research"\) was stopped before/);
   });
 });

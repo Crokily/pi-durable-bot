@@ -2,7 +2,9 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
-## Unreleased
+## 0.3.3 (2026-11-03)
+
+A bot whose model fails says so in the chat, and the local server step of `pots init` writes where pi reads.
 
 ### Fixed
 - **The local server step of `pots init` writes where pi reads.** It wrote to `~/.pi/agent/models.json` even when `PI_CODING_AGENT_DIR` names another folder. It now also tries the model, as for a login, and asks whether to try again, for example once the server runs. It used to make a bot even when the server was not running.

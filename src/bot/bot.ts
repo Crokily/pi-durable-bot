@@ -190,6 +190,10 @@ export class Bot implements WakeTarget {
     opened: (agent: Agent) => void,
   ): Promise<Bot> {
     await sql.exec(WAKES_SCHEMA);
+    // Made once for this database: a bot deleted and made again with the same ID starts its memory passes' keys anew, and
+    // the shared memory must not take its keys for the old bot's.
+    await sql.run("INSERT INTO bot_state (key, value) VALUES ('database_id', ?) ON CONFLICT (key) DO NOTHING", randomUUID());
+    const databaseId = (await sql.get<{ value: string }>("SELECT value FROM bot_state WHERE key = 'database_id'"))!.value;
     // The version whose prompt the conversation shows.
     const shownVersion = (await sql.all<{ value: string }>("SELECT value FROM bot_state WHERE key = 'prompt_version'"))[0]?.value;
 
@@ -293,7 +297,7 @@ export class Bot implements WakeTarget {
         firstLook: FIRST_LOOK_PROMPT,
         instruction: async (messages) => renderMemoryPass(messages, await memory.forPass()),
         apply: async (key, answer) => {
-          print("memory pass", { pass: key, result: await memory.applyAnswer(`${id}:${key}`, answer) });
+          print("memory pass", { pass: key, result: await memory.applyAnswer(`${databaseId}:${key}`, answer) });
         },
       },
       actions: {

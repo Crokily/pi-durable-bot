@@ -2,7 +2,8 @@ import type { Sql } from "../core/sql.ts";
 
 // The bot's memory: short entries it keeps across pages. Each bot has its own, in bot.sqlite, and the bots of one
 // POTS_HOME share one more, for facts about the user, in memory.sqlite there. An entry is its text and when it last
-// changed; nothing else. A forgotten entry stays as a mark, so the memory pass does not learn it again.
+// changed; nothing else. A forgotten entry stays as a mark, so the memory pass does not learn it again, in either
+// memory; when the bot saves that text again itself, as when a person asks it to remember it, the mark goes.
 
 const DAY = 86_400_000;
 
@@ -46,8 +47,7 @@ CREATE TABLE IF NOT EXISTS ${table}_applied (
   key TEXT PRIMARY KEY,
   at INTEGER NOT NULL
 );`);
-    // The keys of memory passes are kept for a month: a pass that runs again after a restart does so within minutes.
-    await sql.run(`DELETE FROM ${table}_applied WHERE at < ?`, Date.now() - 30 * DAY);
+    // The keys of memory passes stay: they are small, and a pass that saved and then stopped can run again at any later start.
     return new MemoryTable(sql, table, letter);
   }
 
@@ -71,6 +71,13 @@ CREATE TABLE IF NOT EXISTS ${table}_applied (
     return (await this.#sql.all<Row>(`SELECT * FROM ${this.#table} WHERE forgotten_at IS NOT NULL ORDER BY id`)).map((row) => row.text);
   }
 
+  /** Remove the marks of forgotten entries with this text. */
+  async unforget(text: string): Promise<void> {
+    for (const row of await this.#sql.all<Row>(`SELECT * FROM ${this.#table} WHERE forgotten_at IS NOT NULL`)) {
+      if (same(row.text) === same(text)) await this.#sql.run(`DELETE FROM ${this.#table} WHERE id = ?`, row.id);
+    }
+  }
+
   async add(text: string, now = Date.now()): Promise<MemoryEntry> {
     const row = await this.#sql.get<Row>(`INSERT INTO ${this.#table} (text, updated_at) VALUES (?, ?) RETURNING *`, text, now);
     return this.#entry(row!);
@@ -90,18 +97,21 @@ CREATE TABLE IF NOT EXISTS ${table}_applied (
   }
 
   /**
-   * Apply a memory pass's changes to this table in one transaction, once per key. An added text that was forgotten, or
-   * that is there already, is left out. Returns what it did, in words for the gateway's output.
+   * Apply a memory pass's changes to this table in one transaction, once per key. An added or changed text that was
+   * forgotten here or in `forgotten` (the other table's, as same() has them), and an added text that is there already,
+   * are left out. Returns what it did, in words for the gateway's output.
    */
-  async apply(key: string, changes: readonly MemoryChange[], now = Date.now()): Promise<string[]> {
+  async apply(key: string, changes: readonly MemoryChange[], forgotten: ReadonlySet<string>, now = Date.now()): Promise<string[]> {
     if (changes.length === 0) return [];
     return this.#sql.transaction(async (tx) => {
       if (await tx.get(`SELECT 1 AS done FROM ${this.#table}_applied WHERE key = ?`, key)) return ["applied before"];
       await tx.run(`INSERT INTO ${this.#table}_applied (key, at) VALUES (?, ?)`, key, now);
       const rows = await tx.all<Row>(`SELECT * FROM ${this.#table}`);
       const known = new Set(rows.map((row) => same(row.text)));
+      const blocked = new Set([...forgotten, ...rows.flatMap((row) => (row.forgotten_at === null ? [] : [same(row.text)]))]);
       const done: string[] = [];
       for (const change of changes) {
+        if (change.kind !== "forget" && blocked.has(same(change.text))) continue;
         if (change.kind === "add") {
           if (known.has(same(change.text))) continue;
           known.add(same(change.text));
@@ -153,14 +163,20 @@ export class Memory {
     return [...(await this.shared.entries()), ...(await this.own.entries())];
   }
 
+  /** The bot's own wish, or a person's through it: a forgotten entry with this text may come back. */
   async add(text: string, shared: boolean): Promise<MemoryEntry> {
     if (!text.trim()) throw new Error("the text is empty");
-    return (shared ? this.shared : this.own).add(text.trim());
+    const entry = await (shared ? this.shared : this.own).add(text.trim());
+    await this.#unforget(text);
+    return entry;
   }
 
+  /** As add, a forgotten entry with the new text may come back. */
   async change(id: string, text: string): Promise<MemoryEntry> {
     if (!text.trim()) throw new Error("the text is empty");
-    return this.#table(id).change(id, text.trim());
+    const entry = await this.#table(id).change(id, text.trim());
+    await this.#unforget(text);
+    return entry;
   }
 
   forget(id: string): Promise<void> {
@@ -187,8 +203,16 @@ export class Memory {
     if (changes === undefined) return "answer not understood, nothing saved";
     const own = changes.filter((change) => (change.kind === "add" ? !change.shared : this.own.number(change.id) !== undefined));
     const shared = changes.filter((change) => (change.kind === "add" ? change.shared : this.shared.number(change.id) !== undefined));
-    const done = [...(await this.own.apply(key, own)), ...(await this.shared.apply(key, shared))];
+    // What was forgotten in either memory does not come back from the pass in the other one.
+    const forgotten = new Set([...(await this.own.forgotten()), ...(await this.shared.forgotten())].map(same));
+    const done = [...(await this.own.apply(key, own, forgotten)), ...(await this.shared.apply(key, shared, forgotten))];
     return done.length === 0 ? "nothing to save" : done.join(", ");
+  }
+
+  /** So the pass is no longer told to leave it out. */
+  async #unforget(text: string): Promise<void> {
+    await this.own.unforget(text);
+    await this.shared.unforget(text);
   }
 
   #table(id: string): MemoryTable {

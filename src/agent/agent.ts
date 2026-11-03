@@ -13,7 +13,9 @@ import {
   defineExtension,
   type EntryId,
   defineTool,
+  GenerationTask,
   Harness,
+  hook,
   type ModelRef,
   type PromptInput,
   ROOT_CONVERSATION_ID,
@@ -112,9 +114,9 @@ export interface AgentOptions {
     ended(end: ChildEnd, context: Context): Promise<string>;
   };
   /**
-   * Set after an upgrade: the first request of each conversation in this process shows the new text of pinned sections,
-   * as a new page does, so what the new version tells the agent counts at once. Called when the root's first request
-   * did that.
+   * Set after an upgrade: the main conversation's requests show the new text of pinned sections, as a new page does, so
+   * what the new version tells the agent counts at once. Called once the first of them is about to go out, when its
+   * sections are saved in the conversation; until then, after a crash too, the next request does it again.
    */
   refreshPinned?: () => Promise<void>;
   /** The memory pass after each run of the main conversation; without it, there is none. */
@@ -311,22 +313,19 @@ export class Agent {
     ];
 
     let harness: Harness | undefined;
-    // All sections of one request preparation get the same input, so these answers are per preparation.
-    // Whether it is the first preparation of its conversation in this process, when that refreshes the pinned sections.
-    const refreshed = new Set<string>();
-    const refreshes = new WeakMap<PromptInput, boolean>();
-    const refreshing = (input: PromptInput) => {
-      let answer = refreshes.get(input);
-      if (answer === undefined) {
-        answer = options.refreshPinned !== undefined && !refreshed.has(String(input.conversationId));
-        refreshed.add(String(input.conversationId));
-        refreshes.set(input, answer);
-        if (answer && input.conversationId === ROOT_CONVERSATION_ID) {
-          void options.refreshPinned!().catch((error: unknown) => options.log("could not record the refresh", { error: String(error) }));
-        }
-      }
-      return answer;
-    };
+    // After an upgrade, the main conversation's pinned sections show their new text until a request with it goes out.
+    let refresh: "waiting" | "rendered" | "done" = options.refreshPinned ? "waiting" : "done";
+    const recordRefresh = hook(GenerationTask, {
+      // Here the request's sections are saved in the conversation. Not for a request whose sections an earlier process
+      // wrote: those may be the old ones.
+      beforeRequest: async (_request, api) => {
+        if (api.conversationId !== ROOT_CONVERSATION_ID || refresh !== "rendered") return undefined;
+        refresh = "done";
+        await options.refreshPinned!().catch((error: unknown) => options.log("could not record the refresh", { error: String(error) }));
+        return undefined;
+      },
+    });
+    // All sections of one request preparation get the same input, so this answer is per preparation.
     // Whether the request starts a page: pi-durable then writes every section anew (planSystemEntries). Asked only when
     // a pinned section has a new text.
     const pageStarts = new WeakMap<PromptInput, Promise<boolean>>();
@@ -346,13 +345,17 @@ export class Agent {
       const text = await part.render();
       if (!part.pin) return text;
       const shown = input.shown[part.name];
-      if (refreshing(input) || shown === undefined || shown === text) return text;
+      // A memory pass's fork keeps what it took from the main conversation, so its request starts as the main agent's did.
+      if (input.conversationId !== ROOT_CONVERSATION_ID) return shown;
+      if (refresh !== "done") refresh = "rendered";
+      if (refresh !== "done" || shown === undefined || shown === text) return text;
       return (await startsPage(input, context)) ? text : shown;
     };
     const bot = defineExtension({
       name: "bot",
       tools,
       sections: options.sections.map((part) => section(part.name, render(part), { tag: false })),
+      hooks: [recordRefresh],
     });
     // A child's working tools are the main agent's, with its own prompt and without the task tool.
     const child = defineExtension({

@@ -55,6 +55,14 @@ describe("memory", { timeout: 90_000 }, () => {
     expect(later.messages.some((message) => message.content.includes("[memory pass]"))).toBe(false);
     expect(later.system).toContain("Your memory is empty.");
 
+    // The next pass, after the first one saved, still starts as the main agent's last request did: a fork keeps the
+    // sections it took from the main conversation, also in the first process after an install or upgrade.
+    await waitFor(() => passes().length === 2, { what: "the second memory pass" });
+    const second = model.requests.filter(isMemoryPass)[1]!;
+    const before = agentRequests(model).filter((request) => model.requests.indexOf(request) < model.requests.indexOf(second)).at(-1)!;
+    expect(second.system).toBe(before.system);
+    expect(second.messages.slice(0, before.messages.length)).toEqual(before.messages);
+
     expect((await gateway.run(["turn-page", "--note", "a new page"])).status).toBe(0);
     gateway.say("general", "alice", `@${ME} and now?`);
     await waitFor(() => gateway.sent().length === 3, { what: "the reply on the new page" });
@@ -70,6 +78,24 @@ describe("memory", { timeout: 90_000 }, () => {
     expect(memory()).toBe("Your memory is empty.\n");
     // The pass was told what was forgotten.
     expect(model.requests.find(isMemoryPass)!.messages.at(-1)!.content).toContain("do not save them again:\n- Alice likes tea.");
+  });
+
+  it("does not bring a forgotten fact back through a change or the shared memory, but a person can ask for it again", async () => {
+    await setUp(remembering({ change: "m2", text: "Alice likes  TEA." }, { add: "alice likes tea.", shared: true }));
+    expect(gateway.pots("memory", "add", "Alice likes tea.")).toBe("Saved m1.\n");
+    expect(gateway.pots("memory", "add", "Alice likes coffee.")).toBe("Saved m2.\n");
+    expect(gateway.pots("memory", "forget", "m1")).toBe("Forgot m1. It is not saved again.\n");
+    gateway.say("general", "alice", `@${ME} I like tea`);
+    await waitFor(() => passes().length === 1, { what: "the memory pass" });
+    expect(passes()[0]!.result).toBe("nothing to save");
+    expect(memory()).toBe("- m2: Alice likes coffee.\n");
+
+    // Saved by the bot itself, as when a person says "remember" after "forget": it is there, and no longer forgotten.
+    expect(gateway.pots("memory", "add", "Alice likes tea.")).toBe("Saved m3.\n");
+    expect(memory()).toBe("- m2: Alice likes coffee.\n- m3: Alice likes tea.\n");
+    gateway.say("general", "alice", `@${ME} and now?`);
+    await waitFor(() => passes().length === 2, { what: "the second memory pass" });
+    expect(model.requests.filter(isMemoryPass)[1]!.messages.at(-1)!.content).not.toContain("do not save them again");
   });
 
   it("saves once when the gateway dies right after the pass saved", async () => {

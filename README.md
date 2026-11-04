@@ -72,7 +72,7 @@ One agent at a time per screen is enforced only on Linux, where plain `bash` has
 
 ### 👥 Its own helpers
 
-Longer work does not keep it from talking. With its `task` tool the bot starts **children**: agents that work in the background with `read`, `write`, `edit`, `bash` and `screen`, without the channel actions and `task`, on a brief it writes for them. It answers the person first, hands the work to a child, and stays free for the next message. A child starts from an empty conversation and its brief, so the bot's own context stays small; it sees the bot's memory as it was when it started. When a child ends, done, failed or with a question for a person, its final message comes back to the bot as a wake, exactly once, also across crashes and restarts; the bot passes on what matters, and sends the child the answer to its question. While a child works for a place, new messages there go to the bot, so it can pass them on. Its timed and fallback wakes list the children that work and how long each has run. A stopped child reports nothing and does nothing more, also when the process dies in the middle of the stop.
+Longer work does not keep it from talking. With its `task` tool the bot starts **children**: agents that work in the background with `read`, `write`, `edit`, `bash` and `screen`, without the channel actions and `task`, on a brief it writes for them. It answers the person first, hands the work to a child, and stays free for the next message. A child starts from an empty conversation and its brief, so the bot's own context stays small; it sees the bot's memory index as it was when it started. When a child ends, done, failed or with a question for a person, its final message comes back to the bot as a wake, exactly once, also across crashes and restarts; the bot passes on what matters, and sends the child the answer to its question. While a child works for a place, new messages there go to the bot, so it can pass them on. Its timed and fallback wakes list the children that work and how long each has run. A stopped child reports nothing and does nothing more, also when the process dies in the middle of the stop.
 
 Children use the bot's model, or the `childModel` of `bot.json`; a change counts for new children and those that exist. The bot chooses each child's thinking level when it starts it: `high`, `xhigh` or `max`, and without a choice the `childThinking` of `bot.json` (`xhigh` by default). A child keeps its level for its whole life, so a new `childThinking` counts for new children only; a level the model does not have becomes the nearest one it has, as in pi. `settings.maxChildren` (50 by default) caps how many work at once. `pots children` lists them, and `pots children --stop <id>` or `--stop-all` stops them.
 
@@ -88,7 +88,7 @@ It promises to come back, and it does. Timed wakes live in the same database as 
 
 ### 📓 Its own memory
 
-Each bot has one long conversation, across every channel. After each piece of work, the bot saves what is worth keeping to its **memory** by itself, as Claude Code does: a short first look asks whether the work holds anything (preferences, rules, facts about people and the work, decisions), and if so, the bot's own model, continuing the same conversation in the background, says what to save. The pass never sends a message or holds up a reply, and its request starts as the bot's last one did, so the provider's prompt cache serves most of it. Each bot has its own memory, and the bots of one computer share one more for facts about you. "Remember this" and "forget that" work by talking to it; the bot itself uses `pots memory`. To forget an entry is to delete it, as in Claude Code; the pass looks only at the work since the last pass, so a forgotten fact comes back only when someone says it again.
+Each bot has one long conversation, across every channel. Its **memory** works as Claude Code's automatic memory: plain markdown files, one per memory, and an index, `MEMORY.md`, that the bot sees at the start of every page and that points to them. The bot saves what is worth keeping (preferences, rules, facts about people and the work, decisions) when it sees it, and after each piece of work its own model, continuing the same conversation in the background, saves what it missed. That pass never sends a message or holds up a reply, its request starts as the bot's last one did, so the provider's prompt cache serves most of it, and code lets it change nothing but the memory. Once a day, after enough changes, a dream tidies the memory up the same way. A memory file read two days or more after it changed says how old it is. Each bot has its own memory, in `memory/` in its folder, and the bots of one computer share one more, in `~/.pots/memory/`, for facts about you. "Remember this" and "forget that" work by talking to it; to forget is to delete the file, as in Claude Code. `"settings": {"autoMemory": false}` in `bot.json` turns the memory off.
 
 When the context gets full, the bot decides when to **turn the page**: it writes notes for itself, starts a fresh context, and the notes and the memory come with it. The full message log stays on disk, so nothing is lost. Its `AGENTS.md`, its responsibilities and its notes are plain files it edits itself.
 
@@ -105,7 +105,7 @@ Grok Bot, dots, Muse and Claude Duet are closed products. They run on someone el
 | Source code | Closed | Open, MIT |
 | Where it runs | The vendor's cloud | Your server, your VM, your office box |
 | Model | The vendor's | Your subscription login, any of 40+ providers, or a local model |
-| Your data | Sent to the vendor | Stays on your machine in one SQLite file per bot |
+| Your data | Sent to the vendor | Stays on your machine, in each bot's folder |
 | Channels | The ones the vendor supports | Any channel with a [Chat SDK](https://chat-sdk.dev) adapter |
 | Custom work | What the vendor allows | Anything. Change the code, add tools, connect your own systems |
 
@@ -245,7 +245,7 @@ flowchart LR
 | Bot | Identity, persona, responsibilities, notes, timers, workspace and one long conversation. |
 | Agent | [pi-durable](https://github.com/earendil-works/pi): runs the model, journals every step, owns the tools. |
 
-One gateway process runs every bot on the machine. Everything lives in `~/.pots/` (or `$POTS_HOME`): one folder per bot in `bots/`, channel tokens in `secrets/`, the memory the bots share about you in `memory.sqlite`, the gateway's output in `logs/` on macOS and Windows (on Linux, `pots service logs` reads the journal). Each bot folder holds:
+One gateway process runs every bot on the machine. Everything lives in `~/.pots/` (or `$POTS_HOME`): one folder per bot in `bots/`, channel tokens in `secrets/`, the memory the bots share about you in `memory/`, the gateway's output in `logs/` on macOS and Windows (on Linux, `pots service logs` reads the journal). Each bot folder holds:
 
 | File | What it is |
 |---|---|
@@ -256,9 +256,10 @@ One gateway process runs every bot on the machine. Everything lives in `~/.pots/
 | `workspace/` | Its working directory. |
 | `files/` | Files people sent in messages, in `files/tmp/`: one folder per message, and in it one numbered folder per file. Pots deletes them 30 days after they were saved, and nothing else in the bot folder; the bot moves or copies out of `files/tmp/` what it keeps. |
 | `terminal/` | Its terminal channel: what you and the bot say in `pots chat`. |
-| `bot.sqlite` | Message log, timers, its memory and the agent's journal in one file. |
+| `memory/` | Its memory: one markdown file per memory, and `MEMORY.md`, their index. The bot maintains it. |
+| `bot.sqlite` | Message log, timers and the agent's journal in one file. |
 
-The same `pots` command gives the bot (and its scripts and cron jobs) its actions from a shell: `pots send`, `pots react`, `pots call`, `pots wake`, `pots context`, `pots turn-page`, `pots children`, `pots memory`. Tokens stay inside the running gateway; the agent never sees them.
+The same `pots` command gives the bot (and its scripts and cron jobs) its actions from a shell: `pots send`, `pots react`, `pots call`, `pots wake`, `pots context`, `pots turn-page`, `pots children`. Tokens stay inside the running gateway; the agent never sees them.
 
 The bot sends its whole conversation with each model request, so the provider's prompt cache matters: a request whose start the provider has cached costs a fraction. The system prompt holds only facts that stay the same, and the bot's own parts of it, its memory too, keep their text for the whole page; a change, such as a new `settings` value in `bot.json`, shows after the page turns, after pi compacts, or after an upgrade. What changes from one wake to the next, such as the time, the context use and the bot's own address in a channel, is in the wake. `pots trace` and `pots context` show how much of the input the cache served and what the requests that missed it cost.
 

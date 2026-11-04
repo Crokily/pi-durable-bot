@@ -181,10 +181,13 @@ function toPrompt(prompt: AuthPrompt): Prompt.Prompt<string> {
   }
 }
 
-function openBrowser(url: string): void {
-  const [command, args] =
-    process.platform === "darwin" ? ["open", [url]] : process.platform === "win32" ? ["cmd", ["/c", "start", "", url]] : ["xdg-open", [url]];
-  spawn(command as string, args as string[], { stdio: "ignore", detached: true })
+/** Open a page with $BROWSER when it is set, as xdg-open and many command-line tools do, else with the system's opener. */
+export function openBrowser(url: string): void {
+  const browser = process.env.BROWSER?.trim().split(/\s+/);
+  const [command, ...args] = browser?.[0]
+    ? [...browser, url]
+    : process.platform === "darwin" ? ["open", url] : process.platform === "win32" ? ["cmd", "/c", "start", "", url] : ["xdg-open", url];
+  spawn(command, args, { stdio: "ignore", detached: true })
     .on("error", () => {})
     .unref();
 }

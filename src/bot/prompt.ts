@@ -148,13 +148,13 @@ ${entries}`;
 export const FIRST_LOOK_PROMPT = `You decide whether a bot should update its memory after a piece of its work. Its memory keeps what a good coworker would still know tomorrow: preferences, rules, facts about people and the work, decisions, and what a person asked it to remember or forget. It does not keep what is true only for now, or details its message log already holds.
 The user message has the latest exchanges: what came in ("Input"), and what the bot said and did ("You").`;
 
-/** The message that asks the fork of the main conversation what to save. messages: how many the run added. */
-export function renderMemoryPass(messages: number, memory: { entries: string; forgotten: readonly string[] }): string {
+/** The message that asks the fork of the main conversation what to save. messages: how many the run added; entries: the memory now. */
+export function renderMemoryPass(messages: number, entries: string): string {
   return `This is not a wake: nobody sees this message or your answer, and no tool runs here. Look at the most recent ~${messages} messages above, your work since the last memory pass, and say what your memory should keep from them.
 
 Your memory now:
-${memory.entries}
-${memory.forgotten.length === 0 ? "" : `\nForgotten: a person asked you to forget these, so do not save them again:\n${memory.forgotten.map((text) => `- ${text.replace(/\r?\n/g, " ")}`).join("\n")}\n`}
+${entries}
+
 - Keep what a good coworker would still know tomorrow: preferences, rules, facts about people and the work, decisions. When a person said "remember X" or "forget X", do it.
 - Do not keep what is true only for now, details the message log or your files already hold, or secrets such as passwords and tokens.
 - Use only those messages; do not go and check anything.

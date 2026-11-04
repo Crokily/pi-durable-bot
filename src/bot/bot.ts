@@ -295,7 +295,7 @@ export class Bot implements WakeTarget {
           }),
       memory: {
         firstLook: FIRST_LOOK_PROMPT,
-        instruction: async (messages) => renderMemoryPass(messages, await memory.forPass()),
+        instruction: async (messages) => renderMemoryPass(messages, await memory.render()),
         apply: async (key, answer) => {
           print("memory pass", { pass: key, result: await memory.applyAnswer(`${databaseId}:${key}`, answer) });
         },
@@ -574,7 +574,7 @@ export class Bot implements WakeTarget {
       },
       "POST /memory/forget": async (body: Record<string, unknown>) => {
         await this.#memory.forget(text(body.id, "id"));
-        return `Forgot ${String(body.id)}. It is not saved again.`;
+        return `Forgot ${String(body.id)}.`;
       },
       "GET /children": async () => {
         const now = Date.now();

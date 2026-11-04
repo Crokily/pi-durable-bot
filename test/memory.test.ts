@@ -4,8 +4,8 @@ import { ME, pause, TestGateway, waitFor } from "./support/gateway.ts";
 
 // The memory pass from outside. Its failures would be silent: a pass whose request does not start as the main
 // agent's did misses the provider's cache and costs the full price, a pass that reaches the chat or the main
-// conversation changes what people and the bot see, a forgotten fact that comes back, or an entry saved twice after a
-// crash, only shows as a memory that is wrong.
+// conversation changes what people and the bot see, and an entry saved twice after a crash, or one that is not deleted
+// when it is forgotten, only shows as a memory that is wrong.
 
 let model: FakeModel;
 let gateway: TestGateway;
@@ -69,33 +69,16 @@ describe("memory", { timeout: 90_000 }, () => {
     expect(agentRequests(model).at(-1)!.system).toContain("- s1: The user's time zone is Australia/Sydney.\n- m1: Alice likes tea.");
   });
 
-  it("does not save a forgotten fact again", async () => {
-    await setUp(remembering({ add: "alice likes  TEA." }));
+  it("forgets by deleting the entry, from pots memory or from a pass", async () => {
+    await setUp(remembering({ forget: "m2" }, { add: "Alice likes tea." }));
     expect(gateway.pots("memory", "add", "Alice likes tea.")).toBe("Saved m1.\n");
-    expect(gateway.pots("memory", "forget", "m1")).toBe("Forgot m1. It is not saved again.\n");
+    expect(gateway.pots("memory", "add", "Bob likes coffee.")).toBe("Saved m2.\n");
+    expect(gateway.pots("memory", "forget", "m1")).toBe("Forgot m1.\n");
     gateway.say("general", "alice", `@${ME} I like tea`);
     await waitFor(() => passes().length === 1, { what: "the memory pass" });
-    expect(memory()).toBe("Your memory is empty.\n");
-    // The pass was told what was forgotten.
-    expect(model.requests.find(isMemoryPass)!.messages.at(-1)!.content).toContain("do not save them again:\n- Alice likes tea.");
-  });
-
-  it("does not bring a forgotten fact back through a change or the shared memory, but a person can ask for it again", async () => {
-    await setUp(remembering({ change: "m2", text: "Alice likes  TEA." }, { add: "alice likes tea.", shared: true }));
-    expect(gateway.pots("memory", "add", "Alice likes tea.")).toBe("Saved m1.\n");
-    expect(gateway.pots("memory", "add", "Alice likes coffee.")).toBe("Saved m2.\n");
-    expect(gateway.pots("memory", "forget", "m1")).toBe("Forgot m1. It is not saved again.\n");
-    gateway.say("general", "alice", `@${ME} I like tea`);
-    await waitFor(() => passes().length === 1, { what: "the memory pass" });
-    expect(passes()[0]!.result).toBe("nothing to save");
-    expect(memory()).toBe("- m2: Alice likes coffee.\n");
-
-    // Saved by the bot itself, as when a person says "remember" after "forget": it is there, and no longer forgotten.
-    expect(gateway.pots("memory", "add", "Alice likes tea.")).toBe("Saved m3.\n");
-    expect(memory()).toBe("- m2: Alice likes coffee.\n- m3: Alice likes tea.\n");
-    gateway.say("general", "alice", `@${ME} and now?`);
-    await waitFor(() => passes().length === 2, { what: "the second memory pass" });
-    expect(model.requests.filter(isMemoryPass)[1]!.messages.at(-1)!.content).not.toContain("do not save them again");
+    // Nothing keeps a forgotten text out: said again, it is saved again, with a new ID.
+    expect(passes()[0]!.result).toBe("forgot m2, added m3");
+    expect(memory()).toBe("- m3: Alice likes tea.\n");
   });
 
   it("saves once when the gateway dies right after the pass saved", async () => {

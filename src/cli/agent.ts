@@ -147,7 +147,7 @@ const memoryForget = Command.make("forget", { id: Argument.String("id").pipe(Arg
   Effect.gen(function* () {
     yield* printResult(yield* control(yield* resolveBot(input.bot), "POST", "/memory/forget", { id: input.id }));
   }),
-).pipe(Command.withDescription("Forget an entry. The memory pass does not save it again."));
+).pipe(Command.withDescription("Forget an entry: it is deleted."));
 
 const memory = Command.make("memory").pipe(
   Command.withDescription("The bot's memory: what it keeps beyond a page, and the facts about the user that every bot shares."),

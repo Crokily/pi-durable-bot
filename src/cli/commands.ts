@@ -108,12 +108,17 @@ const pots = Command.make("pots").pipe(
   Command.withSubcommands([initCommand, chatCommand, start, status, service, botCommand, traceCommand, ...agentCommands]),
 );
 
+/** Resolves once stdout and stderr have written all they were given. On macOS a pipe takes writes asynchronously. */
+const written = () => Promise.all([process.stdout, process.stderr].map((stream) => new Promise<void>((resolve) => stream.write("", () => resolve()))));
+
 Command.run(pots, { version }).pipe(
   Effect.provide(Layer.mergeAll(NodeServices.layer, ServiceLayer.layer)),
   NodeRuntime.runMain({
     disableErrorReporting: true,
-    teardown: (exit, onExit) => {
-      if (!gatewayRunning) Runtime.defaultTeardown(exit, onExit);
+    // A command that has finished ends the process, also when something it used left a handle open. A browser sign-in
+    // in pi leaves the browser's spare connection to pi's callback server open, and pots init --no-chat did not end.
+    teardown: (exit) => {
+      if (!gatewayRunning) Runtime.defaultTeardown(exit, (code) => void written().then(() => process.exit(code)));
     },
   }),
 );

@@ -2,6 +2,27 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
+## 0.4.0 (2026-11-04)
+
+A bot that works like a coworker: it hands longer work to helpers in the background, remembers by itself as Claude Code does, sees each new message in its wake, and keeps the start of its requests the same, so the provider's prompt cache serves most of them.
+
+### Added
+- **Children: helpers for longer work.** With its new `task` tool the bot starts children: agents that work in the background with `read`, `write`, `edit`, `bash` and `screen`, on a brief the bot writes. The bot answers the person first and stays free to talk. A child's final message comes back to the bot once, also across crashes and restarts. The bot chooses each child's thinking level: `high`, `xhigh` or `max`. New in `bot.json`: `childModel`, `childThinking` (`xhigh` by default) and `settings.maxChildren` (50 by default). `pots children` lists the children and stops them, and `pots status` shows how many work.
+- **Automatic memory, as in Claude Code.** Each bot has a `memory/` folder of markdown files with a `MEMORY.md` index, and the bots of one computer share `~/.pots/memory/`. The bot sees the indexes at the start of every page and saves what is worth keeping. After each piece of work, a pass in the background, continuing the same conversation, saves what it missed; once a day, after 5 changes, a dream tidies the memory up. Code lets these passes change nothing but the memory files. `"settings": {"autoMemory": false}` in `bot.json` turns the memory off.
+- **The `screen` tool.** `screen` runs commands as `bash` does, with the screen's environment, and holds the screen for one agent at a time; another agent learns who has it and since when. On Linux, plain `bash` no longer gets `DISPLAY`, `XAUTHORITY` or `WAYLAND_DISPLAY`. On macOS and Windows the screen does not need those variables, so there only the prompt keeps agents to `screen`. A bot that sets up its own desktop writes it into `screen` in its `bot.json`.
+- **Wakes carry the messages.** Each wake has the text of each new message (and whether it was edited or deleted), the start of its thread, and its files. Pots downloads a message's files when the message comes, up to 10 MB each, into `files/tmp/` in the bot's folder, and deletes them there 30 days later. A larger file, or one not saved within 10 seconds, is given by its URL. The message log keeps the URL of every file, so the bot can download it again.
+- **`pots trace` and `pots context` show the prompt cache:** how much of the input the provider's cache served, and what the requests that missed it cost.
+- `thinking` in `bot.json` also takes `max`. A level the model does not have becomes the nearest one it has, as in pi.
+
+### Changed
+- **The judge is `off` by default.** A bot whose `bot.json` has no `judge` now gets every message that does not mention it, and decides itself. It used to be `main`. To keep that, set `"judge": "main"`, or use a fast classifier such as `typesafe/jev-latest`.
+- **The start of each request stays the same.** The bot's own prompt sections keep their text for the whole page: a change, such as a new `settings` value, shows after the page turns, after pi compacts, or once after an upgrade. The bot's address in each channel is now in the wake, and the bot runs `sudo -n true` itself to learn whether sudo needs a password.
+- **The messages of one place reach the bot in the order they came,** also when an earlier one waits for its files.
+
+### Fixed
+- **A sign-in opens the page with `$BROWSER` when it is set, on macOS and Windows too.** On macOS it is read as xdg-open reads it, a list of commands split by `:`; on Windows as one program; on Linux xdg-open reads it, as before. The tests set it, so they no longer open real browser tabs on a Mac.
+- **`pots init` ends when it is done, also after a browser sign-in.** It printed "Start the gateway with pots start" and then did not end for minutes: pi's sign-in server left open a connection the browser had opened ahead of time. Now a `pots` command ends when its work is done and its output is written. `pots start`, `pots chat` and `pots service logs --follow` run as before.
+
 ## 0.3.3 (2026-11-03)
 
 A bot whose model fails says so in the chat, and the local server step of `pots init` writes where pi reads.

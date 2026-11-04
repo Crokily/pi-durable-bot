@@ -280,7 +280,7 @@ export class Bot implements WakeTarget {
         sections: [
           { name: "child", render: () => childSection(facts()) },
           { name: "log", render: () => logSection(facts()) },
-          { name: "folder", render: () => folderSection(facts()) },
+          { name: "folder", render: () => folderSection(facts(), true) },
           projectContext,
           skills,
           { name: "remembered", render: async () => memorySection(facts(), await memory.render()), pin: true },

@@ -15,10 +15,10 @@ import {
 } from "@earendil-works/pi-durable";
 
 // Children: agents the main agent starts for longer work, so it stays free to talk. A child is a conversation of its
-// own that starts with only the brief, and has the main agent's working tools but not the task tool. When it ends, its
-// final message goes back to the main agent as a wake, once, also across restarts. Built as pi-durable's example of
-// background subagents: an anchor task owns each child's conversation, and a reporter task delivers each message to
-// the child and reports its answer.
+// own that starts with only the brief, and has read, write, edit, bash and screen: not the channel actions send, react
+// and call, and not the task tool. When it ends, its final message goes back to the main agent as a wake, once, also
+// across restarts. Built as pi-durable's example of background subagents: an anchor task owns each child's
+// conversation, and a reporter task delivers each message to the child and reports its answer.
 
 /** A child, as the main conversation's children document keeps it. */
 export type ChildRecord = {
@@ -296,7 +296,7 @@ export function childrenExtension(host: ChildrenHost): Extension {
           const id = `c${state.next++}`;
           const anchor = await tx.createTask(Anchor, null, background);
           const conversation = await tx.createConversation({ ownership: { kind: "task", taskId: anchor } });
-          // The working tools without the task tool, the child's own prompt, and the model for children.
+          // The child's tools and prompt, and the model for children.
           await configure(tx, conversation.id, { extensions: [...host.extensions().child], model, thinkingLevel });
           const now = api.now();
           const reporter = await tx.createTask(Reporter, { child: id, conversationId: conversation.id, message: `[brief from the main agent]\n${args.brief}` }, background);

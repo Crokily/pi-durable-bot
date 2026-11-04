@@ -19,17 +19,13 @@ const lastUser = (request: FakeRequest) => request.messages.findLast((message) =
 
 /**
  * The main agent starts a child for "please research" and stops it for "stop the research"; a child's end it passes
- * on in the place. The child answers its brief at once, or for "wait long" runs a long command first and then says so
- * in the place. For "please note", the child saves a memory entry first.
+ * on in the place. The child answers its brief at once, or for "wait long" runs a long command first. For "please
+ * note", the child saves a memory entry first.
  */
 function script(request: FakeRequest): FakeReply {
   const last = request.messages.at(-1);
   if (isChild(request)) {
-    if (last?.role !== "user") {
-      const said = request.messages.some((message) => message.toolCalls?.includes("send"));
-      if (request.messages[0]?.content.includes("wait long") && !said) return { call: { name: "send", arguments: { to: "test:#general", text: "child: waited" } } };
-      return { text: "done waiting" };
-    }
+    if (last?.role !== "user") return { text: "done waiting" };
     if (last.content.includes("wait long")) return { call: { name: "bash", arguments: { command: "sleep 60" } } };
     if (last.content.includes("save a memory")) return { call: { name: "bash", arguments: { command: 'pots memory add "Bob likes coffee."' } } };
     return { text: "the answer is 42" };
@@ -68,11 +64,13 @@ describe("children", { timeout: 90_000 }, () => {
     gateway.say("general", "alice", `@${ME} please research`);
     await waitFor(() => reports().length === 1, { what: "the report" });
     expect(reports()[0]!.text).toBe("report: the answer is 42");
-    // The child started from the brief alone, with the working tools but no task tool.
+    // The child started from the brief alone, with the working tools but no channel actions and no task tool, and its
+    // prompt does not tell it how to use them.
     const child = model.requests.find(isChild)!;
     expect(child.messages.map((message) => message.role)).toEqual(["user"]);
     expect(child.messages[0]!.content).toBe("[brief from the main agent]\nfind the answer");
-    expect(child.tools).toEqual(["read", "write", "edit", "bash", "send", "react", "call", "screen"]);
+    expect(child.tools).toEqual(["read", "write", "edit", "bash", "screen"]);
+    expect(child.system).not.toMatch(/pots send|pots react|pots call|ask-secret/);
     expect(gateway.pots("children")).toMatch(/^c1 "research": ended .* ago, waits for a message, for test:#general, thinking xhigh$/m);
 
     await gateway.stop();
@@ -153,7 +151,6 @@ describe("children", { timeout: 90_000 }, () => {
     await pause(3_000);
     expect(gateway.pots("children")).toMatch(/^c1 "research": stopped/m);
     expect(model.requests.filter(isChild)).toHaveLength(1);
-    expect(gateway.sent().filter((record) => record.text?.startsWith("child:"))).toHaveLength(0);
     expect(reports()).toHaveLength(0);
     expect(gateway.query<{ id: string }>("SELECT id FROM bot_wakes WHERE reason = 'child'")).toHaveLength(0);
     expect(gateway.pots("children", "--stop", "c1")).toMatch(/c1 \("research"\) was stopped before/);

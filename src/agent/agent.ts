@@ -179,8 +179,8 @@ let images: ReturnType<typeof createNodePhotonImages> | undefined;
 
 /**
  * The bot's agent: one long-lived pi-durable conversation (the root). Tools: read, write, edit, bash, screen (bash with
- * the screen's environment and a lease on the screen), and the channel actions send, react and call. Everything else
- * the agent does with code.
+ * the screen's environment and a lease on the screen), the channel actions send, react and call, and task. Its children
+ * have read, write, edit, bash and screen. Everything else the agents do with code.
  */
 export class Agent {
   readonly #options: AgentOptions;
@@ -246,7 +246,8 @@ export class Agent {
         execution.inheritEnv = false;
         execution.env = { ...base, ...extra, ...execution.env };
       };
-    const tools = [
+    /** The channel actions, for the main agent only: children have no send, react or call. */
+    const channelTools = [
       defineTool({
         name: "send",
         description:
@@ -288,33 +289,33 @@ export class Agent {
           return { output: text(`The answer is ${result.length} characters; full JSON in ${file}. First part:\n${result.slice(0, 4_000)}`) };
         },
       }),
-      defineTool({
-        ...createBashTool(),
-        name: "screen",
-        description:
-          "Run a bash command on your screen: like bash, with the screen's environment (such as DISPLAY), which bash does not have. " +
-          "Use it for anything on the screen: screenshots, mouse, keyboard, and the apps and the browser on it. Only one agent uses a screen at a time: " +
-          "your first call takes the screen until your work ends, and while another agent has it, the command does not run and you learn who has it.",
-        // A rerun after a crash could click twice: the model gets an interrupted result instead.
-        replay: "unsafe",
-        execute: async (args, api, call) => {
-          const screen = options.screen.current();
-          if (screen.key === undefined) return { output: text(NO_SCREEN), isError: true };
-          const taken = leases().take(screen.key, {
-            bot: options.screen.bot,
-            name: options.screen.name(),
-            agent: describeAgent(String(api.conversationId)),
-            conversation: String(api.conversationId),
-          });
-          if (!taken.ok) return { output: text(renderBusy(screen, taken.lease, leases().idleMs, options.screen.bot)), isError: true };
-          try {
-            return await createBashTool({ prepare: environment(screen.env) }).execute(args, api, call);
-          } finally {
-            taken.done();
-          }
-        },
-      }),
     ];
+    const screenTool = defineTool({
+      ...createBashTool(),
+      name: "screen",
+      description:
+        "Run a bash command on your screen: like bash, with the screen's environment (such as DISPLAY), which bash does not have. " +
+        "Use it for anything on the screen: screenshots, mouse, keyboard, and the apps and the browser on it. Only one agent uses a screen at a time: " +
+        "your first call takes the screen until your work ends, and while another agent has it, the command does not run and you learn who has it.",
+      // A rerun after a crash could click twice: the model gets an interrupted result instead.
+      replay: "unsafe",
+      execute: async (args, api, call) => {
+        const screen = options.screen.current();
+        if (screen.key === undefined) return { output: text(NO_SCREEN), isError: true };
+        const taken = leases().take(screen.key, {
+          bot: options.screen.bot,
+          name: options.screen.name(),
+          agent: describeAgent(String(api.conversationId)),
+          conversation: String(api.conversationId),
+        });
+        if (!taken.ok) return { output: text(renderBusy(screen, taken.lease, leases().idleMs, options.screen.bot)), isError: true };
+        try {
+          return await createBashTool({ prepare: environment(screen.env) }).execute(args, api, call);
+        } finally {
+          taken.done();
+        }
+      },
+    });
 
     let harness: Harness | undefined;
     // After an upgrade, the main conversation's pinned sections show their new text until a request with it goes out.
@@ -357,7 +358,7 @@ export class Agent {
     };
     const bot = defineExtension({
       name: "bot",
-      tools,
+      tools: [...channelTools, screenTool],
       sections: options.sections.map((part) => section(part.name, render(part), { tag: false })),
       hooks: [recordRefresh],
     });
@@ -371,10 +372,10 @@ export class Agent {
     // pi compacts the child, when the conversation no longer shows it.
     const childRender = (part: AgentSection) => async (input: PromptInput, context: Context) =>
       part.pin ? (input.shown[part.name] ?? (await firstText(input.conversationId, part.name, context)) ?? (await part.render())) : part.render();
-    // A child's working tools are the main agent's, with its own prompt and without the task tool.
+    // A child has the main agent's coding tools and screen, with its own prompt: no channel actions and no task tool.
     const child = defineExtension({
       name: "child",
-      tools,
+      tools: [screenTool],
       sections: options.children.sections.map((part) => section(part.name, childRender(part), { tag: false })),
     });
     const coding = defineExtension({

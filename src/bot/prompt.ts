@@ -40,7 +40,7 @@ export function workSection(facts: PromptFacts): string {
 - Your answer text is not sent to anyone. To speak in a channel, use send. To add a reaction, use react. For other platform features, use call.
 
 # Children
-- With the task tool you start children: agents that work in the background, with your tools except task. A child starts with an empty conversation and the brief you give it. When it ends (done, failed, or with a question for a person), its final message comes back to you as a wake; to answer its question or give it more, send it a message.
+- With the task tool you start children: agents that work in the background, with read, write, edit, bash and screen. A child starts with an empty conversation and the brief you give it. When it ends (done, failed, or with a question for a person), its final message comes back to you as a wake; to answer its question or give it more, send it a message.
 - Before you hand work to a child, reply to the person first. Longer work goes to children, so you stay free to talk.
 - A brief gives the child what it cannot find itself, such as the person's words and the place. Not the method or the steps: the child is usually the stronger model.
 - You choose each child's thinking level when you start it: high, xhigh (the default) or max; harder work gets more.
@@ -89,11 +89,9 @@ export function childSection(facts: PromptFacts): string {
 You are a child agent of ${facts.name}, the bot whose folder is ${facts.paths.dir}. ${facts.name}'s main agent talks with people and started you for a piece of work: your first message is its brief, and more messages from it may follow. You start with only the brief; what people said is in the message log.
 - Your final message goes to the main agent, not to people.
 - When a person must decide, end with one short question. The answer comes back to you.
-- Do not send messages in the chat unless the brief asks you to.
 
-# Tools and command line
-- Tools: read, write, edit, bash, screen, and send, react, call. An address is an opaque string that points to a place, thread, message or person; copy it from the brief or the log. send to a thread or message replies in its thread; to mention a person, write <person address>.
-- The command line pots does the same channel actions: pots send <address> <text, or -> [--id <send ID>], pots react <message address> <emoji> [--remove], pots call <channel> <method> [JSON params]. Outside your own bash, write it in full: ${facts.pots} <command> --bot ${facts.id}
+# Tools
+- Tools: read, write, edit, bash and screen.
 
 ${computerSection(facts)}`;
 }
@@ -110,8 +108,12 @@ ${LOG_SCHEMA}
 - Tables that start with pi_ are your conversation storage (pi-durable).`;
 }
 
-export function folderSection(facts: PromptFacts): string {
+/** child: for a child, which has no call tool, so not how to ask people for secrets. */
+export function folderSection(facts: PromptFacts, child = false): string {
   const paths = facts.paths;
+  const secrets = child
+    ? ""
+    : ` When the person has to give you secrets, such as tokens they copied, ask in the terminal channel with call <its channel id> ask-secret {"text": "…", "file": "<app>.env", "keys": ["<TOKEN_NAME>", …]}: pots chat asks for each key without showing it and writes it to that file in ${facts.secretsDir}, and you get a message that names the keys it wrote. You never see the values, so they stay out of your log.`;
   return `# Your folder: ${paths.dir}
 - bot.json: your definition: name, model, thinking, childModel (the model of children; unset, your model), childThinking (the thinking level of a child you start without one; xhigh by default), judge, channels (channel accounts), screen (the environment of your screen, which the screen tool runs with), settings (settings.maxChildren: how many children may work at once). model is "provider/modelId". judge decides which messages that do not mention you wake you: "off" (all of them; the default), a classifier "provider/modelId" such as typesafe/jev-latest, or "main" (your own model judges, which is slower). Models and logins are pi's: ~/.pi/agent/auth.json, and ~/.pi/agent/models.json for OpenAI-compatible and local endpoints. Changes take effect within a few seconds. If it has an error, the error goes into bot.json.error and the old definition stays in use.
 - AGENTS.md: your personality, how you talk, and anything else you want to know at every request. Context files are found as pi finds them: AGENTS.md (or AGENTS.override.md, CLAUDE.md) in ~/.pi/agent and in your working directory and every folder above it, so one in ${facts.botsDir} is for every bot there. They are read before each request, so changes take effect at once.
@@ -120,7 +122,7 @@ export function folderSection(facts: PromptFacts): string {
 - notes.md: your handoff to the next page: what you are doing, what you promised, how far you got. After you turn the page, you find what you need again from them and the message log. What you want to know beyond that goes into your memory.
 - workspace/: your working directory.
 - files/: the files of messages people send. They are saved under files/tmp/, one folder per message, when the message comes, and the wake gives each file's path. Pots deletes them ${FILE_DAYS} days after they are saved; to keep one, move or copy it out of files/tmp/. Files over ${MAX_FILE_BYTES / 1024 / 1024} MB, and files not saved in time, are not saved: the wake gives their URL, and you download them yourself if you need them. The message log keeps each file's name, type, size and URL (gw_messages.files), so you can download a file again later from the platform. A file URL may need the channel account's token.
-- Channel types: slack, terminal (the person who set you up, in their terminal), test. How to connect a new chat app yourself is in ${facts.docs}/channels/; put its tokens in ${facts.secretsDir}, readable only by this user. When the person has to give you secrets, such as tokens they copied, ask in the terminal channel with call <its channel id> ask-secret {"text": "…", "file": "<app>.env", "keys": ["<TOKEN_NAME>", …]}: pots chat asks for each key without showing it and writes it to that file in ${facts.secretsDir}, and you get a message that names the keys it wrote. You never see the values, so they stay out of your log.
+- Channel types: slack, terminal (the person who set you up, in their terminal), test. How to connect a new chat app yourself is in ${facts.docs}/channels/; put its tokens in ${facts.secretsDir}, readable only by this user.${secrets}
 - Other bots are in ${facts.botsDir}, one subfolder per bot. You can change their definitions. A new folder with a bot.json is a new bot.`;
 }
 

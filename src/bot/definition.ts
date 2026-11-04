@@ -52,7 +52,7 @@ const DEFAULT_SETTINGS: BotSettings = {
   judgeContextMessages: 20,
   fallbackWakeMinutes: 120,
   compaction: {},
-  maxChildren: 8,
+  maxChildren: 50,
 };
 
 export const DEFAULT_MODEL = "openai/gpt-6.1-sol";

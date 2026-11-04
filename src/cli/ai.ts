@@ -181,11 +181,26 @@ function toPrompt(prompt: AuthPrompt): Prompt.Prompt<string> {
   }
 }
 
-function openBrowser(url: string): void {
-  const [command, args] =
-    process.platform === "darwin" ? ["open", [url]] : process.platform === "win32" ? ["cmd", ["/c", "start", "", url]] : ["xdg-open", [url]];
-  spawn(command as string, args as string[], { stdio: "ignore", detached: true })
-    .on("error", () => {})
+/**
+ * Open a page. xdg-open reads $BROWSER itself; macOS's open and Windows's start do not, so there pots reads it: on macOS
+ * as xdg-open does, a list of commands, which can have arguments, split by ":"; on Windows as one program.
+ */
+export function openBrowser(url: string): void {
+  const browser = process.env.BROWSER?.trim() ?? "";
+  const listed =
+    process.platform === "darwin"
+      ? browser.split(":").map((entry) => entry.trim().split(/\s+/)).filter(([command]) => command)
+      : process.platform === "win32" && browser ? [[browser]] : [];
+  const system = process.platform === "darwin" ? ["open"] : process.platform === "win32" ? ["cmd", "/c", "start", ""] : ["xdg-open"];
+  openWithFirst(listed.length > 0 ? listed : [system], url);
+}
+
+/** Run the first of the commands that starts, with the URL as its last argument. */
+function openWithFirst(commands: string[][], url: string): void {
+  const [[command, ...args] = [], ...rest] = commands;
+  if (!command) return;
+  spawn(command, [...args, url], { stdio: "ignore", detached: true })
+    .on("error", () => openWithFirst(rest, url))
     .unref();
 }
 

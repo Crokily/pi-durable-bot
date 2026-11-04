@@ -1,9 +1,10 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { openBrowser } from "../src/cli/ai.ts";
 
 // pots in a real terminal. Some bugs show only there, such as raw mode switched off under a prompt, so these tests
 // type keys into a pseudo-terminal from Python's pty module (Linux and macOS) and read the screen.
@@ -178,5 +179,26 @@ describe.skipIf(!python)("pots in a terminal", { timeout: 90_000 }, () => {
       .filter((line) => line.person !== "bot")
       .map((line) => line.text);
     expect(said).toEqual(["(pots chat: wrote SLACK_BOT_TOKEN to " + join(home, "pots", "secrets", "slack.env") + ")", "half a sentence"]);
+  });
+});
+
+// The tests above set BROWSER so that a sign-in opens no page. xdg-open reads it on Linux; on macOS pots reads it.
+describe.runIf(process.platform === "darwin")("pots opens a page on macOS", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("with the first command in $BROWSER that starts, and its arguments", async () => {
+    home = mkdtempSync(join(tmpdir(), "pots-browser-"));
+    const opened = join(home, "opened");
+    const recorder = (name: string) => {
+      writeFileSync(join(home, name), `#!/bin/sh\necho ${name} "$@" >> "${opened}"\n`, { mode: 0o755 });
+      return join(home, name);
+    };
+    // A fake open, first on PATH, so that this test opens no page when pots does not read $BROWSER.
+    recorder("open");
+    vi.stubEnv("PATH", `${home}:${process.env.PATH}`);
+    vi.stubEnv("BROWSER", `${join(home, "missing")}:${recorder("browser")} --new-window`);
+    const url = "https://auth.example.com/authorize?a=1&b=2";
+    openBrowser(url);
+    await vi.waitFor(() => expect(readFileSync(opened, "utf8")).toBe(`browser --new-window ${url}\n`), { timeout: 3_000 });
   });
 });

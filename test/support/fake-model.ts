@@ -5,6 +5,8 @@ import type { AddressInfo } from "node:net";
 // model layer like any OpenAI-compatible endpoint. Its answers come from a script, not from a model.
 
 export interface FakeRequest {
+  /** The model the request names, without its provider. */
+  readonly model: string;
   /** The system prompt. */
   readonly system: string;
   /** images: how many images the message carries. */
@@ -44,7 +46,7 @@ export async function startFakeModel(
         res.writeHead(404).end();
         return;
       }
-      const body = JSON.parse(await readBody(req)) as { stream?: boolean; messages: OpenAiMessage[]; tools?: { function: { name: string } }[] };
+      const body = JSON.parse(await readBody(req)) as { model: string; stream?: boolean; messages: OpenAiMessage[]; tools?: { function: { name: string } }[] };
       const session = req.headers["session_id"];
       const request = { ...toRequest(body), ...(typeof session === "string" ? { session } : {}) };
       requests.push(request);
@@ -160,11 +162,12 @@ interface OpenAiMessage {
   tool_calls?: { function: { name: string } }[];
 }
 
-function toRequest(body: { messages: OpenAiMessage[]; tools?: { function: { name: string } }[] }): FakeRequest {
+function toRequest(body: { model: string; messages: OpenAiMessage[]; tools?: { function: { name: string } }[] }): FakeRequest {
   const text = (content: OpenAiMessage["content"]) =>
     typeof content === "string" ? content : (content ?? []).map((part) => (part.type === "text" ? (part.text ?? "") : "")).join("");
   const system = body.messages.filter((message) => message.role === "system" || message.role === "developer").map((message) => text(message.content)).join("\n");
   return {
+    model: body.model,
     system,
     messages: body.messages
       .filter((message) => message.role !== "system" && message.role !== "developer")

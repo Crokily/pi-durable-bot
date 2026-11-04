@@ -28,6 +28,7 @@ function script(request: FakeRequest): FakeReply {
   if (isChild(request)) {
     if (last?.role !== "user") return { text: "done waiting" };
     if (last.content.includes("wait long")) return { call: { name: "bash", arguments: { command: "sleep 60" } } };
+    if (last.content.includes("nap first")) return { call: { name: "bash", arguments: { command: "sleep 8" } } };
     if (last.content.includes("save a memory")) {
       const index = /Contents of (\S+\/MEMORY\.md) \(the auto-memory of/.exec(request.system)![1]!;
       return { call: { name: "bash", arguments: { command: `echo '- [Bob](bob.md) — likes coffee' >> ${index}` } } };
@@ -41,6 +42,7 @@ function script(request: FakeRequest): FakeReply {
     return { call: { name: "send", arguments: { to: place, text: `report: ${final}` } } };
   }
   if (last.content.includes("stop the research")) return { call: { name: "task", arguments: { action: "stop", child: "c1" } } };
+  if (last.content.includes("please nap")) return { call: { name: "task", arguments: { action: "start", title: "nap", brief: "nap first, then answer" } } };
   if (last.content.includes("please note")) return { call: { name: "task", arguments: { action: "start", title: "note", brief: "save a memory", thinking: "max" } } };
   if (last.content.includes("please research")) {
     const brief = last.content.includes("slowly") ? "wait long, then find the answer" : "find the answer";
@@ -49,9 +51,9 @@ function script(request: FakeRequest): FakeReply {
   return { text: "nothing to do" };
 }
 
-async function setUp(): Promise<void> {
+async function setUp(childModel?: string): Promise<void> {
   model = await startFakeModel(script);
-  gateway = new TestGateway({ model });
+  gateway = new TestGateway({ model, ...(childModel ? { childModel } : {}) });
   await gateway.start();
 }
 
@@ -99,6 +101,19 @@ describe("children", { timeout: 90_000 }, () => {
     expect(first!.system).not.toContain("Each memory is one file holding one fact");
     expect(second!.system).toBe(first!.system);
     expect(gateway.pots("children")).toMatch(/^c1 "note": .*, thinking max$/m);
+  });
+
+  it("takes the bot's model once bot.json no longer names a childModel, also a child that works", async () => {
+    await setUp("fake/helper");
+    gateway.say("general", "alice", `@${ME} please nap`);
+    await waitFor(() => model.requests.some(isChild), { what: "the child to start" });
+    const file = join(gateway.botDir, "bot.json");
+    const { childModel: _, ...definition } = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+    writeFileSync(file, `${JSON.stringify(definition, null, 2)}\n`);
+    await waitFor(() => gateway.output.some((line) => line.message === "definition applied"), { what: "the new definition" });
+    await waitFor(() => reports().length === 1, { what: "the report" });
+    // The child's first request before the change, its last one after.
+    expect(model.requests.filter(isChild).map((request) => request.model)).toEqual(["helper", "coworker"]);
   });
 
   for (const when of ["before", "after"] as const) {

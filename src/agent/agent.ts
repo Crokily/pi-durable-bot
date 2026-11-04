@@ -584,7 +584,8 @@ export class Agent {
    */
   async configureChildren(childModel: string | undefined): Promise<void> {
     if (childModel) await requireChatModel(this.#models, childModel);
-    await this.#configureChildren(this.#childModel(childModel));
+    // Not #childModel(childModel): for undefined, its default reads bot.json's childModel from before this change.
+    await this.#configureChildren(childModel ? modelRef(childModel) : this.#model);
   }
 
   async #configureChildren(model: ModelRef): Promise<void> {

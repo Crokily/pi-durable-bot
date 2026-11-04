@@ -23,6 +23,8 @@ export interface BotOptions {
   /** bot.json "judge". */
   readonly judge?: string;
   readonly settings?: Record<string, unknown>;
+  /** bot.json "childModel": fake/helper, which the fake provider then has too. */
+  readonly childModel?: string;
   /** Also a terminal channel, for `pots chat`. */
   readonly terminal?: boolean;
 }
@@ -60,6 +62,7 @@ export class TestGateway {
       model: "fake/coworker",
       thinking: "off",
       judge: options.judge ?? "off",
+      ...(options.childModel ? { childModel: options.childModel } : {}),
       channels: [{ id: CHANNEL, type: "test", dir: this.platformDir, me: ME }, ...(options.terminal ? [{ id: "terminal", type: "terminal" }] : [])],
       settings: { debounceMs: 300, debounceMaxMs: 2_000, ...options.settings },
     };
@@ -73,7 +76,10 @@ export class TestGateway {
           apiKey: "fake",
           // The session header shows which provider session a request names, as a provider's cache sees it.
           compat: { supportsDeveloperRole: false, supportsReasoningEffort: false, sendSessionAffinityHeaders: true, sessionAffinityFormat: "openai" },
-          models: [{ id: "coworker", contextWindow: 128_000, input: ["text", "image"] }],
+          models: [
+            { id: "coworker", contextWindow: 128_000, input: ["text", "image"] },
+            ...(options.childModel ? [{ id: "helper", contextWindow: 128_000, input: ["text", "image"] }] : []),
+          ],
         },
       },
     };

@@ -1,15 +1,23 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { open, readdir, readFile, stat } from "node:fs/promises";
+import { basename, join } from "node:path";
+import type { MemoryFolders, MemoryNote, MemoryProgress } from "../agent/memory.ts";
+import type { Sql } from "../core/sql.ts";
 
 // The bot's memory, as Claude Code's auto memory: files. Each bot has its own folder, <bot folder>/memory/, and the
 // bots of one POTS_HOME share one more, POTS_HOME/memory/, for facts about the user. A memory is one markdown file with
 // frontmatter (name, description, metadata.type); MEMORY.md in each folder is its index, one line per memory. To
-// forget a memory is to delete its file and its line.
+// forget a memory is to delete its file and its line. What the bot keeps about the memory passes is in bot_state.
 
 export const INDEX = "MEMORY.md";
 /** MEMORY.md is loaded up to this many lines and characters, as in Claude Code; the rest is cut with a warning. */
 const INDEX_LINES = 200;
 const INDEX_CHARS = 25_000;
+/** A pass's list of memory files: the newest, at most this many, as in Claude Code. */
+const LIST_FILES = 200;
+/** The head of a memory file that the list reads for its frontmatter, as in Claude Code. */
+const HEAD_LINES = 30;
+const HEAD_BYTES = 65_536;
+const TYPES = ["user", "feedback", "project", "reference"] as const;
 
 /** A size as Claude Code writes it: "512 bytes", "24.4KB". */
 function size(chars: number): string {
@@ -61,4 +69,139 @@ export function cutIndex(text: string): string {
 export async function readIndex(folder: string): Promise<string> {
   const text = await readFile(join(folder, INDEX), "utf8").catch(() => "");
   return text.trim() ? cutIndex(text) : "";
+}
+
+export interface MemoryFile {
+  /** Absolute. */
+  path: string;
+  mtimeMs: number;
+  description?: string;
+  type?: (typeof TYPES)[number];
+}
+
+/** The memory files of a folder and its subfolders, without MEMORY.md, newest first. */
+async function memoryFiles(folder: string): Promise<MemoryFile[]> {
+  const names = await readdir(folder, { recursive: true }).catch(() => [] as string[]);
+  const files = await Promise.all(
+    names
+      .filter((name) => name.endsWith(".md") && basename(name) !== INDEX)
+      .map(async (name): Promise<MemoryFile | undefined> => {
+        const path = join(folder, name);
+        try {
+          const info = await stat(path);
+          if (!info.isFile()) return undefined;
+          return { path, mtimeMs: info.mtimeMs, ...frontmatter(await head(path)) };
+        } catch {
+          return undefined;
+        }
+      }),
+  );
+  return files.filter((file) => file !== undefined).sort((a, b) => b.mtimeMs - a.mtimeMs);
+}
+
+/** The first 30 lines of a file, at most 64 KB. */
+async function head(path: string): Promise<string> {
+  const file = await open(path, "r");
+  try {
+    const buffer = Buffer.alloc(HEAD_BYTES);
+    const { bytesRead } = await file.read(buffer, 0, HEAD_BYTES, 0);
+    return buffer.subarray(0, bytesRead).toString("utf8").split("\n").slice(0, HEAD_LINES).join("\n");
+  } finally {
+    await file.close();
+  }
+}
+
+/** description and metadata.type from a memory file's frontmatter. A type at the top level counts too, as in Claude Code. */
+export function frontmatter(text: string): Pick<MemoryFile, "description" | "type"> {
+  const match = /^\uFEFF?---\s*\n([\s\S]*?)---\s*(?:\n|$)/.exec(text);
+  if (!match) return {};
+  const value = (raw: string) => {
+    const trimmed = raw.trim();
+    const quoted = /^(["'])(.*)\1$/.exec(trimmed);
+    return quoted ? quoted[2]!.replace(/\\"/g, '"').replace(/''/g, "'") : trimmed;
+  };
+  let description: string | undefined;
+  let top: string | undefined;
+  let nested: string | undefined;
+  let inMetadata = false;
+  for (const line of match[1]!.split("\n")) {
+    const pair = /^(\s*)([A-Za-z_][\w-]*):(.*)$/.exec(line.replace(/\r$/, ""));
+    if (!pair) continue;
+    const [, indent, key, rest] = pair;
+    if (!indent) {
+      inMetadata = key === "metadata";
+      if (key === "description" && rest!.trim()) description = value(rest!);
+      if (key === "type") top = value(rest!);
+    } else if (inMetadata && key === "type") {
+      nested = value(rest!);
+    }
+  }
+  const type = TYPES.find((each) => each === (nested ?? top));
+  return { ...(description ? { description } : {}), ...(type ? { type } : {}) };
+}
+
+/**
+ * The "## Existing memory files" list of a pass, as Claude Code writes it, of both folders, newest first: the bot's own
+ * by name, the shared ones with the shared folder in front.
+ */
+export async function listMemoryFiles(folders: MemoryFolders): Promise<string> {
+  const files = [...(await memoryFiles(folders.own)), ...(await memoryFiles(folders.shared))].sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, LIST_FILES);
+  return files
+    .map((file) => {
+      const name = file.path.startsWith(folders.own) ? file.path.slice(folders.own.length + 1) : file.path;
+      const line = `- ${file.type ? `[${file.type}] ` : ""}${name} (${new Date(file.mtimeMs).toISOString()})`;
+      return file.description ? `${line}: ${file.description}` : line;
+    })
+    .join("\n");
+}
+
+// ---- What the bot keeps about its memory passes, in bot_state ----
+
+/** How far extraction got, the memory changes since the last dream and when it was. */
+export async function memoryProgress(sql: Sql): Promise<MemoryProgress> {
+  const rows = await sql.all<{ key: string; value: string }>("SELECT key, value FROM bot_state WHERE key IN ('memory_cursor', 'memory_changes', 'memory_dream_at')");
+  const value = (key: string) => rows.find((row) => row.key === key)?.value;
+  const cursor = value("memory_cursor");
+  const dreamAt = value("memory_dream_at");
+  return { ...(cursor === undefined ? {} : { cursor: Number(cursor) }), changes: Number(value("memory_changes") ?? 0), ...(dreamAt === undefined ? {} : { dreamAt: Number(dreamAt) }) };
+}
+
+export async function saveMemoryProgress(sql: Sql, progress: MemoryProgress): Promise<void> {
+  await sql.transaction(async (tx) => {
+    const set = (key: string, value: number | undefined) =>
+      value === undefined
+        ? tx.run("DELETE FROM bot_state WHERE key = ?", key)
+        : tx.run("INSERT INTO bot_state (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", key, String(value));
+    await set("memory_cursor", progress.cursor);
+    await set("memory_changes", progress.changes);
+    await set("memory_dream_at", progress.dreamAt);
+  });
+}
+
+/** A note that waits for the main agent's next wake. */
+export type WaitingNote = MemoryNote & { id: number };
+
+export async function memoryNotes(sql: Sql): Promise<WaitingNote[]> {
+  const row = await sql.get<{ value: string }>("SELECT value FROM bot_state WHERE key = 'memory_notes'");
+  return row ? (JSON.parse(row.value) as WaitingNote[]) : [];
+}
+
+/** Keep a note for the main agent's next wake. */
+export async function addMemoryNote(sql: Sql, note: MemoryNote): Promise<void> {
+  await changeNotes(sql, (notes) => [...notes, { ...note, id: Math.max(0, ...notes.map((each) => each.id)) + 1 }]);
+}
+
+/** The notes a wake carried: they are not given again. */
+export async function dropMemoryNotes(sql: Sql, delivered: readonly WaitingNote[]): Promise<void> {
+  const ids = new Set(delivered.map((note) => note.id));
+  await changeNotes(sql, (notes) => notes.filter((note) => !ids.has(note.id)));
+}
+
+async function changeNotes(sql: Sql, change: (notes: WaitingNote[]) => WaitingNote[]): Promise<void> {
+  await sql.transaction(async (tx) => {
+    const row = await tx.get<{ value: string }>("SELECT value FROM bot_state WHERE key = 'memory_notes'");
+    const notes = change(row ? (JSON.parse(row.value) as WaitingNote[]) : []);
+    if (notes.length === 0) await tx.run("DELETE FROM bot_state WHERE key = 'memory_notes'");
+    else await tx.run("INSERT INTO bot_state (key, value) VALUES ('memory_notes', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", JSON.stringify(notes));
+  });
 }

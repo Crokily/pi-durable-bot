@@ -28,8 +28,14 @@ export interface FakeModel {
   close(): Promise<void>;
 }
 
-/** delayMs: wait this long before each answer, like a slow model. */
-export async function startFakeModel(script: (request: FakeRequest) => FakeReply = coworker, options: { delayMs?: number } = {}): Promise<FakeModel> {
+/**
+ * delayMs: wait this long before each answer, like a slow model. memory: the answers to the memory passes and dreams,
+ * which may wait; by default a pass answers "Nothing to save." and a dream "Nothing changed.".
+ */
+export async function startFakeModel(
+  script: (request: FakeRequest) => FakeReply = coworker,
+  options: { delayMs?: number; memory?: (request: FakeRequest) => FakeReply | Promise<FakeReply> } = {},
+): Promise<FakeModel> {
   const requests: FakeRequest[] = [];
   let calls = 0;
   const server = createServer((req, res) => {
@@ -43,7 +49,9 @@ export async function startFakeModel(script: (request: FakeRequest) => FakeReply
       const request = { ...toRequest(body), ...(typeof session === "string" ? { session } : {}) };
       requests.push(request);
       if (options.delayMs) await new Promise((resolve) => setTimeout(resolve, options.delayMs));
-      const reply = script(request);
+      const reply = isMemoryPass(request) || isDream(request) ? await (options.memory ?? noMemory)(request) : script(request);
+      // A gateway that died while it waited for this answer.
+      if (res.destroyed) return;
       if ("fail" in reply) {
         res.writeHead(reply.fail.status, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: { message: reply.fail.message, type: "invalid_request_error" } }));
@@ -92,9 +100,28 @@ export function judgeRequests(model: FakeModel): FakeRequest[] {
   return model.requests.filter(isJudge);
 }
 
-/** Requests that came from the agent, not from the judge. */
+/** Requests that came from the main agent or a child, not from the judge, a memory pass or a dream. */
 export function agentRequests(model: FakeModel): FakeRequest[] {
-  return model.requests.filter((request) => !isJudge(request));
+  return model.requests.filter((request) => !isJudge(request) && !isMemoryPass(request) && !isDream(request));
+}
+
+/** The last message of a person or the bot's code: in a memory fork, its message, also after its tool calls. */
+export function lastUser(request: FakeRequest): string {
+  return request.messages.findLast((message) => message.role === "user")?.content ?? "";
+}
+
+/** A memory extraction pass: a fork of the main conversation, asked to update the memory. */
+export function isMemoryPass(request: FakeRequest): boolean {
+  return lastUser(request).startsWith("You are now acting as the memory extraction subagent");
+}
+
+/** A dream: a fork of the main conversation, asked to consolidate the memory. */
+export function isDream(request: FakeRequest): boolean {
+  return lastUser(request).startsWith("# Dream: Memory Consolidation");
+}
+
+function noMemory(request: FakeRequest): FakeReply {
+  return { text: isDream(request) ? "Nothing changed." : "Nothing to save." };
 }
 
 /** The wake messages the agent got, in order: the last user message of each agent request that starts a run. */

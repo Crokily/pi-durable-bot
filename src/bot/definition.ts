@@ -43,7 +43,7 @@ export interface BotSettings {
   compaction: Compaction;
   /** How many children may work at once. At the cap, the task tool says so and lists them. */
   maxChildren: number;
-  /** The memory, as Claude Code's autoMemoryEnabled: false, no memory section and no age note. */
+  /** The memory, as Claude Code's autoMemoryEnabled: false, no memory section, no memory passes, no dream and no age note. */
   autoMemory: boolean;
 }
 
@@ -84,6 +84,7 @@ export function botPaths(dir: string) {
     crashBeforeChildReport: join(dir, "crash-before-child-report"),
     crashAfterChildReport: join(dir, "crash-after-child-report"),
     crashAfterChildStop: join(dir, "crash-after-child-stop"),
+    crashBeforeMemoryPass: join(dir, "crash-before-memory-pass"),
     /** A note from pots init: the bot is woken with it at its first start, then the file is removed. */
     firstWake: join(dir, "first-wake.md"),
   };

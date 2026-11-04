@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, unlinkSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { basename, delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Models } from "@earendil-works/pi-ai";
 import type { TelemetrySpan } from "@earendil-works/pi-telemetry";
@@ -24,7 +24,7 @@ import type { Timer } from "../gateway/timers.ts";
 import { ControlServer } from "./control.ts";
 import { type BotDefinition, type BotPaths, botPaths } from "./definition.ts";
 import { describeMachine } from "./machine.ts";
-import { readIndex } from "./memory.ts";
+import { addMemoryNote, dropMemoryNotes, listMemoryFiles, memoryNotes, memoryProgress, readIndex, saveMemoryProgress } from "./memory.ts";
 import {
   childMemorySection,
   childSection,
@@ -37,7 +37,10 @@ import {
   renderCacheUse,
   renderChildWake,
   renderContext,
+  renderDream,
+  renderExtraction,
   renderHandoff,
+  renderMemoryNote,
   renderPlaceWake,
   renderTimerWake,
   workSection,
@@ -291,7 +294,15 @@ export class Bot implements WakeTarget {
             refreshPinned: () =>
               sql.run("INSERT INTO bot_state (key, value) VALUES ('prompt_version', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", VERSION),
           }),
-      memory: { enabled: memoryOn, folders },
+      memory: {
+        enabled: memoryOn,
+        folders,
+        extraction: async (messages) => renderExtraction(messages, await listMemoryFiles(folders), folders),
+        dream: async (progress) => renderDream(facts(), progress),
+        progress: () => memoryProgress(sql),
+        saveProgress: (progress) => saveMemoryProgress(sql, progress),
+        noted: (note) => addMemoryNote(sql, note),
+      },
       actions: {
         send: (to, text, sendId, trace) => self().send(to, text, sendId, trace),
         react: (message, emoji, remove, trace) => self().react(message, emoji, remove, trace),
@@ -324,6 +335,8 @@ export class Bot implements WakeTarget {
     agent.crashTests.afterReport = crashTest(paths.crashAfterChildReport, "crash test: dying after the child's report", "reporter");
     // Right after a stop marked a child stopped, before its work ended. The next start must end that work.
     agent.crashTests.afterStopMark = crashTest(paths.crashAfterChildStop, "crash test: dying after marking the child stopped", "child");
+    // Right before a memory pass forks the main conversation. The next start must make the pass.
+    agent.crashTests.beforeMemoryPass = () => crashTest(paths.crashBeforeMemoryPass, "crash test: dying before the memory pass", "bot")(id);
     for (const row of await sql.all<{ submission: string; place: string }>(
       "SELECT submission, place FROM bot_wakes WHERE submission IS NOT NULL AND place IS NOT NULL ORDER BY at DESC LIMIT 1000",
     )) {
@@ -456,7 +469,15 @@ export class Bot implements WakeTarget {
   }
 
   async #submit(id: string, reason: string, place: Address | undefined, text: string, steer: boolean, caller?: TelemetrySpan): Promise<Delivered> {
+    // What the memory passes changed since the last wake, once, at the end of this one, as Claude Code tells it.
+    const notes = await memoryNotes(this.#sql);
+    if (notes.length > 0) {
+      const read = await this.#agent.readFiles();
+      const stale = (paths: readonly string[]) => paths.filter((path) => basename(path) === "MEMORY.md" || read.has(path));
+      text = [text, ...notes.map((note) => renderMemoryNote(note, stale([...note.written, ...note.deleted])))].join("\n\n");
+    }
     const { id: submission, trace } = await this.#agent.submit({ id, text, steer, data: { reason, ...(place ? { place } : {}) }, caller });
+    if (notes.length > 0) await dropMemoryNotes(this.#sql, notes);
     if (place) this.#submissionPlaces.set(submission, place);
     await this.#sql.run(
       "INSERT OR IGNORE INTO bot_wakes (id, at, reason, place, text, submission) VALUES (?, ?, ?, ?, ?, ?)",

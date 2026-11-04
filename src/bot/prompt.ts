@@ -1,5 +1,7 @@
+import { basename } from "node:path";
 import type { CacheUse, ContextStatus } from "../agent/agent.ts";
 import { age, type ChildEnd, type ChildInfo, describeChild } from "../agent/children.ts";
+import type { MemoryFolders, MemoryNote, MemoryProgress } from "../agent/memory.ts";
 import type { PersonInfo } from "../core/channel.ts";
 import { formatTime } from "../core/time.ts";
 import type { PlaceWake, WakeEvent, WakeFile } from "../core/wake.ts";
@@ -194,6 +196,141 @@ export function childMemorySection(facts: PromptFacts, indexes: MemoryIndexes): 
 ${indexBlock(facts.paths.memory, `the auto-memory of ${facts.name}, as it was when you started`, indexes.own, "This MEMORY.md is empty.")}
 
 ${indexBlock(facts.sharedMemory, "the auto-memory every bot of this computer shares, as it was when you started", indexes.shared, "This MEMORY.md is empty.")}`;
+}
+
+/** The tools a memory fork may use, as its message and the refusals say them. */
+const READ_ONLY_COMMANDS = "ls, find, grep, cat, stat, wc, head, tail and sqlite3 -readonly -safe, also joined by pipes";
+
+/**
+ * The extraction pass's message: Claude Code's, changed only where it names Claude Code things. messages: how many
+ * messages since the last pass; files: the "## Existing memory files" list.
+ */
+export function renderExtraction(messages: number, files: string, folders: MemoryFolders): string {
+  const list = files ? `\n\n## Existing memory files\n\n${files}\n\nCheck this list before writing — update an existing file rather than creating a duplicate.` : "";
+  return [
+    `You are now acting as the memory extraction subagent. Analyze the most recent ~${messages} messages above and use them to update your persistent memory systems.`,
+    "",
+    `Available tools: read, read-only bash (${READ_ONLY_COMMANDS}), and write/edit for paths inside the memory directories only (${folders.own}/ and ${folders.shared}/), and bash rm of .md files inside the memory directories only (rm takes no flags except -f). All other tools — screen, send, react, call, task, write-capable bash, etc — will be denied.`,
+    "",
+    "You have a limited turn budget. edit needs the current text of the file, so the efficient strategy is: turn 1 — issue all read calls in parallel for every file you might update; turn 2 — issue all write/edit calls in parallel. Do not interleave reads and writes across multiple turns.",
+    "",
+    `You MUST only use content from the last ~${messages} messages to update your persistent memories. Do not waste any turns attempting to investigate or verify that content further — no searching your files or the message log, no reading files to confirm a fact, no other commands.${list}`,
+    "",
+    "If nothing is worth saving, output only 'Nothing to save.' Do not explain why.",
+    "",
+    "If someone explicitly asks you to remember something, save it immediately as whichever type fits best. If they ask you to forget something, find and remove the relevant entry.",
+    "",
+    "Apply the memory types, scope guidance, what-not-to-save criteria, and frontmatter format from the Memory section of your system prompt — it is already in your context above.",
+  ].join("\n");
+}
+
+/** The dream's message: Claude Code's "# Dream: Memory Consolidation", for both memory folders and the bot's log. */
+export function renderDream(facts: PromptFacts, progress: MemoryProgress): string {
+  const own = `${facts.paths.memory}/`;
+  const shared = `${facts.sharedMemory}/`;
+  const db = facts.paths.db;
+  const last = progress.dreamAt === undefined ? "none before" : new Date(progress.dreamAt).toISOString();
+  return `# Dream: Memory Consolidation
+
+You are performing a dream — a reflective pass over your memory files. Synthesize what you've learned recently into durable, well-organized memories so that future pages can orient quickly.
+
+Memory directories: \`${own}\` (yours) and \`${shared}\` (shared by every bot of this computer)
+Both directories already exist — write to them directly with the write tool (do not run mkdir or check for their existence).
+
+Message log and conversation: \`${db}\` (a large SQLite file — query it narrowly with sqlite3 -readonly -safe, don't read whole tables)
+
+## Shared memory (\`${shared}\`)
+
+The shared directory holds memories every bot of this computer uses. Other bots write here too — treat it differently from your own files:
+
+- **Phase 1:** \`ls\` the shared directory and skim it alongside your own files. Another bot may have already captured something you'd otherwise duplicate.
+- **Phase 3:** Merge near-duplicates *within* the shared directory the same way you would your own memories. If one of your memories restates a shared memory, delete yours.
+- **Phase 4 — be conservative pruning the shared directory:**
+  - DO delete or fix a shared memory that is clearly contradicted by what you see now, or that a newer shared memory marks as superseded.
+  - DO NOT delete a shared memory just because you don't recognize it or it isn't relevant to *your* recent work — another bot may rely on it.
+  - When unsure, leave it. A stale shared memory costs little; deleting another bot's load-bearing note costs a lot.
+
+Do not move your own memories into the shared directory during a dream — that's a deliberate choice made when the fact comes up, not something to do reflexively.
+
+---
+
+## Phase 1 — Orient
+
+- \`ls\` the memory directories to see what already exists
+- Read each \`MEMORY.md\` to understand the current index
+- Skim existing topic files so you improve them rather than creating duplicates
+
+## Phase 2 — Gather recent signal
+
+Look for new information worth persisting. Sources in rough priority order:
+
+1. **Existing memories that drifted** — facts that contradict something you see in your folder or the message log now
+2. **Log search** — if you need specific context (e.g., "what did Alice say about the deadline yesterday?"), query the message log for narrow terms:
+   \`sqlite3 -readonly -safe ${db} "SELECT at, person, text FROM gw_messages WHERE text LIKE '%<narrow term>%' ORDER BY at DESC LIMIT 50"\`
+
+Don't exhaustively read the log. Look only for things you already suspect matter.
+
+## Phase 3 — Consolidate
+
+For each thing worth remembering, write or update a memory file at the top level of the memory directory it belongs in. Use the memory file format and type conventions from your system prompt's Memory section — it's the source of truth for what to save, how to structure it, and what NOT to save.
+
+Focus on:
+- Merging new signal into existing topic files rather than creating near-duplicates
+- Converting relative dates ("yesterday", "last week") to absolute dates so they remain interpretable after time passes
+- Deleting contradicted facts — if today's investigation disproves an old memory, fix it at the source
+
+## Phase 4 — Prune and index
+
+Update each \`MEMORY.md\` so it stays under 200 lines AND under ~25KB. It's an **index**, not a dump — each entry should be one line under ~150 characters: \`- [Title](file.md) — one-line hook\`. Never write memory content directly into it.
+
+- Remove pointers to memories that are now stale, wrong, or superseded
+- Demote verbose entries: if an index line is over ~200 chars, it's carrying content that belongs in the topic file — shorten the line, move the detail
+- Add pointers to newly important memories
+- Resolve contradictions — if two files disagree, fix the wrong one
+
+### Reconcile memories against AGENTS.md
+
+Your AGENTS.md and the other context files are loaded in your system prompt. For each memory that captures feedback or project conventions (the \`feedback\`/\`project\` types, where tagged), check whether it contradicts an AGENTS.md instruction on the same topic:
+
+- **Memory is stale** — AGENTS.md and the memory describe different procedures for the same task: AGENTS.md is the maintained source. Delete the memory, or rewrite it to agree if it carries context worth keeping (the *why* is still useful but the *how* is wrong).
+- **AGENTS.md may be stale** — the memory is clearly dated after AGENTS.md and explicitly corrects it: do NOT edit AGENTS.md during a dream. Annotate the memory with "contradicts AGENTS.md — verify which is current" and list it in your summary.
+- **Not a conflict** — the memory adds detail AGENTS.md doesn't cover, or narrows an AGENTS.md rule with a stated reason. Leave it.
+
+A \`feedback\` memory's "Why: the user corrected me" framing is not evidence it's newer than AGENTS.md — AGENTS.md may have been updated since.
+
+---
+
+Return a brief summary of what you consolidated, updated, or pruned. If nothing changed (memories are already tight), say so.
+
+## Additional context
+
+**Tool constraints for this run:** Shell access is restricted to read-only commands (\`ls\`, \`find\`, \`grep\`, \`cat\`, \`stat\`, \`wc\`, \`head\`, \`tail\` and \`sqlite3 -readonly -safe\`, also joined by pipes) plus deleting \`.md\` files inside the memory directories (\`rm\` takes no flags except \`-f\`). Anything else that writes, redirects to a file, or modifies state will be denied. Plan your exploration with this in mind.
+
+Memory changes since the last consolidation (${last}): ${progress.changes}`;
+}
+
+/**
+ * Claude Code's note after a memory pass or a dream changed files, in the main agent's next wake. inContext: the
+ * changed files whose copy the main agent has, MEMORY.md in its memory section and files it read.
+ */
+export function renderMemoryNote(note: MemoryNote, inContext: readonly string[]): string {
+  const changed = [...note.written, ...note.deleted];
+  const memories = (paths: readonly string[]) => paths.filter((path) => basename(path) !== "MEMORY.md").length;
+  const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  let summary: string;
+  if (note.source === "dream") summary = `consolidated ${count(changed.length, "memory file", "memory files")}`;
+  else {
+    const parts = [
+      ...(memories(note.written) > 0 ? [`saved ${count(memories(note.written), "memory", "memories")}`] : []),
+      ...(memories(note.deleted) > 0 ? [`deleted ${count(memories(note.deleted), "memory", "memories")}`] : []),
+    ];
+    summary = parts.length > 0 ? parts.join(", ") : "updated the memory index";
+  }
+  const lines = [`${note.source === "dream" ? "Background memory consolidation" : "Background memory extraction"} updated your memory: ${summary}`];
+  if (changed.length > 0) lines.push(`Files changed: ${changed.join(", ")}`);
+  if (inContext.length > 0) lines.push(`Your loaded copy of ${inContext.join(", ")} is now stale relative to disk — read it again if you need current contents.`);
+  lines.push("This is ambient context — do not narrate it to people unless they ask or it is directly relevant to their request.");
+  return lines.join("\n");
 }
 
 export function renderContext(status: ContextStatus): string {

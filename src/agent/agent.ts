@@ -106,7 +106,10 @@ export interface AgentOptions {
     thinking(): Thinking | undefined;
     /** How many children may work at once. */
     max(): number;
-    /** A child's system prompt parts. They stay the same for every child, so children share the start of their requests. */
+    /**
+     * A child's system prompt parts. Those before the last pinned one stay the same for every child, so children share
+     * the start of their requests. A pinned part keeps the text of the child's first request for its whole conversation.
+     */
     sections: readonly AgentSection[];
     /** The place the main agent works on now, when it works on one: a new child works for it unless told otherwise. */
     place(): string | undefined;
@@ -133,7 +136,8 @@ export interface AgentSection {
   /**
    * Keep the text it had when the page began: a new text shows after the page turns or pi compacts. A change in the
    * middle of a page is sent again at the end of the conversation; on a model that takes system text only at the start,
-   * it changes the start of every request, and the provider's prompt cache misses.
+   * it changes the start of every request, and the provider's prompt cache misses. In a child's sections: keep the text
+   * of the child's first request for its whole conversation.
    */
   pin?: boolean;
 }
@@ -357,11 +361,21 @@ export class Agent {
       sections: options.sections.map((part) => section(part.name, render(part), { tag: false })),
       hooks: [recordRefresh],
     });
+    /** The text a pinned section had at a child's first request: its first system entry has every section. */
+    const firstText = async (conversation: ConversationId, name: string, context: Context) => {
+      const page = await (await harness?.conversation(conversation, context))?.entries({ order: "ascending" }, 10, undefined, context);
+      const first = page?.items.find((entry) => SystemEntry.is(entry))?.model?.find((message) => message.role === "system");
+      return first?.role === "system" ? (first.sections?.[name] ?? undefined) : undefined;
+    };
+    // A child is a conversation of its own, not a fork: a pinned section shows the text of its first request, also after
+    // pi compacts the child, when the conversation no longer shows it.
+    const childRender = (part: AgentSection) => async (input: PromptInput, context: Context) =>
+      part.pin ? (input.shown[part.name] ?? (await firstText(input.conversationId, part.name, context)) ?? (await part.render())) : part.render();
     // A child's working tools are the main agent's, with its own prompt and without the task tool.
     const child = defineExtension({
       name: "child",
       tools,
-      sections: options.children.sections.map((part) => section(part.name, render(part), { tag: false })),
+      sections: options.children.sections.map((part) => section(part.name, childRender(part), { tag: false })),
     });
     const coding = defineExtension({
       name: "coding-tools",

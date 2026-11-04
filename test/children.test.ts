@@ -20,7 +20,7 @@ const lastUser = (request: FakeRequest) => request.messages.findLast((message) =
 /**
  * The main agent starts a child for "please research" and stops it for "stop the research"; a child's end it passes
  * on in the place. The child answers its brief at once, or for "wait long" runs a long command first and then says so
- * in the place.
+ * in the place. For "please note", the child saves a memory entry first.
  */
 function script(request: FakeRequest): FakeReply {
   const last = request.messages.at(-1);
@@ -31,6 +31,7 @@ function script(request: FakeRequest): FakeReply {
       return { text: "done waiting" };
     }
     if (last.content.includes("wait long")) return { call: { name: "bash", arguments: { command: "sleep 60" } } };
+    if (last.content.includes("save a memory")) return { call: { name: "bash", arguments: { command: 'pots memory add "Bob likes coffee."' } } };
     return { text: "the answer is 42" };
   }
   if (last?.role !== "user") return { text: "done" };
@@ -40,6 +41,7 @@ function script(request: FakeRequest): FakeReply {
     return { call: { name: "send", arguments: { to: place, text: `report: ${final}` } } };
   }
   if (last.content.includes("stop the research")) return { call: { name: "task", arguments: { action: "stop", child: "c1" } } };
+  if (last.content.includes("please note")) return { call: { name: "task", arguments: { action: "start", title: "note", brief: "save a memory" } } };
   if (last.content.includes("please research")) {
     const brief = last.content.includes("slowly") ? "wait long, then find the answer" : "find the answer";
     return { call: { name: "task", arguments: { action: "start", title: "research", brief } } };
@@ -79,6 +81,18 @@ describe("children", { timeout: 90_000 }, () => {
     expect(gateway.pots("trace")).toMatch(/mention\s+test:#general\s+1 event\s+model 3×/);
     expect(gateway.pots("trace")).toMatch(/^Model requests: 5,/m);
     expect(gateway.pots("trace", "mention:test:#general:1")).toMatch(/^child run, trace [^\n]*\nsubmission \d+ \(placed\)[\s\S]*model fake\/coworker, 100 in \(80% cached\), 10 out, stop/m);
+  });
+
+  it("sees the memory as it was when it started, for its whole conversation", async () => {
+    await setUp();
+    expect(gateway.pots("memory", "add", "Alice likes tea.")).toBe("Saved m1.\n");
+    gateway.say("general", "alice", `@${ME} please note`);
+    await waitFor(() => reports().length === 1, { what: "the report" });
+    expect(gateway.pots("memory", "list")).toBe("- m1: Alice likes tea.\n- m2: Bob likes coffee.\n");
+    // The entry the child saved itself does not change the start of its own requests.
+    const [first, second] = model.requests.filter(isChild);
+    expect(first!.system).toMatch(/# Memory\n[\s\S]*- m1: Alice likes tea\.$/);
+    expect(second!.system).toBe(first!.system);
   });
 
   for (const when of ["before", "after"] as const) {

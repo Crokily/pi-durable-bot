@@ -275,13 +275,15 @@ export class Bot implements WakeTarget {
         model: () => current().childModel,
         thinking: () => current().childThinking,
         max: () => settings().maxChildren,
-        // The same for every child, so children share the start of their requests.
+        // The same for every child, so children share the start of their requests; then the memory, as it was when
+        // the child started.
         sections: [
           { name: "child", render: () => childSection(facts()) },
           { name: "log", render: () => logSection(facts()) },
           { name: "folder", render: () => folderSection(facts()) },
           projectContext,
           skills,
+          { name: "remembered", render: async () => memorySection(facts(), await memory.render()), pin: true },
         ],
         place: () => (bot ? bot.#currentPlace() : undefined),
         ended: (end) => self().#deliverChildEnd(end),

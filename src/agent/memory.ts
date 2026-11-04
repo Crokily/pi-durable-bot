@@ -1,4 +1,4 @@
-import { lstat, stat } from "node:fs/promises";
+import { lstat, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,10 +28,12 @@ import type { Sql } from "../core/sql.ts";
 // time, an extraction pass: a fork of the main conversation at the run's answer, with the main conversation's provider
 // session, so its request starts as the main agent's last one did and the provider's prompt cache serves it. It keeps
 // every tool of the main agent, and code refuses each call but reading, writing the memory folders' .md files and
-// read-only shell commands; it refuses also a change to a memory file that another writer changed since the pass began.
-// It is skipped when the main agent wrote memory itself since the last pass. Once a day, after enough memory changes, a dream consolidates the
-// memory the same way. A fork is deleted once it ended: nothing of it stays in the main conversation or the bot's
-// database but how far the passes got and what they changed, for the main agent's next wake.
+// read-only shell commands; it refuses also a change to a memory file that is not as it was when the pass began, unless
+// the fork changed it itself. It is skipped when the main agent wrote memory itself since the last pass. Once a day,
+// after enough memory changes, a dream consolidates the memory the same way. A fork is deleted once it ended: nothing
+// of it stays in the main conversation or the bot's database but how far the passes got and the memory changes since
+// the last dream. What it changed goes to the main agent's next wake from this process, as in Claude Code: a restart
+// before that wake loses it.
 
 /** The bot's own memory folder and the one all bots of the POTS_HOME share. Both exist. */
 export interface MemoryFolders {
@@ -46,7 +48,7 @@ export interface MemoryProgress {
   dreamAt?: number;
 }
 
-/** A pass or a dream changed files: the main agent's next wake says so, once. Paths are absolute. */
+/** A pass or a dream changed files: the main agent's next wake from this process says so, once. Paths are absolute. */
 export interface MemoryNote {
   source: MemorySource;
   written: string[];
@@ -55,7 +57,7 @@ export interface MemoryNote {
 
 export type MemorySource = "extract" | "dream";
 
-/** How a pass or a dream ended: what to record with what its fork changed, in one transaction. */
+/** How a pass or a dream ended: how the progress moves, in one transaction with the change its fork made. */
 export interface MemorySettle {
   /** Extraction got this far. */
   cursor?: number;
@@ -74,13 +76,18 @@ export interface MemoryHost {
   /** The dream's message. */
   dream(progress: MemoryProgress): Promise<string>;
   progress(): Promise<MemoryProgress>;
-  /** A fork wrote or deleted a file: kept at once, so it is told also when the fork fails or the process dies. */
-  changed(source: MemorySource, kind: "written" | "deleted", path: string): Promise<void>;
   /**
-   * In one transaction: what the forks changed since the last settle becomes a note for the next wake and, for
-   * extraction, a memory change; and the progress moves as `update` says. Returns the new progress.
+   * A fork changed a file for the first time: kept at once, so the change counts for the dream also when the fork fails
+   * or the process dies.
+   */
+  changed(source: MemorySource): Promise<void>;
+  /**
+   * In one transaction: a change the forks made since the last settle counts, for extraction, as a memory change; and
+   * the progress moves as `update` says. Returns the new progress.
    */
   settle(update: MemorySettle): Promise<MemoryProgress>;
+  /** The note for the main agent's next wake from this process. */
+  noted(note: MemoryNote): void;
 }
 
 /** An extraction pass has at most this many turns, as in Claude Code; a dream has no cap, as there. */
@@ -283,17 +290,20 @@ export async function forkRefusal(name: string, args: Record<string, unknown>, f
   return `only read, read-only bash, and write/edit of .md files within ${where} are allowed in this context`;
 }
 
-/** Whether a main agent's tool call meant to write, edit or delete a file in a memory folder. */
+/**
+ * Whether a main agent's tool call meant to write, edit or delete a file in a memory folder: write or edit of a path
+ * there, an rm of a .md file there, or a command that names a path there and is not read-only by the fork's list. A
+ * command the checker cannot read says nothing either way, and does not count.
+ */
 function writesMemory(name: string, args: Record<string, unknown>, folders: MemoryFolders, cwd: string): boolean {
   if ((name === "write" || name === "edit") && typeof args.path === "string") return folderOf(toolPath(cwd, args.path), folders) !== undefined;
   if ((name !== "bash" && name !== "screen") || typeof args.command !== "string") return false;
-  const command = args.command;
-  const mentioned = command
-    .split(/[\s'"`;|&<>()=]+/)
-    .some((token) => token.length > 0 && folderOf(resolve(cwd, token.replace(/^~(?=\/|$)/, homedir())), folders) !== undefined);
-  if (!mentioned) return false;
-  const pipeline = parseShell(command);
-  return typeof pipeline === "string" || pipeline.some((words, index) => notReadOnly(words, index === 0) !== undefined);
+  const pipeline = parseShell(args.command);
+  if (typeof pipeline === "string") return false;
+  const removed = rmTargets(pipeline);
+  if (removed) return removed.some((path) => path.endsWith(".md") && folderOf(path, folders) !== undefined);
+  const names = pipeline.some((words) => words.some((word) => folderOf(toolPath(cwd, word), folders) !== undefined));
+  return names && pipeline.some((words, index) => notReadOnly(words, index === 0) !== undefined);
 }
 
 // ---- The age note ----
@@ -315,18 +325,43 @@ export async function withAgeNote(result: ToolExecutionResult, path: string, fol
 
 // ---- The passes ----
 
+/** A file's state: its modification time, or undefined when it is not there. */
+type FileState = number | undefined;
+
 interface Fork {
   source: MemorySource;
-  /** When the pass began: a memory file changed after it, the fork must read before it changes it. */
-  startedAt: number;
-  /** The modification time of each file as the fork last read or wrote it. */
-  seen: Map<string, number>;
-  /** Per rm call, the files that were there before it. */
-  existed: Map<string, string[]>;
+  /** Every file of both memory folders when the pass began. */
+  snapshot: Map<string, number>;
+  /** The state of each file the fork changed itself, as it left it. */
+  own: Map<string, FileState>;
+  /** Whether the bot knows already that this fork changed a file. */
+  recorded: boolean;
   rounds: number;
   maxTurns?: number;
-  written: number;
-  deleted: number;
+  written: Set<string>;
+  deleted: Set<string>;
+}
+
+async function stateOf(path: string): Promise<FileState> {
+  return (await lstat(path).catch(() => undefined))?.mtimeMs;
+}
+
+/** Every file of the memory folders and their subfolders, with its modification time. */
+async function snapshotOf(folders: MemoryFolders): Promise<Map<string, number>> {
+  const snapshot = new Map<string, number>();
+  for (const folder of [folders.own, folders.shared]) {
+    for (const name of await readdir(folder, { recursive: true }).catch(() => [] as string[])) {
+      const path = join(folder, name);
+      const state = await stateOf(path);
+      if (state !== undefined) snapshot.set(path, state);
+    }
+  }
+  return snapshot;
+}
+
+/** What a file should be for the fork to change it: as the fork left it, or else as it was when the pass began. */
+function expected(state: Fork, path: string): FileState {
+  return state.own.has(path) ? state.own.get(path) : state.snapshot.get(path);
 }
 
 /** The messages of the context after entry `after`, all of them without it: what came in, what the agent said and its tool results. */
@@ -368,46 +403,37 @@ export class MemoryPasses {
           beforeTool: async (call, api) => {
             const refusal = await forkRefusal(call.name, call.arguments, this.#host.folders, this.#cwd);
             if (refusal !== undefined) return { block: refusal };
-            // A file another writer, such as the main agent, changed after the pass began: the fork's copy is old.
+            // A file another writer, such as the main agent, changed, created or deleted after the pass began: the
+            // fork's copy is old.
             const state = fork(api.conversationId);
-            const existed: string[] = [];
             for (const path of state ? targets(call.name, call.arguments, this.#cwd) : []) {
-              const changed = (await lstat(path).catch(() => undefined))?.mtimeMs;
-              const seen = state!.seen.get(path);
-              if (changed !== undefined && changed > state!.startedAt && (seen === undefined || changed > seen)) {
-                return { block: `${path} changed after this memory pass began. Read it again before you change it.` };
+              if ((await stateOf(path)) !== expected(state!, path)) {
+                return { block: `${path} changed after this memory pass began, so this pass may not change it: another writer has a newer copy.` };
               }
-              if (changed !== undefined) existed.push(path);
             }
-            if (state && call.name === "bash") state.existed.set(call.id, existed);
             // The passes run one at a time: a command that never ends, such as tail -f, must not hold up the next ones.
             if (call.name === "bash" && call.arguments.timeout === undefined) return { arguments: { ...call.arguments, timeout: SHELL_TIMEOUT_SECONDS } };
             return undefined;
           },
-          // What the fork changed is kept as it does it, so it is told also when the fork fails or the process dies.
-          afterTool: async (call, result, api) => {
+          afterTool: async (call, _result, api) => {
             const state = fork(api.conversationId);
             if (!state) return undefined;
-            const mtime = async (path: string) => (await lstat(path).catch(() => undefined))?.mtimeMs;
-            if (call.name === "read" && typeof call.arguments.path === "string" && !result.isError) {
-              const path = toolPath(this.#cwd, call.arguments.path);
-              const changed = await mtime(path);
-              if (changed !== undefined) state.seen.set(path, changed);
-            }
-            // An rm that failed for one file may have deleted another: what is gone counts.
-            const existed = state.existed.get(call.id) ?? [];
-            state.existed.delete(call.id);
+            // By what is on the disk: an rm that failed for one file may have deleted another.
             for (const path of targets(call.name, call.arguments, this.#cwd)) {
-              const changed = await mtime(path);
-              if (call.name === "bash") {
-                if (changed !== undefined || !existed.includes(path)) continue;
-                state.seen.delete(path);
-                state.deleted++;
-                await this.#host.changed(state.source, "deleted", path);
-              } else if (changed !== undefined && !result.isError) {
-                state.seen.set(path, changed);
-                state.written++;
-                await this.#host.changed(state.source, "written", path);
+              const now = await stateOf(path);
+              const before = expected(state, path);
+              if (now === before) continue;
+              state.own.set(path, now);
+              if (now === undefined) {
+                state.written.delete(path);
+                state.deleted.add(path);
+              } else {
+                state.deleted.delete(path);
+                state.written.add(path);
+              }
+              if (!state.recorded) {
+                state.recorded = true;
+                await this.#host.changed(state.source);
               }
             }
             return undefined;
@@ -496,8 +522,9 @@ export class MemoryPasses {
       if (!ended) return;
       // What it changed counts also when its model failed; then the next pass looks at the same messages again.
       next = await this.#host.settle(ended.answered ? { cursor: at } : {});
+      this.#tell("extract", ended);
       if (!ended.answered) return;
-      this.#log("memory pass", { messages: messages.length, written: ended.written, deleted: ended.deleted });
+      this.#log("memory pass", { messages: messages.length, written: ended.written.length, deleted: ended.deleted.length });
     }
     if (!this.#closing && this.#host.enabled() && dreamDue(next)) await this.#dream(at, next);
   }
@@ -505,20 +532,26 @@ export class MemoryPasses {
   async #dream(at: number, progress: MemoryProgress): Promise<void> {
     const ended = await this.#fork("dream", at, await this.#host.dream(progress));
     if (!ended) return;
-    // Its note and the new progress in one transaction: a crash keeps both or neither.
     await this.#host.settle(ended.answered ? { dreamt: Date.now() } : {});
-    if (ended.answered) this.#log("memory dream", { written: ended.written, deleted: ended.deleted });
+    this.#tell("dream", ended);
+    if (ended.answered) this.#log("memory dream", { written: ended.written.length, deleted: ended.deleted.length });
+  }
+
+  /** The note of what a fork changed, for the main agent's next wake. */
+  #tell(source: MemorySource, changed: { written: string[]; deleted: string[] }): void {
+    if (changed.written.length + changed.deleted.length > 0) this.#host.noted({ source, written: changed.written, deleted: changed.deleted });
   }
 
   /**
    * Fork the main conversation at `at`, give the fork the message, and wait until it ends. Returns whether it ended as
-   * it should (answered, or at its turn cap) and how many files it wrote and deleted, or undefined when the gateway
-   * stops. The fork is deleted after.
+   * it should (answered, or at its turn cap) and the files it wrote and deleted, or undefined when the gateway stops.
+   * The fork is deleted after.
    */
-  async #fork(source: MemorySource, at: number, message: string, maxTurns?: number): Promise<{ answered: boolean; written: number; deleted: number } | undefined> {
+  async #fork(source: MemorySource, at: number, message: string, maxTurns?: number): Promise<{ answered: boolean; written: string[]; deleted: string[] } | undefined> {
     const root = this.#root!;
     const context = this.#context;
-    const startedAt = Date.now();
+    // Before the fork exists: a file that changes after this, the fork may not change.
+    const snapshot = await snapshotOf(this.#host.folders);
     const id = await root.commit(async (tx) => {
       const conversation = await tx.forkConversation(ROOT_CONVERSATION_ID, at as EntryId, { ownership: { kind: "ownerless" } });
       // pi-durable gives a fork a session of its own; with the main conversation's, the provider finds its cache.
@@ -527,7 +560,7 @@ export class MemoryPasses {
       await configure(tx, conversation.id, { extensions: { add: [this.extension] } });
       return conversation.id;
     }, context);
-    const state: Fork = { source, startedAt, seen: new Map(), existed: new Map(), rounds: 0, ...(maxTurns === undefined ? {} : { maxTurns }), written: 0, deleted: 0 };
+    const state: Fork = { source, snapshot, own: new Map(), recorded: false, rounds: 0, ...(maxTurns === undefined ? {} : { maxTurns }), written: new Set(), deleted: new Set() };
     this.#forks.set(Number(id), state);
     try {
       const fork = (await this.#harness!.conversation(id, context))!;
@@ -537,7 +570,7 @@ export class MemoryPasses {
       const capped = state.maxTurns !== undefined && state.rounds >= state.maxTurns;
       const answered = settled.status === "done" || capped;
       if (!answered) this.#log("memory pass got no answer", { source, reason: settled.status === "unanswered" ? settled.reason : "unknown" });
-      return { answered, written: state.written, deleted: state.deleted };
+      return { answered, written: [...state.written], deleted: [...state.deleted] };
     } finally {
       this.#forks.delete(Number(id));
       if (!this.#closing) await this.#delete(id);

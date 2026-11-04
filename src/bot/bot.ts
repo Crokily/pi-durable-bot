@@ -8,6 +8,7 @@ import type { Models } from "@earendil-works/pi-ai";
 import type { TelemetrySpan } from "@earendil-works/pi-telemetry";
 import { Agent, openDatabase } from "../agent/agent.ts";
 import { type ChildEnd, describeChild, reportRequestId } from "../agent/children.ts";
+import type { MemoryNote } from "../agent/memory.ts";
 import { SCREEN_VARIABLES, screenOf } from "../agent/screen.ts";
 import { createJudge } from "../agent/judge.ts";
 import { openResources } from "../agent/resources.ts";
@@ -24,7 +25,7 @@ import type { Timer } from "../gateway/timers.ts";
 import { ControlServer } from "./control.ts";
 import { type BotDefinition, type BotPaths, botPaths } from "./definition.ts";
 import { describeMachine } from "./machine.ts";
-import { claimMemoryNotes, dropMemoryNotes, listMemoryFiles, memoryProgress, readIndex, recordMemoryChange, settleMemory } from "./memory.ts";
+import { listMemoryFiles, memoryProgress, readIndex, recordMemoryChange, settleMemory } from "./memory.ts";
 import {
   childMemorySection,
   childSection,
@@ -94,6 +95,8 @@ export class Bot implements WakeTarget {
   readonly #gateway: Gateway;
   readonly #timers: TimersHandle;
   readonly #agent: Agent;
+  /** The notes of what the memory passes changed, which the next wake that goes out takes. */
+  readonly #notes: MemoryNote[];
   /** Undefined when bot.json says "judge": "off". */
   #judge: Judge | undefined;
   readonly #control: ControlServer;
@@ -121,6 +124,7 @@ export class Bot implements WakeTarget {
     timers: TimersHandle;
     agent: Agent;
     judge: Judge | undefined;
+    notes: MemoryNote[];
   }) {
     this.id = init.id;
     this.paths = init.paths;
@@ -131,6 +135,7 @@ export class Bot implements WakeTarget {
     this.#gateway = init.gateway;
     this.#timers = init.timers;
     this.#agent = init.agent;
+    this.#notes = init.notes;
     this.#judge = init.judge;
     this.#control = new ControlServer(init.paths.socket, this.#routes());
     let working: readonly string[] = [];
@@ -238,6 +243,8 @@ export class Bot implements WakeTarget {
     const folders = { own: paths.memory, shared: MEMORY_DIR };
     const memoryOn = () => settings().autoMemory;
     const indexes = async () => ({ own: await readIndex(folders.own), shared: await readIndex(folders.shared) });
+    /** The notes of what the memory passes changed, for the next wake: in the process, as in Claude Code. */
+    const notes: MemoryNote[] = [];
     const agent = await Agent.open({
       database: sql,
       models: env.models,
@@ -300,8 +307,9 @@ export class Bot implements WakeTarget {
         extraction: async (messages) => renderExtraction(messages, await listMemoryFiles(folders), folders),
         dream: async (progress) => renderDream(facts(), progress),
         progress: () => memoryProgress(sql),
-        changed: (source, kind, path) => recordMemoryChange(sql, source, kind, path),
+        changed: (source) => recordMemoryChange(sql, source),
         settle: (update) => settleMemory(sql, update),
+        noted: (note) => notes.push(note),
       },
       actions: {
         send: (to, text, sendId, trace) => self().send(to, text, sendId, trace),
@@ -316,7 +324,7 @@ export class Bot implements WakeTarget {
     });
     opened(agent);
 
-    bot = new Bot({ id, paths, definition, env, print, sql, gateway, timers, agent, judge });
+    bot = new Bot({ id, paths, definition, env, print, sql, gateway, timers, agent, judge, notes });
     // Crash tests: with one of these files in the bot folder, the process dies at that point, once.
     const crashTest = (file: string, message: string, key: string) => (id: string) => {
       if (!existsSync(file)) return;
@@ -469,17 +477,23 @@ export class Bot implements WakeTarget {
   }
 
   async #submit(id: string, reason: string, place: Address | undefined, text: string, steer: boolean, caller?: TelemetrySpan): Promise<Delivered> {
-    // What the memory passes changed since the last wake, once, at the end of this one, as Claude Code tells it. The
-    // wake takes its notes in one transaction, so two wakes never give the same one, and the same wake given again
-    // after a crash gives the same.
-    const notes = await claimMemoryNotes(this.#sql, id);
+    // What the memory passes changed since the last wake, once, at the end of this one, as Claude Code tells it. Taken
+    // at once, so two wakes never give the same note; not by a wake given again after a crash, which does not go out
+    // again; and put back when the wake could not go out.
+    const notes = (await this.#agent.submitted(id)) ? [] : this.#notes.splice(0);
     if (notes.length > 0) {
-      const read = await this.#agent.readFiles();
+      const read = await this.#agent.readFiles().catch(() => new Set<string>());
       const stale = (paths: readonly string[]) => paths.filter((path) => basename(path) === "MEMORY.md" || read.has(path));
       text = [text, ...notes.map((note) => renderMemoryNote(note, stale([...note.written, ...note.deleted])))].join("\n\n");
     }
-    const { id: submission, trace } = await this.#agent.submit({ id, text, steer, data: { reason, ...(place ? { place } : {}) }, caller });
-    if (notes.length > 0) await dropMemoryNotes(this.#sql, id);
+    let submitted;
+    try {
+      submitted = await this.#agent.submit({ id, text, steer, data: { reason, ...(place ? { place } : {}) }, caller });
+    } catch (error) {
+      this.#notes.unshift(...notes);
+      throw error;
+    }
+    const { id: submission, trace } = submitted;
     if (place) this.#submissionPlaces.set(submission, place);
     await this.#sql.run(
       "INSERT OR IGNORE INTO bot_wakes (id, at, reason, place, text, submission) VALUES (?, ?, ?, ?, ?, ?)",

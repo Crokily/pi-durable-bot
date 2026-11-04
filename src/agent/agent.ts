@@ -708,6 +708,11 @@ export class Agent {
     return { id: String(submission.id), ...(trace ? { trace } : {}) };
   }
 
+  /** Whether text with this ID was handed to the agent before: then submit gives that submission, and the new text is not used. */
+  async submitted(id: string): Promise<boolean> {
+    return this.#root.commit(async (tx) => (await tx.submissionByRequest(ROOT_CONVERSATION_ID, id)) !== undefined, context);
+  }
+
   /** Why a run with these submissions got no answer, such as a missing login; undefined when they were answered. */
   async runError(inputs: readonly string[]): Promise<string | undefined> {
     for (const id of inputs) {

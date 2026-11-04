@@ -3,8 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { dreamDue, forkRefusal, type MemoryFolders, withAgeNote } from "../src/agent/memory.ts";
-import { openDatabase } from "../src/agent/agent.ts";
-import { claimMemoryNotes, cutIndex, dropMemoryNotes, listMemoryFiles, recordMemoryChange, settleMemory } from "../src/bot/memory.ts";
+import { cutIndex, listMemoryFiles } from "../src/bot/memory.ts";
 import { agentRequests, coworker, type FakeModel, type FakeReply, type FakeRequest, isDream, isMemoryPass, lastUser, startFakeModel, wakes } from "./support/fake-model.ts";
 import { ME, pause, TestGateway, waitFor } from "./support/gateway.ts";
 
@@ -135,7 +134,7 @@ describe("memory", { timeout: 90_000 }, () => {
     expect(forks()).toEqual([]);
   });
 
-  it("is skipped when the main agent wrote memory itself, not when its write failed, and a memory file read 2 days after it changed says how old it is", async () => {
+  it("is skipped when the main agent wrote memory itself, not when its write failed or it only read, and a memory file read 2 days after it changed says how old it is", async () => {
     const script = (request: FakeRequest): FakeReply => {
       const last = request.messages.at(-1)!;
       const memory = /You have a persistent file-based memory at `(\S+)\/`/.exec(request.system)![1]!;
@@ -144,12 +143,14 @@ describe("memory", { timeout: 90_000 }, () => {
       }
       if (last.role === "user" && last.content.includes("remember")) return { call: { name: "read", arguments: { path: join(memory, "old.md") } } };
       if (last.role === "tool" && request.messages.at(-2)?.toolCalls?.[0] === "read") return write(join(memory, "bob.md"), "Bob wants short replies.\n");
+      // A command that only reads, which the fork's checker cannot read (a glob): no write.
+      if (last.role === "tool" && request.messages.at(-2)?.toolCalls?.[0] === "edit") return { call: { name: "bash", arguments: { command: `cat ${memory}/*.md` } } };
       return coworker(request);
     };
     await setUp(undefined, script);
     writeFileSync(join(own(), "old.md"), "An old memory.\n");
     utimesSync(join(own(), "old.md"), new Date(Date.now() - 3 * DAY), new Date(Date.now() - 3 * DAY));
-    // An edit whose text does not match saved nothing: the pass runs.
+    // An edit whose text does not match saved nothing, and cat reads: the pass runs.
     gateway.say("general", "bob", `@${ME} try to note this`);
     await waitFor(() => passes().length === 1, { what: "the pass after the failed edit" });
     gateway.say("general", "bob", `@${ME} remember that I want short replies`);
@@ -166,38 +167,47 @@ describe("memory", { timeout: 90_000 }, () => {
     expect(passes()[1]!.messages).toBe(4);
   });
 
-  it("refuses a fork's change to a memory file that another writer changed since the pass began, until the fork reads it again", async () => {
-    let wake2 = false;
+  it("refuses a fork's change to a memory file that another writer changed, made or deleted since the pass began, also after the fork read it", async () => {
+    let waiting = false;
     const drink = () => join(own(), "drink.md");
+    const old = () => join(own(), "old.md");
     const script = (request: FakeRequest): FakeReply => {
       const last = request.messages.at(-1)!;
       if (last.role === "user" && last.content.includes("I drink coffee now")) return write(drink(), "Coffee.\n");
+      if (last.role === "tool" && request.messages.at(-2)?.toolCalls?.[0] === "write") return { call: { name: "bash", arguments: { command: `rm ${old()}` } } };
       return coworker(request);
     };
     await setUp(async (request) => {
       if (!request.messages.filter((message) => message.role === "user").at(-2)?.content.includes("I drink tea")) return { text: "Nothing to save." };
       switch (turn(request)) {
         case 0:
-          // A slow pass: the main agent saves something newer meanwhile.
-          wake2 = true;
-          await waitFor(() => existsSync(drink()), { what: "the main agent's write" });
+          // A slow pass: the main agent makes one file and deletes another meanwhile.
+          waiting = true;
+          await waitFor(() => existsSync(drink()) && !existsSync(old()), { what: "the main agent's changes" });
           return write(drink(), "Tea.\n");
         case 1:
-          return { call: { name: "read", arguments: { path: drink() } } };
+          return write(old(), "Old, again.\n");
         case 2:
+          return { call: { name: "read", arguments: { path: drink() } } };
+        case 3:
           return write(drink(), "Coffee, tea before.\n");
         default:
           return { text: "Saved." };
       }
     }, script);
+    writeFileSync(old(), "Old.\n");
     gateway.say("general", "alice", `@${ME} I drink tea`);
-    await waitFor(() => wake2, { what: "the pass" });
+    await waitFor(() => waiting, { what: "the pass" });
     gateway.say("general", "alice", `@${ME} I drink coffee now`);
     await waitFor(() => passes().length === 1, { what: "the slow pass" });
-    const results = model.requests.filter(isMemoryPass).at(-1)!.messages.filter((message) => message.role === "tool");
-    expect(results.at(-3)!.content).toContain(`Tool call blocked: ${drink()} changed after this memory pass began. Read it again before you change it.`);
-    // Once it read the file again, it may change it.
-    expect(readFileSync(drink(), "utf8")).toBe("Coffee, tea before.\n");
+    const last = model.requests.filter(isMemoryPass).at(-1)!.messages;
+    const results = last.slice(last.findLastIndex((message) => message.role === "user")).filter((message) => message.role === "tool").map((message) => message.content);
+    const refused = (path: string) => `Tool call blocked: ${path} changed after this memory pass began, so this pass may not change it: another writer has a newer copy.`;
+    expect(results[0]).toContain(refused(drink()));
+    expect(results[1]).toContain(refused(old()));
+    expect(results[3]).toContain(refused(drink()));
+    expect(readFileSync(drink(), "utf8")).toBe("Coffee.\n");
+    expect(existsSync(old())).toBe(false);
   });
 
   it("tells the next wake what a fork changed also when its model failed after, and keeps the cursor", async () => {
@@ -381,20 +391,6 @@ describe("memory parts", () => {
     // A link below the memory folder, also one that leads nowhere yet: write would follow it.
     expect(await refused("write", { path: join(folders.own, "dangling.md"), content: "" })).toBe(true);
     for (const name of ["screen", "send", "react", "call", "task"]) expect(await refused(name, {}), name).toBe(true);
-  });
-
-  it("gives each note to one wake only, and the same wake given again the same notes, also when two take them at once", async () => {
-    const sql = await openDatabase(":memory:");
-    await sql.exec("CREATE TABLE bot_state (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE bot_wakes (id TEXT PRIMARY KEY)");
-    await recordMemoryChange(sql, "extract", "written", "/m/a.md");
-    expect(await settleMemory(sql, { cursor: 7 })).toEqual({ cursor: 7, changes: 1 });
-    const [one, two] = await Promise.all([claimMemoryNotes(sql, "wake-1"), claimMemoryNotes(sql, "wake-2")]);
-    expect(one!.map((note) => note.written)).toEqual([["/m/a.md"]]);
-    expect(two).toEqual([]);
-    expect(await claimMemoryNotes(sql, "wake-1")).toEqual(one);
-    await dropMemoryNotes(sql, "wake-1");
-    expect(await claimMemoryNotes(sql, "wake-3")).toEqual([]);
-    await sql.close();
   });
 
   it("dreams when 24 hours passed since the last dream and 5 memory changes came since then", () => {

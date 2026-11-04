@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type FakeModel, startFakeModel } from "./support/fake-model.ts";
 import { CHANNEL, ME, TestGateway, waitFor } from "./support/gateway.ts";
@@ -7,6 +8,7 @@ import { CHANNEL, ME, TestGateway, waitFor } from "./support/gateway.ts";
 // The pots command line from outside: what each command prints and does, against a real gateway with one bot. Only
 // the output, the exit status, the test platform and the bot's log are checked.
 
+const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
 let model: FakeModel;
 let gateway: TestGateway;
 
@@ -38,8 +40,21 @@ const fails = async (...args: string[]) => {
 
 describe("pots", { timeout: 120_000 }, () => {
   it("says its version", async () => {
-    const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
     expect((await pots("--version")).trim()).toBe(`pots v${version}`);
+  });
+
+  it("ends when a command is done, after all its output, also when something left a connection open", async () => {
+    // A browser sign-in in pi leaves the browser's spare connection to pi's callback server open. Here a server stays
+    // open, 1 MiB is more than a pipe takes at once, and a process that does not end by itself stops after 10 seconds.
+    const held = join(gateway.home, "held.mjs");
+    writeFileSync(
+      held,
+      'import { createServer } from "node:net";\ncreateServer().listen(0, "127.0.0.1");\nprocess.stdout.write("x".repeat(1 << 20));\nsetTimeout(() => process.exit(9), 10_000).unref();\n',
+    );
+    const result = await gateway.run(["--version"], { env: { NODE_OPTIONS: `--import ${pathToFileURL(held).href}` } });
+    expect(result.status).toBe(0);
+    expect(result.stdout.length).toBe((1 << 20) + `pots v${version}\n`.length);
+    expect(result.stdout.slice(1 << 20)).toBe(`pots v${version}\n`);
   });
 
   it("shows the gateway and its bot", async () => {

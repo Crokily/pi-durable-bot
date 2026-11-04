@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT, type Context, withTelemetry } from "@earendil-works/chord/context";
-import { getSupportedThinkingLevels, type Message, type Models, type ModelThinkingLevel, Type } from "@earendil-works/pi-ai";
+import { type Message, type Models, Type } from "@earendil-works/pi-ai";
 import { calculateContextTokens, estimateMessageTokens } from "@earendil-works/pi-ai/utils/estimate";
 import {
   configure,
@@ -102,8 +102,8 @@ export interface AgentOptions {
   children: {
     /** "provider/modelId" of children; unset: the main model. */
     model(): string | undefined;
-    /** Unset: the highest level the children's model has. */
-    thinking(): Thinking | undefined;
+    /** The thinking level of a new child when the main agent does not choose one. */
+    thinking(): Thinking;
     /** How many children may work at once. */
     max(): number;
     /**
@@ -387,7 +387,7 @@ export class Agent {
       return agent;
     };
     const tasks = childrenExtension({
-      agent: () => self().#childAgent(),
+      agent: () => ({ model: self().#childModel(), thinkingLevel: options.children.thinking() }),
       max: () => options.children.max(),
       place: () => options.children.place(),
       extensions: () => ({ child: [coding, child] }),
@@ -455,8 +455,8 @@ export class Agent {
     await agent.#watchRun();
     await agent.#watchChildren((list) => (children = list));
     await agent.#holdUnfinishedStops();
-    // bot.json may have changed while the bot was stopped: the children that go on get what new children get.
-    await agent.#configureChildren(agent.#childAgent());
+    // bot.json may have changed while the bot was stopped: the children that go on get the model new children get.
+    await agent.#configureChildren(agent.#childModel());
     // A run that ended just before the last process stopped, before its memory pass was started.
     if (memory && agent.#runInputs === undefined) {
       const at = await lastAnswer(root, context);
@@ -561,33 +561,25 @@ export class Agent {
     return this.#children;
   }
 
-  /** The model and thinking of children: bot.json's, else the main model with the highest level it has. */
-  #childAgent(set: { model: string | undefined; thinking: Thinking | undefined } = this.#childSettings()): { model: ModelRef; thinkingLevel: ModelThinkingLevel } {
-    const model = set.model ? modelRef(set.model) : this.#model;
-    const thinking = set.thinking;
-    if (thinking) return { model, thinkingLevel: thinking };
-    const found = this.#models.getModel(model.provider, model.modelId);
-    return { model, thinkingLevel: found ? (getSupportedThinkingLevels(found).at(-1) ?? "off") : "xhigh" };
-  }
-
-  #childSettings() {
-    return { model: this.#options.children.model(), thinking: this.#options.children.thinking() };
+  /** The model of children: bot.json's childModel, else the main model. */
+  #childModel(childModel = this.#options.children.model()): ModelRef {
+    return childModel ? modelRef(childModel) : this.#model;
   }
 
   /**
-   * Give every child that is not stopped these settings of bot.json for children, which new children get too. Throws for
-   * an unknown model.
+   * Give every child that is not stopped this model for children ("provider/modelId"; unset: the main model), which new
+   * children get too. A child keeps its thinking level. Throws for an unknown model.
    */
-  async configureChildren(set: { model: string | undefined; thinking: Thinking | undefined }): Promise<void> {
-    if (set.model) await requireChatModel(this.#models, set.model);
-    await this.#configureChildren(this.#childAgent(set));
+  async configureChildren(childModel: string | undefined): Promise<void> {
+    if (childModel) await requireChatModel(this.#models, childModel);
+    await this.#configureChildren(this.#childModel(childModel));
   }
 
-  async #configureChildren(change: { model: ModelRef; thinkingLevel: ModelThinkingLevel }): Promise<void> {
+  async #configureChildren(model: ModelRef): Promise<void> {
     const children = this.#children.filter((child) => child.stoppedAt === undefined);
     if (children.length === 0) return;
     await this.#root.commit(async (tx) => {
-      for (const child of children) await configure(tx, Number(child.conversationId) as ConversationId, change);
+      for (const child of children) await configure(tx, Number(child.conversationId) as ConversationId, { model });
     }, context);
   }
 

@@ -72,7 +72,7 @@ This is **code mode**: the agent gets a few general tools (`read`, `write`, `edi
 
 Longer work does not keep it from talking. With its `task` tool the bot starts **children**: agents that work in the background with the same tools, except `task`, on a brief it writes for them. It answers the person first, hands the work to a child, and stays free for the next message. A child starts from an empty conversation and its brief, so the bot's own context stays small; it sees the bot's memory as it was when it started. When a child ends, done, failed or with a question for a person, its final message comes back to the bot as a wake, exactly once, also across crashes and restarts; the bot passes on what matters, and sends the child the answer to its question. While a child works for a place, new messages there go to the bot, so it can pass them on. Its timed and fallback wakes list the children that work and how long each has run. A stopped child reports nothing and does nothing more, also when the process dies in the middle of the stop.
 
-Children use the bot's model with its highest thinking level, or the `childModel` and `childThinking` of `bot.json`; a change counts for new children and those that exist. `settings.maxChildren` (8 by default) caps how many work at once. `pots children` lists them, and `pots children --stop <id>` or `--stop-all` stops them.
+Children use the bot's model, or the `childModel` of `bot.json`; a change counts for new children and those that exist. The bot chooses each child's thinking level when it starts it: `high`, `xhigh` or `max`, and without a choice the `childThinking` of `bot.json` (`xhigh` by default). A child keeps its level for its whole life, so a new `childThinking` counts for new children only; a level the model does not have becomes the nearest one it has, as in pi. `settings.maxChildren` (8 by default) caps how many work at once. `pots children` lists them, and `pots children --stop <id>` or `--stop-all` stops them.
 
 It works like a [pi](https://github.com/earendil-works/pi) session: it reads `AGENTS.md` and uses [Agent Skills](https://agentskills.io) from the same places pi does, so the skills you give pi, the bot can use too. Screenshots and photos are shrunk to fit the model, as in pi.
 
@@ -144,7 +144,7 @@ It joins only the places it is invited to, like a new hire who is added to the r
 | `pots start` | Run the gateway in this terminal instead |
 | `pots bot new \| list` | Create and list bots |
 | `pots trace` | What a bot did: its last wakes, or one wake from the events to its run, the runs of the children it started, and the messages it sent, with how much of each model request the provider's prompt cache served |
-| `pots children [--stop <id> \| --stop-all]` | The children a bot started for longer work, or stop them |
+| `pots children [--stop <id> \| --stop-all]` | The children a bot started for longer work, with each one's thinking level, or stop them |
 
 To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`. To remove it, run `pots service uninstall`, then `npm uninstall -g pi-durable-bot`. The bots stay in `~/.pots/` until you delete that folder.
 
@@ -156,7 +156,8 @@ To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service resta
 |---|---|---|
 | `model` | The agent that reads, thinks and acts | Any pi model as `provider/modelId`, for example `openai/gpt-6.1-sol` or `anthropic/claude-opus-5-5` |
 | `thinking` | How hard the agent thinks | `off`, `minimal`, `low`, `medium` (default), `high`, `xhigh` |
-| `childModel`, `childThinking` | The children that do longer work in the background | Unset (default): the bot's `model` with the highest thinking level it has |
+| `childModel` | The model of the children that do longer work in the background | Unset (default): the bot's `model` |
+| `childThinking` | The thinking level of a child the bot starts without choosing one | As `thinking`; `xhigh` (default) |
 | `judge` | Decides which messages that do not mention the bot should wake it | `off` (default): every message wakes the bot, and the agent decides<br>`provider/modelId` of a classifier: `typesafe/jev-latest`, `openrouter/typesafe/jev-1.14`, `opencode/jev-1.13-free`, or a llama.cpp model<br>`main`: the bot's own model judges, no extra account, but slower |
 
 With `off`, each group of messages is a wake of the main model, which then decides. A fast classifier keeps the messages that are not for the bot away from it, and is cheaper and quicker than the main model: Jev answers in about 0.3 seconds. With `main`, each group of messages costs one short request to the main model before the bot hears of it.

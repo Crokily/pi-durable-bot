@@ -386,10 +386,9 @@ export class Bot implements WakeTarget {
   async applyDefinition(next: BotDefinition): Promise<void> {
     const before = this.#definition;
     if (before.model !== next.model || before.thinking !== next.thinking) await this.#agent.configure(next.model, next.thinking);
-    // Also for the children that exist: those without a model of their own use the main one.
-    if (before.model !== next.model || before.childModel !== next.childModel || before.childThinking !== next.childThinking) {
-      await this.#agent.configureChildren({ model: next.childModel, thinking: next.childThinking });
-    }
+    // Also for the children that exist: those without a model of their own use the main one. A child keeps its thinking
+    // level; childThinking counts for new children.
+    if (before.model !== next.model || before.childModel !== next.childModel) await this.#agent.configureChildren(next.childModel);
     const old = new Map(before.channels.map((channel) => [channel.id, JSON.stringify(channel)]));
     const fresh = new Map(next.channels.map((channel) => [channel.id, JSON.stringify(channel)]));
     const nameChanged = before.name !== next.name;
@@ -581,7 +580,7 @@ export class Bot implements WakeTarget {
       "GET /children": async () => {
         const now = Date.now();
         const children = this.#agent.children;
-        return { children, text: children.length === 0 ? "No children." : children.map((child) => describeChild(child, now)).join("\n") };
+        return { children, text: children.length === 0 ? "No children." : children.map((child) => describeChild(child, now, { thinking: true })).join("\n") };
       },
       "POST /children/stop": async (body: Record<string, unknown>) => {
         if (body.all === true) {

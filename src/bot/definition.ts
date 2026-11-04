@@ -15,8 +15,8 @@ export interface BotDefinition {
   thinking: Thinking;
   /** The model of the children the main agent starts; unset: the main model. */
   childModel?: string;
-  /** The thinking level of children; unset: the highest level their model has. */
-  childThinking?: Thinking;
+  /** The thinking level of a new child when the main agent does not choose one. */
+  childThinking: Thinking;
   /** Who judges events that do not mention the bot: "off" (every event wakes it), a classifier "provider/modelId", or "main" (its own model). */
   judge: JudgeSetting;
   channels: ChannelConfig[];
@@ -56,6 +56,8 @@ const DEFAULT_SETTINGS: BotSettings = {
 };
 
 export const DEFAULT_MODEL = "openai/gpt-6.1-sol";
+/** The thinking level of children the main agent starts without choosing one. */
+export const DEFAULT_CHILD_THINKING = "xhigh" as const;
 /** No judge: every message that does not mention the bot comes to it, and it decides itself. */
 export const DEFAULT_JUDGE: JudgeSetting = "off";
 
@@ -108,7 +110,7 @@ const Definition = Schema.Struct({
   model: Schema.String.check(Schema.isPattern(PROVIDER_MODEL)).pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_MODEL))),
   thinking: Schema.Literals(THINKING).pipe(Schema.withDecodingDefaultKey(Effect.succeed("medium" as const))),
   childModel: Schema.optionalKey(Schema.String.check(Schema.isPattern(PROVIDER_MODEL))),
-  childThinking: Schema.optionalKey(Schema.Literals(THINKING)),
+  childThinking: Schema.Literals(THINKING).pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_CHILD_THINKING))),
   judge: Schema.String.check(Schema.makeFilter((judge) => judge === "main" || judge === "off" || PROVIDER_MODEL.test(judge))).pipe(
     Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_JUDGE)),
   ),
@@ -184,7 +186,7 @@ export function readDefinition(file: string): { definition: BotDefinition; text:
       model: decoded.model,
       thinking: decoded.thinking,
       ...(decoded.childModel === undefined ? {} : { childModel: decoded.childModel }),
-      ...(decoded.childThinking === undefined ? {} : { childThinking: decoded.childThinking }),
+      childThinking: decoded.childThinking,
       judge: decoded.judge,
       channels: decoded.channels.map((channel) => ({ ...channel })),
       ...(decoded.screen === undefined ? {} : { screen: { ...decoded.screen } }),

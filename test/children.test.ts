@@ -41,7 +41,7 @@ function script(request: FakeRequest): FakeReply {
     return { call: { name: "send", arguments: { to: place, text: `report: ${final}` } } };
   }
   if (last.content.includes("stop the research")) return { call: { name: "task", arguments: { action: "stop", child: "c1" } } };
-  if (last.content.includes("please note")) return { call: { name: "task", arguments: { action: "start", title: "note", brief: "save a memory" } } };
+  if (last.content.includes("please note")) return { call: { name: "task", arguments: { action: "start", title: "note", brief: "save a memory", thinking: "max" } } };
   if (last.content.includes("please research")) {
     const brief = last.content.includes("slowly") ? "wait long, then find the answer" : "find the answer";
     return { call: { name: "task", arguments: { action: "start", title: "research", brief } } };
@@ -73,7 +73,7 @@ describe("children", { timeout: 90_000 }, () => {
     expect(child.messages.map((message) => message.role)).toEqual(["user"]);
     expect(child.messages[0]!.content).toBe("[brief from the main agent]\nfind the answer");
     expect(child.tools).toEqual(["read", "write", "edit", "bash", "send", "react", "call", "screen"]);
-    expect(gateway.pots("children")).toMatch(/^c1 "research": ended .* ago, waits for a message, for test:#general$/m);
+    expect(gateway.pots("children")).toMatch(/^c1 "research": ended .* ago, waits for a message, for test:#general, thinking xhigh$/m);
 
     await gateway.stop();
     // The child's end is a wake of its own, and the child's model requests are in the trace with the others.
@@ -83,7 +83,7 @@ describe("children", { timeout: 90_000 }, () => {
     expect(gateway.pots("trace", "mention:test:#general:1")).toMatch(/^child run, trace [^\n]*\nsubmission \d+ \(placed\)[\s\S]*model fake\/coworker, 100 in \(80% cached\), 10 out, stop/m);
   });
 
-  it("sees the memory as it was when it started, for its whole conversation", async () => {
+  it("sees the memory as it was when it started, for its whole conversation, and keeps the thinking level it was given", async () => {
     await setUp();
     expect(gateway.pots("memory", "add", "Alice likes tea.")).toBe("Saved m1.\n");
     gateway.say("general", "alice", `@${ME} please note`);
@@ -93,6 +93,7 @@ describe("children", { timeout: 90_000 }, () => {
     const [first, second] = model.requests.filter(isChild);
     expect(first!.system).toMatch(/# Memory\n[\s\S]*- m1: Alice likes tea\.$/);
     expect(second!.system).toBe(first!.system);
+    expect(gateway.pots("children")).toMatch(/^c1 "note": .*, thinking max$/m);
   });
 
   for (const when of ["before", "after"] as const) {

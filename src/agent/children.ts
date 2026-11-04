@@ -27,6 +27,8 @@ export type ChildRecord = {
   conversationId: ConversationId;
   /** The place the child works for, when there is one. */
   place?: string;
+  /** Its thinking level, for its whole life. */
+  thinking: ModelThinkingLevel;
   startedAt: number;
   /** Since when it works on its current message; absent while it waits for one. */
   since?: number;
@@ -64,6 +66,7 @@ export interface ChildInfo {
   title: string;
   conversationId: string;
   place?: string;
+  thinking: ModelThinkingLevel;
   startedAt: number;
   /** Since when it works, while it works. */
   since?: number;
@@ -77,6 +80,7 @@ export function childInfo(record: Readonly<ChildRecord>): ChildInfo {
     title: record.title,
     conversationId: String(record.conversationId),
     ...(record.place === undefined ? {} : { place: record.place }),
+    thinking: record.thinking,
     startedAt: record.startedAt,
     ...(record.since === undefined ? {} : { since: record.since }),
     ...(record.endedAt === undefined ? {} : { endedAt: record.endedAt }),
@@ -95,7 +99,7 @@ export interface ChildEnd {
 }
 
 export interface ChildrenHost {
-  /** The model and thinking of children now. */
+  /** The model of children now, and the thinking level of a new child when the main agent does not choose one. */
   agent(): { model: ModelRef; thinkingLevel: ModelThinkingLevel };
   /** How many children may work at once. */
   max(): number;
@@ -124,15 +128,15 @@ export function age(ms: number): string {
   return `${(seconds / 3_600).toFixed(1)} h`;
 }
 
-/** One line about a child, for the task tool, wakes and pots children. */
-export function describeChild(child: ChildInfo, now = Date.now()): string {
+/** One line about a child, for the task tool, wakes and pots children; with its thinking level for the lists. */
+export function describeChild(child: ChildInfo, now = Date.now(), options: { thinking?: boolean } = {}): string {
   const state =
     child.stoppedAt !== undefined
       ? `stopped ${age(now - child.stoppedAt)} ago`
       : child.since !== undefined
         ? `working, for ${age(now - child.since)}`
         : `ended ${age(now - (child.endedAt ?? child.startedAt))} ago, waits for a message`;
-  return `${child.id} "${child.title}": ${state}${child.place ? `, for ${child.place}` : ""}`;
+  return `${child.id} "${child.title}": ${state}${child.place ? `, for ${child.place}` : ""}${options.thinking ? `, thinking ${child.thinking}` : ""}`;
 }
 
 function textOf(message: AssistantMessage | undefined): string {
@@ -254,7 +258,8 @@ export function childrenExtension(host: ChildrenHost): Extension {
     name: "task",
     description:
       "Children: agents that work in the background, so you stay free to talk. action start: a new child with a short title and a brief " +
-      "(place: the address of the place it works for, by default the place you work on); it starts with an empty conversation and the brief. " +
+      "(place: the address of the place it works for, by default the place you work on; thinking: its thinking level, high, xhigh or max, " +
+      "by default childThinking in bot.json); it starts with an empty conversation and the brief, and keeps its thinking level. " +
       "list: your children. send: a message to a child (child: its ID), which joins its work or starts it again. " +
       "stop: stops a child and what it runs; nothing comes back from it then. A child's final message comes back to you as a wake.",
     parameters: Type.Object({
@@ -262,6 +267,7 @@ export function childrenExtension(host: ChildrenHost): Extension {
       title: Type.Optional(Type.String()),
       brief: Type.Optional(Type.String()),
       place: Type.Optional(Type.String()),
+      thinking: Type.Optional(Type.Union([Type.Literal("high"), Type.Literal("xhigh"), Type.Literal("max")])),
       child: Type.Optional(Type.String()),
       message: Type.Optional(Type.String()),
     }),
@@ -275,12 +281,14 @@ export function childrenExtension(host: ChildrenHost): Extension {
       if (args.action === "list") {
         if (all.length === 0) return text("No children.");
         const others = all.filter((child) => !working.includes(child)).slice(-20);
-        return text([...working, ...others].map((child) => describeChild(child, api.now())).join("\n"));
+        return text([...working, ...others].map((child) => describeChild(child, api.now(), { thinking: true })).join("\n"));
       }
       if (args.action === "start") {
         if (!args.title?.trim() || !args.brief?.trim()) return text("start needs a title and a brief.");
         const place = args.place?.trim() || host.place();
-        const { model, thinkingLevel } = host.agent();
+        const { model, thinkingLevel: fallback } = host.agent();
+        // As pi does, a level the model does not have becomes the nearest one it has, at each request (pi-ai).
+        const thinkingLevel = args.thinking ?? fallback;
         const started = await api.commit(async (tx) => {
           const state = await tx.doc(Children, api.conversationId);
           const full = atCap(state, "Not started", api.now());
@@ -297,6 +305,7 @@ export function childrenExtension(host: ChildrenHost): Extension {
             title: args.title!.trim(),
             conversationId: conversation.id,
             ...(place ? { place } : {}),
+            thinking: thinkingLevel,
             startedAt: now,
             since: now,
             reporters: [String(reporter)],
@@ -306,7 +315,9 @@ export function childrenExtension(host: ChildrenHost): Extension {
           return { id, full: undefined };
         }, call);
         if (started.id === undefined) return text(started.full);
-        return text(`Started ${started.id} ("${args.title!.trim()}")${place ? ` for ${place}` : ""}. Its final message comes back to you as a wake.`);
+        return text(
+          `Started ${started.id} ("${args.title!.trim()}")${place ? ` for ${place}` : ""}, thinking ${thinkingLevel}. Its final message comes back to you as a wake.`,
+        );
       }
       if (!args.child) return text(`${args.action} needs a child ID.`);
       const child = Object.hasOwn(state.children, args.child) ? state.children[args.child] : undefined;

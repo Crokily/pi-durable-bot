@@ -11,7 +11,6 @@ import {
   createRegistry,
   DEFAULT_COMPACTION_POLICY,
   defineExtension,
-  type EntryId,
   defineTool,
   GenerationTask,
   Harness,
@@ -32,7 +31,7 @@ import { type BashExecution, createBashTool, createEditTool, createReadTool, cre
 import type { TelemetryCarrier, TelemetryContext, TelemetrySpan } from "@earendil-works/pi-telemetry";
 import type { Sql } from "../core/sql.ts";
 import { type ChildEnd, type ChildInfo, type ChildRecord, type ChildrenState, Children, childInfo, childrenExtension, reportRequestId } from "./children.ts";
-import { lastAnswer, type MemoryHost, memoryExtensions } from "./memory.ts";
+import { type MemoryHost, withAgeNote } from "./memory.ts";
 import { modelRef, requireModel } from "./models.ts";
 import { NO_SCREEN, renderBusy, type Screen, ScreenLeases } from "./screen.ts";
 
@@ -123,8 +122,8 @@ export interface AgentOptions {
    * sections are saved in the conversation; until then, after a crash too, the next request does it again.
    */
   refreshPinned?: () => Promise<void>;
-  /** The memory pass after each run of the main conversation; without it, there is none. */
-  memory?: Omit<MemoryHost, "model" | "log" | "afterApply">;
+  /** The memory, for the age note of a memory file the agents read. */
+  memory?: MemoryHost;
   actions: AgentActions;
   /** Where pi-durable's and pi-ai's spans go: submissions, task phases, tool calls, model requests. */
   telemetry?: TelemetryContext;
@@ -194,20 +193,17 @@ export class Agent {
   #disposeView?: () => void;
   #children: readonly ChildInfo[] = [];
   #disposeChildren?: () => void;
-  #memory: ReturnType<typeof memoryExtensions> | undefined;
   #closing = false;
   /** Stops the last process did not finish; resume() finishes them. */
   #unfinishedStops: Stop[] = [];
   /**
-   * Crash tests: called just before and just after a child's end is handed to the main agent, right after a stop
-   * marked a child stopped, before its work ended, and right after a memory pass applied its answer, before the pass
-   * ended.
+   * Crash tests: called just before and just after a child's end is handed to the main agent, and right after a stop
+   * marked a child stopped, before its work ended.
    */
   readonly crashTests: {
     beforeReport?: (reporter: string) => void;
     afterReport?: (reporter: string) => void;
     afterStopMark?: (child: string) => void;
-    afterMemoryPass?: (pass: string) => void;
   } = {};
 
   private constructor(options: AgentOptions, harness: Harness, root: Conversation) {
@@ -351,7 +347,6 @@ export class Agent {
       const text = await part.render();
       if (!part.pin) return text;
       const shown = input.shown[part.name];
-      // A memory pass's fork keeps what it took from the main conversation, so its request starts as the main agent's did.
       if (input.conversationId !== ROOT_CONVERSATION_ID) return shown;
       if (refresh !== "done") refresh = "rendered";
       if (refresh !== "done" || shown === undefined || shown === text) return text;
@@ -379,9 +374,17 @@ export class Agent {
       tools: [screenTool],
       sections: options.children.sections.map((part) => section(part.name, childRender(part), { tag: false })),
     });
+    const read = createReadTool({ images: await (images ??= createNodePhotonImages()) });
+    const memoryFolders = () => (options.memory?.enabled() ? options.memory.folders : undefined);
     const coding = defineExtension({
       name: "coding-tools",
-      tools: [createReadTool({ images: await (images ??= createNodePhotonImages()) }), createWriteTool(), createEditTool(), createBashTool({ prepare: environment() })],
+      tools: [
+        // A memory file read 2 days or more after it changed says so, for every agent of the bot.
+        defineTool({ ...read, execute: async (args, api, call) => withAgeNote(await read.execute(args, api, call), args.path, memoryFolders(), options.workspace) }),
+        createWriteTool(),
+        createEditTool(),
+        createBashTool({ prepare: environment() }),
+      ],
     });
     let agent: Agent | undefined;
     const self = () => {
@@ -402,23 +405,11 @@ export class Agent {
       beforeReport: (reporter) => self().crashTests.beforeReport?.(reporter),
       afterReport: (reporter) => self().crashTests.afterReport?.(reporter),
     });
-    const memory = options.memory
-      ? memoryExtensions({
-          ...options.memory,
-          model: () => (agent ? agent.#model : modelRef(options.model)),
-          log: options.log,
-          afterApply: (key) => agent?.crashTests.afterMemoryPass?.(key),
-        })
-      : undefined;
     const registry = createRegistry();
     registry.install(coding);
     registry.install(bot);
     registry.install(tasks);
     registry.install(child);
-    if (memory) {
-      registry.install(memory.tasks);
-      registry.install(memory.fork);
-    }
 
     harness = await Harness.open(
       storage,
@@ -453,17 +444,11 @@ export class Agent {
     const root = await harness.root(context, { agent: { model, thinkingLevel: options.thinking } });
     await root.configure({ model, thinkingLevel: options.thinking, cwd: options.workspace }, context);
     agent = new Agent(options, harness, root);
-    agent.#memory = memory;
     await agent.#watchRun();
     await agent.#watchChildren((list) => (children = list));
     await agent.#holdUnfinishedStops();
     // bot.json may have changed while the bot was stopped: the children that go on get the model new children get.
     await agent.#configureChildren(agent.#childModel());
-    // A run that ended just before the last process stopped, before its memory pass was started.
-    if (memory && agent.#runInputs === undefined) {
-      const at = await lastAnswer(root, context);
-      if (at !== undefined) await memory.queue(root, at, context);
-    }
     return agent;
   }
 
@@ -503,12 +488,8 @@ export class Agent {
       const live = value.docs["pi.live"] as { run?: { inputs?: unknown[] } } | undefined;
       const inputs = live?.run ? (live.run.inputs ?? []).map(String) : undefined;
       const changed = (inputs === undefined) !== (this.#runInputs === undefined) || inputs?.join() !== this.#runInputs?.join();
-      // A run ended (pi-durable can end one and start the next in one commit): the main agent's screen lease ends with
-      // it, and the memory pass looks at it.
-      if (this.#runInputs !== undefined && inputs?.[0] !== this.#runInputs[0]) {
-        this.#releaseScreen(String(ROOT_CONVERSATION_ID));
-        void this.#remember(this.#runInputs);
-      }
+      // A run ended (pi-durable can end one and start the next in one commit): the main agent's screen lease ends with it.
+      if (this.#runInputs !== undefined && inputs?.[0] !== this.#runInputs[0]) this.#releaseScreen(String(ROOT_CONVERSATION_ID));
       this.#runInputs = inputs;
       if (changed) for (const listener of this.#runListeners) listener(inputs);
     };
@@ -518,21 +499,6 @@ export class Agent {
       unsubscribe();
       view.dispose();
     };
-  }
-
-  /** Start the memory pass for a run that ended with an answer. */
-  async #remember(inputs: readonly string[]): Promise<void> {
-    if (!this.#memory || this.#closing) return;
-    try {
-      let at: number | undefined;
-      for (const id of inputs) {
-        const record = await (await this.#harness.submission(Number(id) as SubmissionId, context))?.status(context);
-        if (record?.type === "input" && record.status === "done" && (at === undefined || record.answer > at)) at = record.answer;
-      }
-      if (at !== undefined && !this.#closing) await this.#memory.queue(this.#root, at as EntryId, context);
-    } catch (error) {
-      if (!this.#closing) this.#options.log("could not start the memory pass", { error: String(error) });
-    }
   }
 
   /** Keep the children list up to date from the main conversation's children document. */

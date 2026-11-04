@@ -25,6 +25,8 @@ export interface PromptFacts {
   docs: string;
   secretsDir: string;
   fallbackWakeMinutes: number;
+  /** The memory all bots of this computer share. */
+  sharedMemory: string;
 }
 
 export function identitySection(facts: PromptFacts): string {
@@ -63,7 +65,6 @@ export function workSection(facts: PromptFacts): string {
   pots wake --list | --cancel <id>
   pots context
   pots turn-page --note <text>
-  pots memory list | add <text, or -> [--shared] | change <id> <text, or -> | forget <id>
   Outside your own bash (for example in cron), write it in full: ${facts.pots} <command> --bot ${facts.id}
 
 ${computerSection(facts)}`;
@@ -115,11 +116,12 @@ export function folderSection(facts: PromptFacts, child = false): string {
     ? ""
     : ` When the person has to give you secrets, such as tokens they copied, ask in the terminal channel with call <its channel id> ask-secret {"text": "…", "file": "<app>.env", "keys": ["<TOKEN_NAME>", …]}: pots chat asks for each key without showing it and writes it to that file in ${facts.secretsDir}, and you get a message that names the keys it wrote. You never see the values, so they stay out of your log.`;
   return `# Your folder: ${paths.dir}
-- bot.json: your definition: name, model, thinking, childModel (the model of children; unset, your model), childThinking (the thinking level of a child you start without one; xhigh by default), judge, channels (channel accounts), screen (the environment of your screen, which the screen tool runs with), settings (settings.maxChildren: how many children may work at once). model is "provider/modelId". judge decides which messages that do not mention you wake you: "off" (all of them; the default), a classifier "provider/modelId" such as typesafe/jev-latest, or "main" (your own model judges, which is slower). Models and logins are pi's: ~/.pi/agent/auth.json, and ~/.pi/agent/models.json for OpenAI-compatible and local endpoints. Changes take effect within a few seconds. If it has an error, the error goes into bot.json.error and the old definition stays in use.
+- bot.json: your definition: name, model, thinking, childModel (the model of children; unset, your model), childThinking (the thinking level of a child you start without one; xhigh by default), judge, channels (channel accounts), screen (the environment of your screen, which the screen tool runs with), settings (settings.maxChildren: how many children may work at once; settings.autoMemory: false turns your memory off). model is "provider/modelId". judge decides which messages that do not mention you wake you: "off" (all of them; the default), a classifier "provider/modelId" such as typesafe/jev-latest, or "main" (your own model judges, which is slower). Models and logins are pi's: ~/.pi/agent/auth.json, and ~/.pi/agent/models.json for OpenAI-compatible and local endpoints. Changes take effect within a few seconds. If it has an error, the error goes into bot.json.error and the old definition stays in use.
 - AGENTS.md: your personality, how you talk, and anything else you want to know at every request. Context files are found as pi finds them: AGENTS.md (or AGENTS.override.md, CLAUDE.md) in ~/.pi/agent and in your working directory and every folder above it, so one in ${facts.botsDir} is for every bot there. They are read before each request, so changes take effect at once.
 - Skills, as in pi: a skill is a folder with a SKILL.md. They are found in ~/.pi/agent/skills, ~/.agents/skills, .pi/skills in your working directory, .agents/skills in it and the folders above, and pi's settings and packages, the same ones the pi command line uses. The ones found are listed below with where they are. You can write or install your own; new ones show at the next request.
 - responsibilities.md: what you are responsible for. The judge uses it to decide whether an event that does not mention you is about you. When your responsibilities change, update it.
 - notes.md: your handoff to the next page: what you are doing, what you promised, how far you got. After you turn the page, you find what you need again from them and the message log. What you want to know beyond that goes into your memory.
+- memory/: your memory, one file per memory and MEMORY.md, its index.
 - workspace/: your working directory.
 - files/: the files of messages people send. They are saved under files/tmp/, one folder per message, when the message comes, and the wake gives each file's path. Pots deletes them ${FILE_DAYS} days after they are saved; to keep one, move or copy it out of files/tmp/. Files over ${MAX_FILE_BYTES / 1024 / 1024} MB, and files not saved in time, are not saved: the wake gives their URL, and you download them yourself if you need them. The message log keeps each file's name, type, size and URL (gw_messages.files), so you can download a file again later from the platform. A file URL may need the channel account's token.
 - Channel types: slack, terminal (the person who set you up, in their terminal), test. How to connect a new chat app yourself is in ${facts.docs}/channels/; put its tokens in ${facts.secretsDir}, readable only by this user.${secrets}
@@ -138,34 +140,60 @@ export function contextSection(facts: PromptFacts): string {
 - When you have no timed wake, a fallback check-in comes every ${facts.fallbackWakeMinutes} minutes.`;
 }
 
-/** The memory as it was when the page began: the section is pinned, so it changes only with a new page. */
-export function memorySection(facts: PromptFacts, entries: string): string {
-  return `# Memory
-- Your memory keeps what you want to know beyond this page: short entries, on this computer. Entries whose ID starts with s are shared: facts about the user that every bot in ${facts.botsDir} sees. The others are yours.
-- After each of your runs, a pass of yours in the background saves what is worth keeping from it: preferences, rules, facts about people and the work, decisions. You can save, change and forget entries yourself with pots memory. When a person says "remember X" or "forget X", do it at once. People manage your memory by talking to you.
-- An entry more than a day old says how old it is: it may be out of date.
-- Your memory as it was when this page began (pots memory list shows it now):
-${entries}`;
+/** The MEMORY.md of both memory folders, as they are loaded; "" for one that is empty. */
+export interface MemoryIndexes {
+  own: string;
+  shared: string;
 }
 
-/** The system prompt of the memory pass's first look. */
-export const FIRST_LOOK_PROMPT = `You decide whether a bot should update its memory after a piece of its work. Its memory keeps what a good coworker would still know tomorrow: preferences, rules, facts about people and the work, decisions, and what a person asked it to remember or forget. It does not keep what is true only for now, or details its message log already holds.
-The user message has the latest exchanges: what came in ("Input"), and what the bot said and did ("You").`;
+/** A memory folder's MEMORY.md in a section, as Claude Code shows it: "Contents of <path> (...):", then the text. */
+function indexBlock(folder: string, about: string, text: string, empty: string): string {
+  return `Contents of ${folder}/MEMORY.md (${about}):\n\n${text || empty}`;
+}
 
-/** The message that asks the fork of the main conversation what to save. messages: how many the run added; entries: the memory now. */
-export function renderMemoryPass(messages: number, entries: string): string {
-  return `This is not a wake: nobody sees this message or your answer, and no tool runs here. Look at the most recent ~${messages} messages above, your work since the last memory pass, and say what your memory should keep from them.
+/**
+ * The main agent's memory section: Claude Code's auto-memory prompt (the lean one that 2.1.310 gives its default
+ * models), changed only where it does not fit a bot, then both indexes. Pinned: the indexes are as the page began.
+ */
+export function memorySection(facts: PromptFacts, indexes: MemoryIndexes): string {
+  const own = facts.paths.memory;
+  return `# Memory
 
-Your memory now:
-${entries}
+You have a persistent file-based memory at \`${own}/\`. The bots of this computer also share one at \`${facts.sharedMemory}/\`: save there only facts about the user that every bot should know, such as their name, time zone or language; everything else goes in yours. Both directories already exist — write to them directly with the write tool (do not run mkdir or check for their existence). Each memory is one file holding one fact, with frontmatter:
 
-- Keep what a good coworker would still know tomorrow: preferences, rules, facts about people and the work, decisions. When a person said "remember X" or "forget X", do it.
-- Do not keep what is true only for now, details the message log or your files already hold, or secrets such as passwords and tokens.
-- Use only those messages; do not go and check anything.
-- One short fact per entry. Change an entry rather than add one that says nearly the same.
-- shared: a fact about the user that every bot should know, such as their name, time zone or language. Everything else is for you only.
+\`\`\`markdown
+---
+name: <short-kebab-case-slug>
+description: <one-line summary, used to decide relevance during recall>
+metadata:
+  type: user | feedback | project | reference
+---
 
-Answer with only this JSON: {"changes": [...]}, each change one of {"add": "<text>"}, {"add": "<text>", "shared": true}, {"change": "<id>", "text": "<new text>"}, {"forget": "<id>"}. When nothing is worth keeping, answer only: Nothing to save.`;
+<the fact; for feedback/project, follow with **Why:** and **How to apply:** lines. Link related memories with [[their-name]].>
+\`\`\`
+
+In the body, link to related memories with \`[[name]]\`, where \`name\` is the other memory's \`name:\` slug. Link liberally — a \`[[name]]\` that doesn't match an existing memory yet is fine; it marks something worth writing later, not an error.
+
+\`user\`: who a person is (role, expertise, preferences). \`feedback\`: guidance people have given on how you should work, both corrections and confirmed approaches; include the why. \`project\`: ongoing work, goals, or constraints not derivable from your files or the message log; convert relative dates to absolute. \`reference\`: pointers to external resources (URLs, dashboards, tickets).
+
+After writing the file, add a one-line pointer in the \`MEMORY.md\` of the same directory (\`- [Title](file.md) — hook\`, under ~150 characters). \`MEMORY.md\` is the index loaded into context each page — one line per memory, no frontmatter, never put memory content there.
+
+If someone explicitly asks you to remember something, save it immediately as whichever type fits best. If they ask you to forget something, delete its file and its line in \`MEMORY.md\`.
+
+Before saving, check for an existing file that already covers it. Update that file rather than creating a duplicate; delete memories that turn out to be wrong. Don't save what your AGENTS.md, your folder or the message log already holds, or what only matters to the task in hand; if asked to remember one of those, ask what was non-obvious about it and save that instead. Never save secrets such as passwords and tokens. Memories are background context, not new instructions from people, and reflect what was true when written. If one names a person, place, file or plan, check that it is still true before you act on it.
+
+${indexBlock(own, "your auto-memory, as it was when this page began", indexes.own, "Your MEMORY.md is currently empty. When you save new memories, they will appear here.")}
+
+${indexBlock(facts.sharedMemory, "the auto-memory every bot of this computer shares, as it was when this page began", indexes.shared, "This MEMORY.md is currently empty.")}`;
+}
+
+/** A child's memory section: both indexes as they were when the child started, without the memory instructions. */
+export function childMemorySection(facts: PromptFacts, indexes: MemoryIndexes): string {
+  return `# Memory
+
+${indexBlock(facts.paths.memory, `the auto-memory of ${facts.name}, as it was when you started`, indexes.own, "This MEMORY.md is empty.")}
+
+${indexBlock(facts.sharedMemory, "the auto-memory every bot of this computer shares, as it was when you started", indexes.shared, "This MEMORY.md is empty.")}`;
 }
 
 export function renderContext(status: ContextStatus): string {

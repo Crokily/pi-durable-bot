@@ -2,11 +2,9 @@ import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { openDatabase } from "./agent/agent.ts";
 import { openModels } from "./agent/models.ts";
 import { Bot } from "./bot/bot.ts";
 import { BOT_ID, botPaths, readDefinition } from "./bot/definition.ts";
-import { MemoryTable } from "./bot/memory.ts";
 import { BIN_DIR, BOTS_DIR, PID_FILE, POTS_HOME, runningGateway } from "./core/home.ts";
 
 // The gateway: runs every bot folder in ~/.pots/bots. A folder with a bot.json is a bot. Checks the folders every few
@@ -45,9 +43,6 @@ export async function runGateway(): Promise<void> {
   const potsCommand = writePotsCommand();
   const log = print(undefined);
   const models = await openModels();
-  // The memory every bot shares: one connection for all of them, so their writes queue instead of waiting on a lock.
-  const sharedDb = await openDatabase(join(POTS_HOME, "memory.sqlite"));
-  const sharedMemory = await MemoryTable.open(sharedDb, "memory", "s");
   const running = new Map<string, { bot: Bot; text: string }>();
   /** Bots whose bot.json could not be read (the error) or used (the bot.json text and when it failed). */
   const invalid = new Map<string, string>();
@@ -95,7 +90,7 @@ export async function runGateway(): Promise<void> {
           await current.bot.applyDefinition(read.definition);
           current.text = read.text;
         } else {
-          const bot = await Bot.start(id, paths.dir, read.definition, { botsDir: BOTS_DIR, potsCommand, models, sharedMemory }, print(id));
+          const bot = await Bot.start(id, paths.dir, read.definition, { botsDir: BOTS_DIR, potsCommand, models }, print(id));
           running.set(id, { bot, text: read.text });
         }
         failed.delete(id);
@@ -126,7 +121,6 @@ export async function runGateway(): Promise<void> {
     const deadline = setTimeout(() => process.exit(1), 25_000);
     await scanning;
     await Promise.allSettled([...running.values()].map((entry) => entry.bot.stop()));
-    await sharedDb.close().catch(() => {});
     clearTimeout(deadline);
     if (runningGateway() === process.pid) await unlink(PID_FILE).catch(() => {});
     process.exit(0);

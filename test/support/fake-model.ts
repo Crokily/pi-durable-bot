@@ -28,14 +28,8 @@ export interface FakeModel {
   close(): Promise<void>;
 }
 
-/**
- * delayMs: wait this long before each answer, like a slow model. memory: the answers to the memory pass, its first look
- * and the pass itself; by default the first look says no, so there is no pass.
- */
-export async function startFakeModel(
-  script: (request: FakeRequest) => FakeReply = coworker,
-  options: { delayMs?: number; memory?: (request: FakeRequest) => FakeReply } = {},
-): Promise<FakeModel> {
+/** delayMs: wait this long before each answer, like a slow model. */
+export async function startFakeModel(script: (request: FakeRequest) => FakeReply = coworker, options: { delayMs?: number } = {}): Promise<FakeModel> {
   const requests: FakeRequest[] = [];
   let calls = 0;
   const server = createServer((req, res) => {
@@ -49,7 +43,7 @@ export async function startFakeModel(
       const request = { ...toRequest(body), ...(typeof session === "string" ? { session } : {}) };
       requests.push(request);
       if (options.delayMs) await new Promise((resolve) => setTimeout(resolve, options.delayMs));
-      const reply = isFirstLook(request) || isMemoryPass(request) ? (options.memory ?? noMemory)(request) : script(request);
+      const reply = script(request);
       if ("fail" in reply) {
         res.writeHead(reply.fail.status, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: { message: reply.fail.message, type: "invalid_request_error" } }));
@@ -98,23 +92,9 @@ export function judgeRequests(model: FakeModel): FakeRequest[] {
   return model.requests.filter(isJudge);
 }
 
-/** Requests that came from the agent, not from the judge or the memory pass. */
+/** Requests that came from the agent, not from the judge. */
 export function agentRequests(model: FakeModel): FakeRequest[] {
-  return model.requests.filter((request) => !isJudge(request) && !isFirstLook(request) && !isMemoryPass(request));
-}
-
-/** The memory pass's first look: should the pass run? */
-export function isFirstLook(request: FakeRequest): boolean {
-  return request.system.startsWith("You decide whether a bot should update its memory");
-}
-
-/** The memory pass itself: a fork of the main conversation, asked what to save. */
-export function isMemoryPass(request: FakeRequest): boolean {
-  return request.messages.findLast((message) => message.role === "user")?.content.startsWith("[memory pass]") === true;
-}
-
-function noMemory(request: FakeRequest): FakeReply {
-  return isFirstLook(request) ? { text: JSON.stringify({ write_likely: false }) } : { text: "Nothing to save." };
+  return model.requests.filter((request) => !isJudge(request));
 }
 
 /** The wake messages the agent got, in order: the last user message of each agent request that starts a run. */

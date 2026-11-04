@@ -1,12 +1,17 @@
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { agentRequests, type FakeModel, type FakeReply, type FakeRequest, isFirstLook, isMemoryPass, startFakeModel } from "./support/fake-model.ts";
-import { ME, pause, TestGateway, waitFor } from "./support/gateway.ts";
+import { type MemoryFolders, withAgeNote } from "../src/agent/memory.ts";
+import { cutIndex } from "../src/bot/memory.ts";
+import { agentRequests, type FakeModel, startFakeModel } from "./support/fake-model.ts";
+import { ME, TestGateway, waitFor } from "./support/gateway.ts";
 
-// The memory pass from outside. Its failures would be silent: a pass whose request does not start as the main
-// agent's did misses the provider's cache and costs the full price, a pass that reaches the chat or the main
-// conversation changes what people and the bot see, and an entry saved twice after a crash, or one that is not deleted
-// when it is forgotten, only shows as a memory that is wrong.
+// The memory from outside, and the parts of it that code must hold. Their failures would be silent: an index that
+// changes in the middle of a page makes the provider's cache miss, one that is not cut costs every request, and an age
+// note that is missing only shows as a bot that trusts an old memory.
 
+const DAY = 86_400_000;
 let model: FakeModel;
 let gateway: TestGateway;
 
@@ -16,84 +21,72 @@ afterEach(async () => {
   expect(gateway.output.filter((line) => /failed|unhandled|could not/i.test(String(line.message)))).toEqual([]);
 });
 
-/** The first look says yes; the pass answers with these changes. */
-const remembering =
-  (...changes: Record<string, unknown>[]) =>
-  (request: FakeRequest): FakeReply =>
-    isFirstLook(request) ? { text: JSON.stringify({ write_likely: true }) } : { text: JSON.stringify({ changes }) };
-
-async function setUp(memory: (request: FakeRequest) => FakeReply): Promise<void> {
-  model = await startFakeModel(undefined, { memory });
-  gateway = new TestGateway({ model });
-  await gateway.start();
-}
-
-const passes = () => gateway.output.filter((line) => line.message === "memory pass");
-const memory = () => gateway.pots("memory", "list");
-
 describe("memory", { timeout: 90_000 }, () => {
-  it("continues the main conversation with its session, saves the answer, and shows it on the next page", async () => {
-    await setUp(remembering({ add: "Alice likes tea." }, { add: "The user's time zone is Australia/Sydney.", shared: true }));
-    gateway.say("general", "alice", `@${ME} I like tea`);
-    await waitFor(() => passes().length === 1, { what: "the memory pass" });
-    expect(memory()).toBe("- s1: The user's time zone is Australia/Sydney.\n- m1: Alice likes tea.\n");
-
-    // The pass's request starts as the main agent's last one did, with the same session, so the cache serves it.
-    const main = agentRequests(model).at(-1)!;
-    const pass = model.requests.find(isMemoryPass)!;
-    expect(pass.system).toBe(main.system);
-    expect(pass.tools).toEqual(main.tools);
-    expect(pass.messages.slice(0, main.messages.length)).toEqual(main.messages);
-    expect(pass.session).toBeDefined();
-    expect(pass.session).toBe(main.session);
-
-    // Nothing of it reached the chat or the main conversation, and the section stays as the page began.
-    gateway.say("general", "alice", `@${ME} anything else?`);
-    await waitFor(() => gateway.sent().length === 2, { what: "the second reply" });
-    expect(gateway.sent().map((record) => record.text)).toEqual(["ack: [wake] someone mentioned you", "ack: [wake] someone mentioned you"]);
-    const later = agentRequests(model).at(-1)!;
-    expect(later.messages.some((message) => message.content.includes("[memory pass]"))).toBe(false);
-    expect(later.system).toContain("Your memory is empty.");
-
-    // The next pass, after the first one saved, still starts as the main agent's last request did: a fork keeps the
-    // sections it took from the main conversation, also in the first process after an install or upgrade.
-    await waitFor(() => passes().length === 2, { what: "the second memory pass" });
-    const second = model.requests.filter(isMemoryPass)[1]!;
-    const before = agentRequests(model).filter((request) => model.requests.indexOf(request) < model.requests.indexOf(second)).at(-1)!;
-    expect(second.system).toBe(before.system);
-    expect(second.messages.slice(0, before.messages.length)).toEqual(before.messages);
-
-    expect((await gateway.run(["turn-page", "--note", "a new page"])).status).toBe(0);
-    gateway.say("general", "alice", `@${ME} and now?`);
-    await waitFor(() => gateway.sent().length === 3, { what: "the reply on the new page" });
-    expect(agentRequests(model).at(-1)!.system).toContain("- s1: The user's time zone is Australia/Sydney.\n- m1: Alice likes tea.");
-  });
-
-  it("forgets by deleting the entry, from pots memory or from a pass", async () => {
-    await setUp(remembering({ forget: "m2" }, { add: "Alice likes tea." }));
-    expect(gateway.pots("memory", "add", "Alice likes tea.")).toBe("Saved m1.\n");
-    expect(gateway.pots("memory", "add", "Bob likes coffee.")).toBe("Saved m2.\n");
-    expect(gateway.pots("memory", "forget", "m1")).toBe("Forgot m1.\n");
-    gateway.say("general", "alice", `@${ME} I like tea`);
-    await waitFor(() => passes().length === 1, { what: "the memory pass" });
-    // Nothing keeps a forgotten text out: said again, it is saved again, with a new ID.
-    expect(passes()[0]!.result).toBe("forgot m2, added m3");
-    expect(memory()).toBe("- m3: Alice likes tea.\n");
-  });
-
-  it("saves once when the gateway dies right after the pass saved", async () => {
-    await setUp(remembering({ add: "Bob wants short replies." }));
-    gateway.crashAfterNextMemoryPass();
-    gateway.say("general", "bob", `@${ME} keep it short`);
-    await gateway.exited();
-    expect(gateway.output.some((line) => line.message === "crash test: dying after the memory pass saved")).toBe(true);
-
+  it("shows both MEMORY.md at the end of the prompt as they were when the page began", async () => {
+    model = await startFakeModel();
+    gateway = new TestGateway({ model });
+    const own = join(gateway.botDir, "memory");
+    const shared = join(gateway.home, "memory");
+    for (const folder of [own, shared]) mkdirSync(folder, { recursive: true });
+    writeFileSync(join(own, "MEMORY.md"), "- [Alice likes tea](alice-tea.md) — what she drinks\n");
     await gateway.start();
-    await waitFor(() => passes().length === 2, { what: "the pass to run again" });
-    expect(passes()[1]!.result).toBe("applied before");
-    await pause(1_000);
-    expect(memory()).toBe("- m1: Bob wants short replies.\n");
-    // The fork answered once: the pass that ran again found its answer.
-    expect(model.requests.filter(isMemoryPass)).toHaveLength(1);
+    gateway.say("general", "alice", `@${ME} hello`);
+    await waitFor(() => gateway.sent().length === 1, { what: "the reply" });
+    const first = agentRequests(model).at(-1)!.system;
+    expect(first).toMatch(/\(your auto-memory, as it was when this page began\):\n\n- \[Alice likes tea\]\(alice-tea\.md\) — what she drinks\n\n/);
+    expect(first).toMatch(/\(the auto-memory every bot of this computer shares, as it was when this page began\):\n\nThis MEMORY\.md is currently empty\.$/);
+
+    writeFileSync(join(shared, "MEMORY.md"), "- [Time zone](tz.md) — Australia/Sydney\n");
+    gateway.say("general", "alice", `@${ME} again`);
+    await waitFor(() => gateway.sent().length === 2, { what: "the second reply" });
+    expect(agentRequests(model).at(-1)!.system).toBe(first);
+    expect((await gateway.run(["turn-page", "--note", "a new page"])).status).toBe(0);
+    gateway.say("general", "alice", `@${ME} new page`);
+    await waitFor(() => gateway.sent().length === 3, { what: "the reply on the new page" });
+    expect(agentRequests(model).at(-1)!.system).toMatch(/shares, as it was when this page began\):\n\n- \[Time zone\]\(tz\.md\) — Australia\/Sydney$/);
+  });
+
+  it("has no memory section with settings.autoMemory false", async () => {
+    model = await startFakeModel();
+    gateway = new TestGateway({ model, settings: { autoMemory: false } });
+    await gateway.start();
+    gateway.say("general", "alice", `@${ME} hello`);
+    await waitFor(() => gateway.sent().length === 1, { what: "the reply" });
+    expect(agentRequests(model).at(-1)!.system).not.toContain("# Memory");
+  });
+});
+
+describe("memory parts", () => {
+  let dir: string;
+  let folders: MemoryFolders;
+  const make = () => {
+    dir = mkdtempSync(join(tmpdir(), "pots-memory-"));
+    folders = { own: join(dir, "bot", "memory"), shared: join(dir, "shared") };
+    for (const folder of [folders.own, folders.shared, join(dir, "outside")]) mkdirSync(folder, { recursive: true });
+  };
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("notes the age of a memory file read 2 days or more after it changed, and only of a memory file", async () => {
+    make();
+    const result = (text: string) => ({ output: [{ type: "text" as const, text }] });
+    const file = (folder: string, name: string, days: number) => {
+      const path = join(folder, name);
+      writeFileSync(path, "x");
+      utimesSync(path, new Date(Date.now() - days * DAY - 60_000), new Date(Date.now() - days * DAY - 60_000));
+      return path;
+    };
+    const noted = async (path: string) => ((await withAgeNote(result("x"), path, folders, dir)).output![0] as { text: string }).text;
+    expect(await noted(file(folders.own, "one.md", 1))).toBe("x");
+    expect(await noted(file(folders.shared, "two.md", 2))).toMatch(/^<system-reminder>This memory is 2 days old\./);
+    expect(await noted(file(join(dir, "outside"), "old.md", 9))).toBe("x");
+    expect(((await withAgeNote(result("x"), join(folders.own, "two.md"), undefined, dir)).output![0] as { text: string }).text).toBe("x");
+  });
+
+  it("loads MEMORY.md up to 200 lines and 25,000 characters", () => {
+    const lines = Array.from({ length: 250 }, (_, i) => `- [m${i + 1}](m${i + 1}.md) — hook`).join("\n");
+    expect(cutIndex(lines)).toBe(
+      `${lines.split("\n").slice(0, 200).join("\n")}\n\n> WARNING: MEMORY.md is 250 lines (limit: 200). Only part of it was loaded: 50 of 250 lines were cut off, starting at line 201 ("- [m201](m201.md) — hook"). Keep index entries to one line under ~200 chars; move detail into topic files.`,
+    );
+    expect(cutIndex("x".repeat(30_000))).toMatch(/^x{25000}\n\n> WARNING: MEMORY\.md is 29\.3KB \(limit: 24\.4KB\) — index entries are too long\. Only part of it was loaded: everything after the first 25000 characters of line 1 was cut off\./);
   });
 });

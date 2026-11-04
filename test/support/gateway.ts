@@ -177,11 +177,6 @@ export class TestGateway {
     writeFileSync(join(this.botDir, "crash-after-send"), "");
   }
 
-  /** Make the gateway die right after the next memory pass saved its answer, before the pass ended. */
-  crashAfterNextMemoryPass(): void {
-    writeFileSync(join(this.botDir, "crash-after-memory-pass"), "");
-  }
-
   /** Make the gateway die just before, or just after, the next child's end is handed to the main agent. */
   crashAroundNextChildReport(when: "before" | "after"): void {
     writeFileSync(join(this.botDir, `crash-${when}-child-report`), "");

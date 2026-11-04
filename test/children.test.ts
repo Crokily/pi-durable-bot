@@ -1,5 +1,7 @@
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { type FakeModel, type FakeReply, type FakeRequest, startFakeModel, wakeLine } from "./support/fake-model.ts";
+import { agentRequests, type FakeModel, type FakeReply, type FakeRequest, startFakeModel, wakeLine } from "./support/fake-model.ts";
 import { ME, pause, TestGateway, waitFor } from "./support/gateway.ts";
 
 // Children from outside: a real gateway whose fake main agent starts a child with the task tool. A report that comes
@@ -15,19 +17,21 @@ afterEach(async () => {
 });
 
 const isChild = (request: FakeRequest) => request.system.includes("You are a child agent of");
-const lastUser = (request: FakeRequest) => request.messages.findLast((message) => message.role === "user")?.content ?? "";
 
 /**
  * The main agent starts a child for "please research" and stops it for "stop the research"; a child's end it passes
  * on in the place. The child answers its brief at once, or for "wait long" runs a long command first. For "please
- * note", the child saves a memory entry first.
+ * note", the child adds a line to the bot's memory index first.
  */
 function script(request: FakeRequest): FakeReply {
   const last = request.messages.at(-1);
   if (isChild(request)) {
     if (last?.role !== "user") return { text: "done waiting" };
     if (last.content.includes("wait long")) return { call: { name: "bash", arguments: { command: "sleep 60" } } };
-    if (last.content.includes("save a memory")) return { call: { name: "bash", arguments: { command: 'pots memory add "Bob likes coffee."' } } };
+    if (last.content.includes("save a memory")) {
+      const index = /Contents of (\S+\/MEMORY\.md) \(the auto-memory of/.exec(request.system)![1]!;
+      return { call: { name: "bash", arguments: { command: `echo '- [Bob](bob.md) — likes coffee' >> ${index}` } } };
+    }
     return { text: "the answer is 42" };
   }
   if (last?.role !== "user") return { text: "done" };
@@ -54,7 +58,7 @@ async function setUp(): Promise<void> {
 const reports = () => gateway.sent().filter((record) => record.text?.startsWith("report:"));
 /** How often the main conversation holds a child's report, as its newest request shows it. */
 const reportsSeen = () => {
-  const main = model.requests.filter((request) => !isChild(request) && request.tools.includes("task"));
+  const main = agentRequests(model).filter((request) => !isChild(request));
   return main.at(-1)?.messages.filter((message) => message.role === "user" && message.content.startsWith("[wake] your child")).length ?? 0;
 };
 
@@ -81,15 +85,18 @@ describe("children", { timeout: 90_000 }, () => {
     expect(gateway.pots("trace", "mention:test:#general:1")).toMatch(/^child run, trace [^\n]*\nsubmission \d+ \(placed\)[\s\S]*model fake\/coworker, 100 in \(80% cached\), 10 out, stop/m);
   });
 
-  it("sees the memory as it was when it started, for its whole conversation, and keeps the thinking level it was given", async () => {
+  it("sees the memory index as it was when it started, for its whole conversation, and keeps the thinking level it was given", async () => {
     await setUp();
-    expect(gateway.pots("memory", "add", "Alice likes tea.")).toBe("Saved m1.\n");
+    const index = join(gateway.botDir, "memory", "MEMORY.md");
+    mkdirSync(join(gateway.botDir, "memory"), { recursive: true });
+    writeFileSync(index, "- [Alice](alice.md) — likes tea\n");
     gateway.say("general", "alice", `@${ME} please note`);
     await waitFor(() => reports().length === 1, { what: "the report" });
-    expect(gateway.pots("memory", "list")).toBe("- m1: Alice likes tea.\n- m2: Bob likes coffee.\n");
-    // The entry the child saved itself does not change the start of its own requests.
+    expect(readFileSync(index, "utf8")).toBe("- [Alice](alice.md) — likes tea\n- [Bob](bob.md) — likes coffee\n");
+    // The line the child added itself does not change the start of its own requests; the child has no memory instructions.
     const [first, second] = model.requests.filter(isChild);
-    expect(first!.system).toMatch(/# Memory\n[\s\S]*- m1: Alice likes tea\.$/);
+    expect(first!.system).toMatch(/# Memory\n\nContents of \S+\/memory\/MEMORY\.md \(the auto-memory of Coworker, as it was when you started\):\n\n- \[Alice\]\(alice\.md\) — likes tea\n\n/);
+    expect(first!.system).not.toContain("Each memory is one file holding one fact");
     expect(second!.system).toBe(first!.system);
     expect(gateway.pots("children")).toMatch(/^c1 "note": .*, thinking max$/m);
   });

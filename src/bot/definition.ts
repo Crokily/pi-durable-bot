@@ -43,6 +43,8 @@ export interface BotSettings {
   compaction: Compaction;
   /** How many children may work at once. At the cap, the task tool says so and lists them. */
   maxChildren: number;
+  /** The memory, as Claude Code's autoMemoryEnabled: false, no memory section and no age note. */
+  autoMemory: boolean;
 }
 
 const DEFAULT_SETTINGS: BotSettings = {
@@ -53,6 +55,7 @@ const DEFAULT_SETTINGS: BotSettings = {
   fallbackWakeMinutes: 120,
   compaction: {},
   maxChildren: 50,
+  autoMemory: true,
 };
 
 export const DEFAULT_MODEL = "openai/gpt-6.1-sol";
@@ -73,13 +76,14 @@ export function botPaths(dir: string) {
     /** Where the gateway saves the files of messages people sent, one folder per message; it deletes them 30 days later. */
     files: join(dir, "files", "tmp"),
     db: join(dir, "bot.sqlite"),
+    /** The bot's memory: one markdown file per memory, and MEMORY.md, their index. */
+    memory: join(dir, "memory"),
     socket: controlAddress(dir),
     crashAfterSend: join(dir, "crash-after-send"),
     crashAfterWake: join(dir, "crash-after-wake"),
     crashBeforeChildReport: join(dir, "crash-before-child-report"),
     crashAfterChildReport: join(dir, "crash-after-child-report"),
     crashAfterChildStop: join(dir, "crash-after-child-stop"),
-    crashAfterMemoryPass: join(dir, "crash-after-memory-pass"),
     /** A note from pots init: the bot is woken with it at its first start, then the file is removed. */
     firstWake: join(dir, "first-wake.md"),
   };
@@ -132,6 +136,7 @@ const Definition = Schema.Struct({
       backgroundTokens: Schema.optionalKey(Schema.Finite),
     }).pipe(Schema.withDecodingDefaultKey(Effect.succeed({}))),
     maxChildren: Schema.Finite.pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_SETTINGS.maxChildren))),
+    autoMemory: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_SETTINGS.autoMemory))),
   }).pipe(Schema.withDecodingDefaultKey(Effect.succeed({}))),
 });
 

@@ -1,6 +1,6 @@
 import { open, readdir, readFile, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
-import type { MemoryFolders, MemoryNote, MemoryProgress } from "../agent/memory.ts";
+import type { MemoryFolders, MemoryNote, MemoryProgress, MemorySettle, MemorySource } from "../agent/memory.ts";
 import type { Sql } from "../core/sql.ts";
 
 // The bot's memory, as Claude Code's auto memory: files. Each bot has its own folder, <bot folder>/memory/, and the
@@ -156,52 +156,104 @@ export async function listMemoryFiles(folders: MemoryFolders): Promise<string> {
 }
 
 // ---- What the bot keeps about its memory passes, in bot_state ----
+//
+// memory_cursor, memory_changes and memory_dream_at: how far extraction got, the memory changes since the last dream and
+// when it was. memory_changed: what the forks wrote and deleted since the last settle, kept as they do it.
+// memory_notes: the notes for the main agent's next wake; a note a wake took names it.
 
-/** How far extraction got, the memory changes since the last dream and when it was. */
-export async function memoryProgress(sql: Sql): Promise<MemoryProgress> {
-  const rows = await sql.all<{ key: string; value: string }>("SELECT key, value FROM bot_state WHERE key IN ('memory_cursor', 'memory_changes', 'memory_dream_at')");
+type Executor = Parameters<Parameters<Sql["transaction"]>[0]>[0];
+
+async function readJson<T>(tx: Executor, key: string): Promise<T | undefined> {
+  const row = await tx.get<{ value: string }>("SELECT value FROM bot_state WHERE key = ?", key);
+  return row ? (JSON.parse(row.value) as T) : undefined;
+}
+
+async function write(tx: Executor, key: string, value: string | undefined): Promise<void> {
+  if (value === undefined) await tx.run("DELETE FROM bot_state WHERE key = ?", key);
+  else await tx.run("INSERT INTO bot_state (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", key, value);
+}
+
+async function progressOf(tx: Executor): Promise<MemoryProgress> {
+  const rows = await tx.all<{ key: string; value: string }>("SELECT key, value FROM bot_state WHERE key IN ('memory_cursor', 'memory_changes', 'memory_dream_at')");
   const value = (key: string) => rows.find((row) => row.key === key)?.value;
   const cursor = value("memory_cursor");
   const dreamAt = value("memory_dream_at");
   return { ...(cursor === undefined ? {} : { cursor: Number(cursor) }), changes: Number(value("memory_changes") ?? 0), ...(dreamAt === undefined ? {} : { dreamAt: Number(dreamAt) }) };
 }
 
-export async function saveMemoryProgress(sql: Sql, progress: MemoryProgress): Promise<void> {
+export function memoryProgress(sql: Sql): Promise<MemoryProgress> {
+  return progressOf(sql);
+}
+
+/** Keep at once that a fork wrote or deleted a file. */
+export async function recordMemoryChange(sql: Sql, source: MemorySource, kind: "written" | "deleted", path: string): Promise<void> {
   await sql.transaction(async (tx) => {
-    const set = (key: string, value: number | undefined) =>
-      value === undefined
-        ? tx.run("DELETE FROM bot_state WHERE key = ?", key)
-        : tx.run("INSERT INTO bot_state (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", key, String(value));
-    await set("memory_cursor", progress.cursor);
-    await set("memory_changes", progress.changes);
-    await set("memory_dream_at", progress.dreamAt);
+    const changed = (await readJson<MemoryNote>(tx, "memory_changed")) ?? { source, written: [], deleted: [] };
+    const other = kind === "written" ? "deleted" : "written";
+    changed[other] = changed[other].filter((each) => each !== path);
+    if (!changed[kind].includes(path)) changed[kind].push(path);
+    await write(tx, "memory_changed", JSON.stringify(changed));
   });
 }
 
-/** A note that waits for the main agent's next wake. */
-export type WaitingNote = MemoryNote & { id: number };
+/** A note that waits for the main agent's next wake; `wake`: the wake that took it. */
+export type WaitingNote = MemoryNote & { id: number; wake?: string };
 
-export async function memoryNotes(sql: Sql): Promise<WaitingNote[]> {
-  const row = await sql.get<{ value: string }>("SELECT value FROM bot_state WHERE key = 'memory_notes'");
-  return row ? (JSON.parse(row.value) as WaitingNote[]) : [];
+/**
+ * In one transaction: what the forks changed since the last settle becomes a note and, for extraction, a memory change;
+ * then the progress moves as `update` says.
+ */
+export async function settleMemory(sql: Sql, update: MemorySettle): Promise<MemoryProgress> {
+  return sql.transaction(async (tx) => {
+    const progress = await progressOf(tx);
+    const changed = await readJson<MemoryNote>(tx, "memory_changed");
+    let changes = progress.changes;
+    if (changed && changed.written.length + changed.deleted.length > 0) {
+      const notes = (await readJson<WaitingNote[]>(tx, "memory_notes")) ?? [];
+      notes.push({ ...changed, id: Math.max(0, ...notes.map((note) => note.id)) + 1 });
+      await write(tx, "memory_notes", JSON.stringify(notes));
+      if (changed.source === "extract") changes++;
+    }
+    if (update.change) changes++;
+    const next: MemoryProgress = {
+      ...(update.cursor !== undefined ? { cursor: update.cursor } : progress.cursor !== undefined ? { cursor: progress.cursor } : {}),
+      changes: update.dreamt === undefined ? changes : 0,
+      ...(update.dreamt !== undefined ? { dreamAt: update.dreamt } : progress.dreamAt !== undefined ? { dreamAt: progress.dreamAt } : {}),
+    };
+    await write(tx, "memory_changed", undefined);
+    await write(tx, "memory_cursor", next.cursor === undefined ? undefined : String(next.cursor));
+    await write(tx, "memory_changes", String(next.changes));
+    await write(tx, "memory_dream_at", next.dreamAt === undefined ? undefined : String(next.dreamAt));
+    return next;
+  });
 }
 
-/** Keep a note for the main agent's next wake. */
-export async function addMemoryNote(sql: Sql, note: MemoryNote): Promise<void> {
-  await changeNotes(sql, (notes) => [...notes, { ...note, id: Math.max(0, ...notes.map((each) => each.id)) + 1 }]);
+/**
+ * The notes for this wake, in one transaction: those it took before (a wake given again after a crash), or else all
+ * that wait, which it now takes. Notes that a wake that went out took are dropped.
+ */
+export async function claimMemoryNotes(sql: Sql, wake: string): Promise<WaitingNote[]> {
+  return sql.transaction(async (tx) => {
+    const notes = (await readJson<WaitingNote[]>(tx, "memory_notes")) ?? [];
+    const kept: WaitingNote[] = [];
+    for (const note of notes) {
+      if (note.wake !== undefined && note.wake !== wake && (await tx.get("SELECT 1 AS sent FROM bot_wakes WHERE id = ?", note.wake))) continue;
+      kept.push(note);
+    }
+    let mine = kept.filter((note) => note.wake === wake);
+    if (mine.length === 0) {
+      mine = kept.filter((note) => note.wake === undefined);
+      for (const note of mine) note.wake = wake;
+    }
+    await write(tx, "memory_notes", kept.length > 0 ? JSON.stringify(kept) : undefined);
+    return mine;
+  });
 }
 
-/** The notes a wake carried: they are not given again. */
-export async function dropMemoryNotes(sql: Sql, delivered: readonly WaitingNote[]): Promise<void> {
-  const ids = new Set(delivered.map((note) => note.id));
-  await changeNotes(sql, (notes) => notes.filter((note) => !ids.has(note.id)));
-}
-
-async function changeNotes(sql: Sql, change: (notes: WaitingNote[]) => WaitingNote[]): Promise<void> {
+/** The notes a wake carried once it went out: they are not given again. */
+export async function dropMemoryNotes(sql: Sql, wake: string): Promise<void> {
   await sql.transaction(async (tx) => {
-    const row = await tx.get<{ value: string }>("SELECT value FROM bot_state WHERE key = 'memory_notes'");
-    const notes = change(row ? (JSON.parse(row.value) as WaitingNote[]) : []);
-    if (notes.length === 0) await tx.run("DELETE FROM bot_state WHERE key = 'memory_notes'");
-    else await tx.run("INSERT INTO bot_state (key, value) VALUES ('memory_notes', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", JSON.stringify(notes));
+    const notes = ((await readJson<WaitingNote[]>(tx, "memory_notes")) ?? []).filter((note) => note.wake !== wake);
+    await write(tx, "memory_notes", notes.length > 0 ? JSON.stringify(notes) : undefined);
   });
 }

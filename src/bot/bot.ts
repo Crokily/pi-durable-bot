@@ -24,7 +24,7 @@ import type { Timer } from "../gateway/timers.ts";
 import { ControlServer } from "./control.ts";
 import { type BotDefinition, type BotPaths, botPaths } from "./definition.ts";
 import { describeMachine } from "./machine.ts";
-import { addMemoryNote, dropMemoryNotes, listMemoryFiles, memoryNotes, memoryProgress, readIndex, saveMemoryProgress } from "./memory.ts";
+import { claimMemoryNotes, dropMemoryNotes, listMemoryFiles, memoryProgress, readIndex, recordMemoryChange, settleMemory } from "./memory.ts";
 import {
   childMemorySection,
   childSection,
@@ -300,8 +300,8 @@ export class Bot implements WakeTarget {
         extraction: async (messages) => renderExtraction(messages, await listMemoryFiles(folders), folders),
         dream: async (progress) => renderDream(facts(), progress),
         progress: () => memoryProgress(sql),
-        saveProgress: (progress) => saveMemoryProgress(sql, progress),
-        noted: (note) => addMemoryNote(sql, note),
+        changed: (source, kind, path) => recordMemoryChange(sql, source, kind, path),
+        settle: (update) => settleMemory(sql, update),
       },
       actions: {
         send: (to, text, sendId, trace) => self().send(to, text, sendId, trace),
@@ -469,15 +469,17 @@ export class Bot implements WakeTarget {
   }
 
   async #submit(id: string, reason: string, place: Address | undefined, text: string, steer: boolean, caller?: TelemetrySpan): Promise<Delivered> {
-    // What the memory passes changed since the last wake, once, at the end of this one, as Claude Code tells it.
-    const notes = await memoryNotes(this.#sql);
+    // What the memory passes changed since the last wake, once, at the end of this one, as Claude Code tells it. The
+    // wake takes its notes in one transaction, so two wakes never give the same one, and the same wake given again
+    // after a crash gives the same.
+    const notes = await claimMemoryNotes(this.#sql, id);
     if (notes.length > 0) {
       const read = await this.#agent.readFiles();
       const stale = (paths: readonly string[]) => paths.filter((path) => basename(path) === "MEMORY.md" || read.has(path));
       text = [text, ...notes.map((note) => renderMemoryNote(note, stale([...note.written, ...note.deleted])))].join("\n\n");
     }
     const { id: submission, trace } = await this.#agent.submit({ id, text, steer, data: { reason, ...(place ? { place } : {}) }, caller });
-    if (notes.length > 0) await dropMemoryNotes(this.#sql, notes);
+    if (notes.length > 0) await dropMemoryNotes(this.#sql, id);
     if (place) this.#submissionPlaces.set(submission, place);
     await this.#sql.run(
       "INSERT OR IGNORE INTO bot_wakes (id, at, reason, place, text, submission) VALUES (?, ?, ?, ?, ?, ?)",

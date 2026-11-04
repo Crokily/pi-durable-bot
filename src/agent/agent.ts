@@ -137,7 +137,7 @@ export interface AgentSection {
    * Keep the text it had when the page began: a new text shows after the page turns or pi compacts. A change in the
    * middle of a page is sent again at the end of the conversation; on a model that takes system text only at the start,
    * it changes the start of every request, and the provider's prompt cache misses. In a child's sections: keep the text
-   * of the child's first request for its whole conversation.
+   * of the child's first request for its whole conversation. A section whose render gives no text leaves at once.
    */
   pin?: boolean;
 }
@@ -352,7 +352,8 @@ export class Agent {
     };
     const render = (part: AgentSection) => async (input: PromptInput, context: Context) => {
       const text = await part.render();
-      if (!part.pin) return text;
+      // A section without a text leaves at once, also a pinned one, as the memory section when the memory is turned off.
+      if (!part.pin || text === undefined) return text;
       const shown = input.shown[part.name];
       // A memory fork keeps what it took from the main conversation, so its request starts as the main agent's did.
       if (input.conversationId !== ROOT_CONVERSATION_ID) return shown;
@@ -374,8 +375,11 @@ export class Agent {
     };
     // A child is a conversation of its own, not a fork: a pinned section shows the text of its first request, also after
     // pi compacts the child, when the conversation no longer shows it.
-    const childRender = (part: AgentSection) => async (input: PromptInput, context: Context) =>
-      part.pin ? (input.shown[part.name] ?? (await firstText(input.conversationId, part.name, context)) ?? (await part.render())) : part.render();
+    const childRender = (part: AgentSection) => async (input: PromptInput, context: Context) => {
+      const text = await part.render();
+      if (!part.pin || text === undefined) return text;
+      return input.shown[part.name] ?? (await firstText(input.conversationId, part.name, context)) ?? text;
+    };
     // A child has the main agent's coding tools and screen, with its own prompt: no channel actions and no task tool.
     const child = defineExtension({
       name: "child",
@@ -471,6 +475,7 @@ export class Agent {
   async resume(): Promise<void> {
     this.#harness.resume();
     for (const stop of this.#unfinishedStops.splice(0)) await this.#finishStop(stop);
+    await this.#memory?.recover();
     // What extraction did not cover before the last process stopped: a run that ended, but whose pass did not end.
     if (this.#memory && this.#runInputs === undefined) {
       const at = await lastAnswer(this.#root, context);

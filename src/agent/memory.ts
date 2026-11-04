@@ -1,7 +1,6 @@
-import { existsSync } from "node:fs";
-import { realpath, stat } from "node:fs/promises";
+import { lstat, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Context } from "@earendil-works/chord/context";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
@@ -29,9 +28,10 @@ import type { Sql } from "../core/sql.ts";
 // time, an extraction pass: a fork of the main conversation at the run's answer, with the main conversation's provider
 // session, so its request starts as the main agent's last one did and the provider's prompt cache serves it. It keeps
 // every tool of the main agent, and code refuses each call but reading, writing the memory folders' .md files and
-// read-only shell commands. It is skipped when the main agent wrote memory itself since the last pass. Once a day,
-// after enough memory changes, a dream consolidates the memory the same way. A fork is deleted once it ended: nothing
-// of it stays in the main conversation or the bot's database but how far the passes got.
+// read-only shell commands; it refuses also a change to a memory file that another writer changed since the pass began.
+// It is skipped when the main agent wrote memory itself since the last pass. Once a day, after enough memory changes, a dream consolidates the
+// memory the same way. A fork is deleted once it ended: nothing of it stays in the main conversation or the bot's
+// database but how far the passes got and what they changed, for the main agent's next wake.
 
 /** The bot's own memory folder and the one all bots of the POTS_HOME share. Both exist. */
 export interface MemoryFolders {
@@ -48,9 +48,21 @@ export interface MemoryProgress {
 
 /** A pass or a dream changed files: the main agent's next wake says so, once. Paths are absolute. */
 export interface MemoryNote {
-  source: "extract" | "dream";
+  source: MemorySource;
   written: string[];
   deleted: string[];
+}
+
+export type MemorySource = "extract" | "dream";
+
+/** How a pass or a dream ended: what to record with what its fork changed, in one transaction. */
+export interface MemorySettle {
+  /** Extraction got this far. */
+  cursor?: number;
+  /** One more memory change than what the fork changed: the main agent wrote memory itself. */
+  change?: boolean;
+  /** A dream ended at this time: the memory changes start again from 0. */
+  dreamt?: number;
 }
 
 export interface MemoryHost {
@@ -62,8 +74,13 @@ export interface MemoryHost {
   /** The dream's message. */
   dream(progress: MemoryProgress): Promise<string>;
   progress(): Promise<MemoryProgress>;
-  saveProgress(progress: MemoryProgress): Promise<void>;
-  noted(note: MemoryNote): Promise<void>;
+  /** A fork wrote or deleted a file: kept at once, so it is told also when the fork fails or the process dies. */
+  changed(source: MemorySource, kind: "written" | "deleted", path: string): Promise<void>;
+  /**
+   * In one transaction: what the forks changed since the last settle becomes a note for the next wake and, for
+   * extraction, a memory change; and the progress moves as `update` says. Returns the new progress.
+   */
+  settle(update: MemorySettle): Promise<MemoryProgress>;
 }
 
 /** An extraction pass has at most this many turns, as in Claude Code; a dream has no cap, as there. */
@@ -107,54 +124,52 @@ function folderOf(path: string, folders: MemoryFolders): string | undefined {
   return [folders.own, folders.shared].find((folder) => within(path, folder));
 }
 
-/** Whether a path is a .md file inside a memory folder, also after links are followed. */
+/**
+ * Whether a path, absolute and normalized, is a .md file inside a memory folder with no symbolic link below the folder,
+ * also a dangling one: a tool that follows a link would write or delete outside the folder.
+ */
 async function memoryFile(path: string, folders: MemoryFolders): Promise<boolean> {
-  if (!path.endsWith(".md") || !folderOf(path, folders)) return false;
-  let probe = path;
-  const missing: string[] = [];
-  let real: string | undefined;
-  while (real === undefined) {
+  const folder = folderOf(path, folders);
+  if (!folder || !path.endsWith(".md")) return false;
+  let current = folder;
+  for (const part of path.slice(folder.length).split(sep).filter(Boolean)) {
+    current = join(current, part);
     try {
-      real = join(await realpath(probe), ...missing);
-    } catch {
-      const parent = dirname(probe);
-      if (parent === probe) return false;
-      missing.unshift(basename(probe));
-      probe = parent;
+      if ((await lstat(current)).isSymbolicLink()) return false;
+    } catch (error) {
+      // Nothing more of the path exists, so no link either; anything else is refused.
+      return (error as NodeJS.ErrnoException).code === "ENOENT";
     }
   }
-  for (const folder of [folders.own, folders.shared]) {
-    if (within(real, await realpath(folder).catch(() => folder))) return true;
-  }
-  return false;
+  return true;
 }
 
 // ---- Shell commands ----
+//
+// A fork's bash command is checked as bash runs it. The words are taken only from what bash passes on unchanged: plain
+// characters, single quotes, and double quotes without $, backticks or backslashes. Anything bash would expand or
+// interpret ($, backticks, backslashes, globs, braces, ~, ;, &, (, ), <, and > but in a redirect alone) is refused, so the
+// words checked are the words that run. Then each command of the pipeline must be one of a short list, with its options
+// allowlisted where an option could write or run something.
 
-/** The commands a memory fork may run, also joined by pipes, as Claude Code's list; sqlite3 only with -readonly and -safe. */
+/** The commands a memory fork may run, also joined by pipes; rm only alone, of .md files in the memory folders. */
 const READ_ONLY = new Set(["ls", "find", "grep", "cat", "stat", "wc", "head", "tail", "sqlite3"]);
-/** find's actions that write, delete or run programs. */
-const FIND_WRITES = new Set(["-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"]);
-/** Redirects that write nothing, as Claude Code allows them: to /dev/null, or one output into another. */
-const HARMLESS_REDIRECT = /^(?:\d*>&\d+|&?\d*>>?\s*\/dev\/null)(?=[\s|]|$)/;
+/** find's tests and actions that only read and print, and the operators. */
+const FIND_PRIMARIES = new Set(["-print", "-print0", "-ls", "-empty", "!", "-not", "-a", "-and", "-o", "-or", "(", ")"]);
+/** find's tests and options that take one argument. */
+const FIND_WITH_ARGUMENT = new Set(["-name", "-iname", "-path", "-ipath", "-type", "-maxdepth", "-mindepth", "-mtime", "-mmin", "-newer", "-size"]);
+/** sqlite3's output-format flags, after -readonly -safe. */
+const SQLITE_FORMATS = new Set(["-ascii", "-box", "-column", "-csv", "-html", "-json", "-line", "-list", "-markdown", "-quote", "-table", "-tabs", "-header", "-noheader"]);
+const SQLITE_FORMATS_WITH_ARGUMENT = new Set(["-separator", "-newline", "-nullvalue"]);
+/** A redirect that writes nothing, alone as a word: errors to /dev/null, or one output into another. */
+const REDIRECT = /^(?:2>\/dev\/null|\d>&\d)(?=[ \t|]|$)/;
 
-interface Word {
-  text: string;
-  /** Has an unquoted glob character, $, or a leading ~: the shell changes it. */
-  expands: boolean;
-}
-
-/** A command as words of piped commands, or undefined when it is more than that: lists, substitutions, redirects to files. */
-export function parseShell(command: string): Word[][] | undefined {
-  const pipeline: Word[][] = [[]];
-  let word: Word | undefined;
-  const add = (text: string, expands = false) => {
-    word ??= { text: "", expands: false };
-    word.text += text;
-    if (expands) word.expands = true;
-  };
+/** A command as the words of its piped commands, as bash passes them; or why it is refused. */
+export function parseShell(command: string): string[][] | string {
+  const pipeline: string[][] = [[]];
+  let word: string | undefined;
   const end = () => {
-    if (word) pipeline.at(-1)!.push(word);
+    if (word !== undefined) pipeline.at(-1)!.push(word);
     word = undefined;
   };
   for (let i = 0; i < command.length; i++) {
@@ -163,85 +178,90 @@ export function parseShell(command: string): Word[][] | undefined {
       end();
     } else if (char === "'") {
       const close = command.indexOf("'", i + 1);
-      if (close < 0) return undefined;
-      add(command.slice(i + 1, close));
+      if (close < 0) return "a quote is not closed";
+      word = (word ?? "") + command.slice(i + 1, close);
       i = close;
     } else if (char === '"') {
-      let text = "";
-      let closed = false;
-      for (i++; i < command.length; i++) {
-        const inner = command[i]!;
-        if (inner === '"') {
-          closed = true;
-          break;
-        }
-        if (inner === "`" || (inner === "$" && command[i + 1] === "(")) return undefined;
-        if (inner === "\\" && i + 1 < command.length) text += command[++i];
-        else text += inner;
-        if (inner === "$") add("", true);
-      }
-      if (!closed) return undefined;
-      add(text);
-    } else if (char === "\\") {
-      if (i + 1 >= command.length || command[i + 1] === "\n") return undefined;
-      add(command[++i]!);
+      const close = command.indexOf('"', i + 1);
+      if (close < 0) return "a quote is not closed";
+      const text = command.slice(i + 1, close);
+      if (/[$`\\]/.test(text)) return "$, backticks and backslashes are refused in double quotes; use single quotes";
+      word = (word ?? "") + text;
+      i = close;
     } else if (char === "|") {
-      if (command[i + 1] === "|" || command[i + 1] === "&") return undefined;
+      if (command[i + 1] === "|" || command[i + 1] === "&") return "|| and |& are refused";
       end();
-      if (pipeline.at(-1)!.length === 0) return undefined;
+      if (pipeline.at(-1)!.length === 0) return "a pipe has no command before it";
       pipeline.push([]);
-    } else if (char === ">" || (char === "&" && command[i + 1] === ">")) {
-      // A redirect such as 2>/dev/null or 2>&1: from the digits that start the word, if any.
-      const start = word && /^\d+$/.test(word.text) && !word.expands ? i - word.text.length : i;
-      const match = HARMLESS_REDIRECT.exec(command.slice(start));
-      if (!match) return undefined;
-      word = undefined;
-      i = start + match[0].length - 1;
-    } else if ("\n\r;&<()`".includes(char) || (char === "$" && command[i + 1] === "(") || (char === "#" && !word)) {
-      return undefined;
+    } else if (word === undefined && REDIRECT.test(command.slice(i))) {
+      // Not a word of the command: bash takes it away.
+      i += REDIRECT.exec(command.slice(i))![0].length - 1;
+    } else if ("$`\\*?[]{}~;&()<>#\n\r".includes(char)) {
+      return `${char === "\n" || char === "\r" ? "a new line" : char} is refused outside single quotes; a redirect may only be 2>/dev/null or N>&M, alone`;
     } else {
-      add(char, "*?[$".includes(char) || (char === "~" && !word));
+      word = (word ?? "") + char;
     }
   }
   end();
-  if (pipeline.some((words) => words.length === 0)) return undefined;
+  if (pipeline.some((words) => words.length === 0)) return "a pipe has no command after it";
   return pipeline;
 }
 
-/** Whether every command of the pipeline is one of the read-only ones, with no action that writes. */
-function readOnly(pipeline: Word[][]): boolean {
-  return pipeline.every((words) => {
-    const [program, ...args] = words;
-    if (!program || program.expands || !READ_ONLY.has(program.text)) return false;
-    if (program.text === "find") return !args.some((arg) => FIND_WRITES.has(arg.text));
-    if (program.text === "sqlite3") {
-      const flags = new Set(args.map((arg) => arg.text.replace(/^--/, "-")));
-      return flags.has("-readonly") && flags.has("-safe");
+/** Why a command of a pipeline is not one of the read-only ones, or undefined when it is. */
+function notReadOnly(words: readonly string[], first: boolean): string | undefined {
+  const [program, ...args] = words;
+  if (!program || !READ_ONLY.has(program)) return `${program ?? "it"} is not one of the commands that are permitted`;
+  if (program === "find") {
+    let i = 0;
+    while (i < args.length && !args[i]!.startsWith("-") && !["!", "(", ")"].includes(args[i]!)) i++;
+    for (; i < args.length; i++) {
+      if (FIND_WITH_ARGUMENT.has(args[i]!) && i + 1 < args.length) i++;
+      else if (!FIND_PRIMARIES.has(args[i]!)) return `find takes only ${[...FIND_WITH_ARGUMENT, ...FIND_PRIMARIES].join(" ")} here, not ${args[i]}`;
     }
-    return true;
-  });
+  }
+  if (program === "sqlite3") {
+    if (!first) return "sqlite3 may not read from a pipe";
+    if (args[0] !== "-readonly" || args[1] !== "-safe") return "sqlite3 must start with -readonly -safe";
+    let i = 2;
+    for (; i < args.length && args[i]!.startsWith("-"); i++) {
+      if (SQLITE_FORMATS_WITH_ARGUMENT.has(args[i]!) && i + 1 < args.length) i++;
+      else if (!SQLITE_FORMATS.has(args[i]!)) return `sqlite3 takes only output-format flags after -readonly -safe, not ${args[i]}`;
+    }
+    // The database, then SQL: a word that starts with "-" would be an option, one that starts with "." a dot-command.
+    if (args.slice(i).some((arg) => /^\s*[-.]/.test(arg))) return 'after the database, sqlite3 takes only SQL, no word that starts with "-" or "."';
+  }
+  return undefined;
 }
 
-/** The files of an rm as Claude Code allows it: one command, no flags but -f, absolute paths the shell does not change. */
-function rmTargets(pipeline: Word[][]): string[] | undefined {
-  if (pipeline.length !== 1) return undefined;
-  const [program, ...args] = pipeline[0]!;
-  if (program?.text !== "rm" || program.expands) return undefined;
+/** The files of an rm as Claude Code allows it: one command, no flags but -f, absolute paths with no "..". */
+function rmTargets(pipeline: readonly string[][]): string[] | undefined {
+  if (pipeline.length !== 1 || pipeline[0]![0] !== "rm") return undefined;
   const paths: string[] = [];
   let options = true;
-  for (const arg of args) {
-    if (options && arg.text === "--") {
-      options = false;
-      continue;
-    }
-    if (options && arg.text.startsWith("-")) {
-      if (arg.text === "-f" || arg.text === "--force") continue;
-      return undefined;
-    }
-    if (arg.expands || !isAbsolute(arg.text) || arg.text.split(/[/\\]/).includes("..")) return undefined;
-    paths.push(arg.text);
+  for (const arg of pipeline[0]!.slice(1)) {
+    if (options && arg === "--") options = false;
+    else if (options && arg.startsWith("-")) {
+      if (arg !== "-f" && arg !== "--force") return undefined;
+    } else if (!isAbsolute(arg) || arg.split(/[/\\]/).includes("..")) return undefined;
+    else paths.push(resolve(arg));
   }
   return paths.length > 0 ? paths : undefined;
+}
+
+/** The constraints a fork's refused bash command is told, with why it was refused. */
+function shellConstraints(why: string, where: string): string {
+  return (
+    `Refused: ${why}. Only read-only shell commands (ls, find, grep, cat, stat, wc, head, tail and sqlite3 -readonly -safe, also joined by pipes) and rm (no flags except -f) of .md files under ${where} are permitted in this context. ` +
+    "Anything else that writes, redirects to a file, runs other programs or modifies state is denied."
+  );
+}
+
+/** The files a fork's tool call changes: write and edit's path, rm's files. */
+function targets(name: string, args: Record<string, unknown>, cwd: string): string[] {
+  if ((name === "write" || name === "edit") && typeof args.path === "string") return [toolPath(cwd, args.path)];
+  if (name !== "bash" || typeof args.command !== "string") return [];
+  const pipeline = parseShell(args.command);
+  return (typeof pipeline !== "string" && rmTargets(pipeline)) || [];
 }
 
 /** Why a memory fork may not run this tool call, or undefined when it may. */
@@ -250,19 +270,20 @@ export async function forkRefusal(name: string, args: Record<string, unknown>, f
   if (name === "read") return undefined;
   if ((name === "write" || name === "edit") && typeof args.path === "string" && (await memoryFile(toolPath(cwd, args.path), folders))) return undefined;
   if (name === "bash") {
-    const pipeline = typeof args.command === "string" ? parseShell(args.command) : undefined;
-    if (pipeline && readOnly(pipeline)) return undefined;
-    const targets = pipeline && rmTargets(pipeline);
-    if (targets && (await Promise.all(targets.map((path) => memoryFile(path, folders)))).every(Boolean)) return undefined;
-    return (
-      `Only read-only shell commands (ls, find, grep, cat, stat, wc, head, tail and sqlite3 -readonly -safe, also joined by pipes) and rm (no flags except -f) of .md files under ${where} are permitted in this context. ` +
-      "Anything else that writes, redirects to a file, runs other programs or modifies state is denied."
-    );
+    const pipeline = typeof args.command === "string" ? parseShell(args.command) : "there is no command";
+    if (typeof pipeline === "string") return shellConstraints(pipeline, where);
+    const why = pipeline.map((words, index) => notReadOnly(words, index === 0)).find((each) => each !== undefined);
+    if (why === undefined) return undefined;
+    if (pipeline[0]![0] !== "rm") return shellConstraints(why, where);
+    const files = rmTargets(pipeline);
+    if (!files) return shellConstraints("rm runs only alone, with no flags but -f, of absolute paths without ..", where);
+    for (const file of files) if (!(await memoryFile(file, folders))) return shellConstraints(`${file} is not a .md file in a memory folder, or a link is on its way`, where);
+    return undefined;
   }
   return `only read, read-only bash, and write/edit of .md files within ${where} are allowed in this context`;
 }
 
-/** Whether a main agent's tool call wrote, edited or deleted a file in a memory folder. */
+/** Whether a main agent's tool call meant to write, edit or delete a file in a memory folder. */
 function writesMemory(name: string, args: Record<string, unknown>, folders: MemoryFolders, cwd: string): boolean {
   if ((name === "write" || name === "edit") && typeof args.path === "string") return folderOf(toolPath(cwd, args.path), folders) !== undefined;
   if ((name !== "bash" && name !== "screen") || typeof args.command !== "string") return false;
@@ -272,7 +293,7 @@ function writesMemory(name: string, args: Record<string, unknown>, folders: Memo
     .some((token) => token.length > 0 && folderOf(resolve(cwd, token.replace(/^~(?=\/|$)/, homedir())), folders) !== undefined);
   if (!mentioned) return false;
   const pipeline = parseShell(command);
-  return !pipeline || !readOnly(pipeline);
+  return typeof pipeline === "string" || pipeline.some((words, index) => notReadOnly(words, index === 0) !== undefined);
 }
 
 // ---- The age note ----
@@ -295,10 +316,17 @@ export async function withAgeNote(result: ToolExecutionResult, path: string, fol
 // ---- The passes ----
 
 interface Fork {
+  source: MemorySource;
+  /** When the pass began: a memory file changed after it, the fork must read before it changes it. */
+  startedAt: number;
+  /** The modification time of each file as the fork last read or wrote it. */
+  seen: Map<string, number>;
+  /** Per rm call, the files that were there before it. */
+  existed: Map<string, string[]>;
   rounds: number;
   maxTurns?: number;
-  written: Set<string>;
-  deleted: Set<string>;
+  written: number;
+  deleted: number;
 }
 
 /** The messages of the context after entry `after`, all of them without it: what came in, what the agent said and its tool results. */
@@ -337,21 +365,50 @@ export class MemoryPasses {
       name: "memory-fork",
       hooks: [
         hook(ToolTask, {
-          beforeTool: async (call) => {
+          beforeTool: async (call, api) => {
             const refusal = await forkRefusal(call.name, call.arguments, this.#host.folders, this.#cwd);
             if (refusal !== undefined) return { block: refusal };
+            // A file another writer, such as the main agent, changed after the pass began: the fork's copy is old.
+            const state = fork(api.conversationId);
+            const existed: string[] = [];
+            for (const path of state ? targets(call.name, call.arguments, this.#cwd) : []) {
+              const changed = (await lstat(path).catch(() => undefined))?.mtimeMs;
+              const seen = state!.seen.get(path);
+              if (changed !== undefined && changed > state!.startedAt && (seen === undefined || changed > seen)) {
+                return { block: `${path} changed after this memory pass began. Read it again before you change it.` };
+              }
+              if (changed !== undefined) existed.push(path);
+            }
+            if (state && call.name === "bash") state.existed.set(call.id, existed);
             // The passes run one at a time: a command that never ends, such as tail -f, must not hold up the next ones.
             if (call.name === "bash" && call.arguments.timeout === undefined) return { arguments: { ...call.arguments, timeout: SHELL_TIMEOUT_SECONDS } };
             return undefined;
           },
-          afterTool: (call, result, api) => {
+          // What the fork changed is kept as it does it, so it is told also when the fork fails or the process dies.
+          afterTool: async (call, result, api) => {
             const state = fork(api.conversationId);
-            if (!state || result.isError) return undefined;
-            const args = call.arguments;
-            if ((call.name === "write" || call.name === "edit") && typeof args.path === "string") state.written.add(toolPath(this.#cwd, args.path));
-            if (call.name === "bash" && typeof args.command === "string") {
-              const pipeline = parseShell(args.command);
-              for (const path of (pipeline && rmTargets(pipeline)) ?? []) if (!existsSync(path)) state.deleted.add(path);
+            if (!state) return undefined;
+            const mtime = async (path: string) => (await lstat(path).catch(() => undefined))?.mtimeMs;
+            if (call.name === "read" && typeof call.arguments.path === "string" && !result.isError) {
+              const path = toolPath(this.#cwd, call.arguments.path);
+              const changed = await mtime(path);
+              if (changed !== undefined) state.seen.set(path, changed);
+            }
+            // An rm that failed for one file may have deleted another: what is gone counts.
+            const existed = state.existed.get(call.id) ?? [];
+            state.existed.delete(call.id);
+            for (const path of targets(call.name, call.arguments, this.#cwd)) {
+              const changed = await mtime(path);
+              if (call.name === "bash") {
+                if (changed !== undefined || !existed.includes(path)) continue;
+                state.seen.delete(path);
+                state.deleted++;
+                await this.#host.changed(state.source, "deleted", path);
+              } else if (changed !== undefined && !result.isError) {
+                state.seen.set(path, changed);
+                state.written++;
+                await this.#host.changed(state.source, "written", path);
+              }
             }
             return undefined;
           },
@@ -378,6 +435,11 @@ export class MemoryPasses {
   attach(harness: Harness, root: Conversation): void {
     this.#harness = harness;
     this.#root = root;
+  }
+
+  /** What a fork changed before the last process stopped or died: its note and memory change, before any new pass. */
+  async recover(): Promise<void> {
+    await this.#host.settle({});
   }
 
   /** A run of the main conversation answered with entry `at`: a pass for it, now or after the one that runs. */
@@ -416,42 +478,47 @@ export class MemoryPasses {
     if (progress.cursor !== undefined && at <= progress.cursor) return;
     const messages = since(await this.#root!.context(this.#context, { at: at as EntryId }), progress.cursor);
     const folders = this.#host.folders;
+    // Only a call whose result says it worked: an edit whose text did not match saved nothing.
+    const worked = new Set(messages.flatMap((message) => (message.role === "toolResult" && !message.isError ? [message.toolCallId] : [])));
     const wrote = messages.some(
-      (message) => message.role === "assistant" && message.content.some((part) => part.type === "toolCall" && writesMemory(part.name, part.arguments, folders, this.#cwd)),
+      (message) =>
+        message.role === "assistant" &&
+        message.content.some((part) => part.type === "toolCall" && worked.has(part.id) && writesMemory(part.name, part.arguments, folders, this.#cwd)),
     );
     let next: MemoryProgress;
     if (wrote) {
       // The main agent saved what it wanted itself: that counts as a memory change, as Claude Code skips the pass.
       this.#log("memory pass skipped: the main agent wrote memory itself", { messages: messages.length });
-      next = { ...progress, cursor: at, changes: progress.changes + 1 };
+      next = await this.#host.settle({ cursor: at, change: true });
     } else {
       this.beforePass?.();
-      const changed = await this.#fork(at, await this.#host.extraction(messages.length), EXTRACTION_TURNS);
-      if (!changed) return;
-      this.#log("memory pass", { messages: messages.length, written: changed.written.length, deleted: changed.deleted.length });
-      const any = changed.written.length + changed.deleted.length > 0;
-      next = { ...progress, cursor: at, changes: progress.changes + (any ? 1 : 0) };
-      if (any) await this.#host.noted({ source: "extract", ...changed });
+      const ended = await this.#fork("extract", at, await this.#host.extraction(messages.length), EXTRACTION_TURNS);
+      if (!ended) return;
+      // What it changed counts also when its model failed; then the next pass looks at the same messages again.
+      next = await this.#host.settle(ended.answered ? { cursor: at } : {});
+      if (!ended.answered) return;
+      this.#log("memory pass", { messages: messages.length, written: ended.written, deleted: ended.deleted });
     }
-    await this.#host.saveProgress(next);
     if (!this.#closing && this.#host.enabled() && dreamDue(next)) await this.#dream(at, next);
   }
 
   async #dream(at: number, progress: MemoryProgress): Promise<void> {
-    const changed = await this.#fork(at, await this.#host.dream(progress));
-    if (!changed) return;
-    this.#log("memory dream", { written: changed.written.length, deleted: changed.deleted.length });
-    await this.#host.saveProgress({ ...(progress.cursor === undefined ? {} : { cursor: progress.cursor }), changes: 0, dreamAt: Date.now() });
-    if (changed.written.length + changed.deleted.length > 0) await this.#host.noted({ source: "dream", ...changed });
+    const ended = await this.#fork("dream", at, await this.#host.dream(progress));
+    if (!ended) return;
+    // Its note and the new progress in one transaction: a crash keeps both or neither.
+    await this.#host.settle(ended.answered ? { dreamt: Date.now() } : {});
+    if (ended.answered) this.#log("memory dream", { written: ended.written, deleted: ended.deleted });
   }
 
   /**
-   * Fork the main conversation at `at`, give the fork the message, and wait until it ends. Returns the files it wrote
-   * and deleted, or undefined when its model failed or the gateway stops. The fork is deleted after.
+   * Fork the main conversation at `at`, give the fork the message, and wait until it ends. Returns whether it ended as
+   * it should (answered, or at its turn cap) and how many files it wrote and deleted, or undefined when the gateway
+   * stops. The fork is deleted after.
    */
-  async #fork(at: number, message: string, maxTurns?: number): Promise<{ written: string[]; deleted: string[] } | undefined> {
+  async #fork(source: MemorySource, at: number, message: string, maxTurns?: number): Promise<{ answered: boolean; written: number; deleted: number } | undefined> {
     const root = this.#root!;
     const context = this.#context;
+    const startedAt = Date.now();
     const id = await root.commit(async (tx) => {
       const conversation = await tx.forkConversation(ROOT_CONVERSATION_ID, at as EntryId, { ownership: { kind: "ownerless" } });
       // pi-durable gives a fork a session of its own; with the main conversation's, the provider finds its cache.
@@ -460,7 +527,7 @@ export class MemoryPasses {
       await configure(tx, conversation.id, { extensions: { add: [this.extension] } });
       return conversation.id;
     }, context);
-    const state: Fork = { rounds: 0, ...(maxTurns === undefined ? {} : { maxTurns }), written: new Set(), deleted: new Set() };
+    const state: Fork = { source, startedAt, seen: new Map(), existed: new Map(), rounds: 0, ...(maxTurns === undefined ? {} : { maxTurns }), written: 0, deleted: 0 };
     this.#forks.set(Number(id), state);
     try {
       const fork = (await this.#harness!.conversation(id, context))!;
@@ -468,12 +535,9 @@ export class MemoryPasses {
       const settled = await submission.wait(context);
       if (this.#closing) return undefined;
       const capped = state.maxTurns !== undefined && state.rounds >= state.maxTurns;
-      if (settled.status !== "done" && !capped) {
-        this.#log("memory pass got no answer", { reason: settled.status === "unanswered" ? settled.reason : "unknown" });
-        return undefined;
-      }
-      const deleted = [...state.deleted];
-      return { written: [...state.written].filter((path) => !deleted.includes(path)), deleted };
+      const answered = settled.status === "done" || capped;
+      if (!answered) this.#log("memory pass got no answer", { source, reason: settled.status === "unanswered" ? settled.reason : "unknown" });
+      return { answered, written: state.written, deleted: state.deleted };
     } finally {
       this.#forks.delete(Number(id));
       if (!this.#closing) await this.#delete(id);

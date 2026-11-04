@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { dreamDue, forkRefusal, type MemoryFolders, withAgeNote } from "../src/agent/memory.ts";
-import { cutIndex, listMemoryFiles } from "../src/bot/memory.ts";
+import { openDatabase } from "../src/agent/agent.ts";
+import { claimMemoryNotes, cutIndex, dropMemoryNotes, listMemoryFiles, recordMemoryChange, settleMemory } from "../src/bot/memory.ts";
 import { agentRequests, coworker, type FakeModel, type FakeReply, type FakeRequest, isDream, isMemoryPass, lastUser, startFakeModel, wakes } from "./support/fake-model.ts";
 import { ME, pause, TestGateway, waitFor } from "./support/gateway.ts";
 
@@ -134,10 +135,13 @@ describe("memory", { timeout: 90_000 }, () => {
     expect(forks()).toEqual([]);
   });
 
-  it("is skipped when the main agent wrote memory itself, and a memory file read 2 days after it changed says how old it is", async () => {
+  it("is skipped when the main agent wrote memory itself, not when its write failed, and a memory file read 2 days after it changed says how old it is", async () => {
     const script = (request: FakeRequest): FakeReply => {
       const last = request.messages.at(-1)!;
       const memory = /You have a persistent file-based memory at `(\S+)\/`/.exec(request.system)![1]!;
+      if (last.role === "user" && last.content.includes("try to note")) {
+        return { call: { name: "edit", arguments: { path: join(memory, "old.md"), edits: [{ oldText: "not there", newText: "x" }] } } };
+      }
       if (last.role === "user" && last.content.includes("remember")) return { call: { name: "read", arguments: { path: join(memory, "old.md") } } };
       if (last.role === "tool" && request.messages.at(-2)?.toolCalls?.[0] === "read") return write(join(memory, "bob.md"), "Bob wants short replies.\n");
       return coworker(request);
@@ -145,18 +149,73 @@ describe("memory", { timeout: 90_000 }, () => {
     await setUp(undefined, script);
     writeFileSync(join(own(), "old.md"), "An old memory.\n");
     utimesSync(join(own(), "old.md"), new Date(Date.now() - 3 * DAY), new Date(Date.now() - 3 * DAY));
+    // An edit whose text does not match saved nothing: the pass runs.
+    gateway.say("general", "bob", `@${ME} try to note this`);
+    await waitFor(() => passes().length === 1, { what: "the pass after the failed edit" });
     gateway.say("general", "bob", `@${ME} remember that I want short replies`);
     await waitFor(() => gateway.output.some((line) => line.message === "memory pass skipped: the main agent wrote memory itself"), { what: "the skipped pass" });
-    expect(model.requests.filter(isMemoryPass)).toHaveLength(0);
+    expect(model.requests.filter(isMemoryPass)).toHaveLength(1);
     expect(readFileSync(join(own(), "bob.md"), "utf8")).toBe("Bob wants short replies.\n");
-    const read = agentRequests(model).find((request) => request.messages.at(-1)?.role === "tool")!;
+    const read = agentRequests(model).find((request) => request.messages.at(-1)?.role === "tool" && request.messages.at(-2)?.toolCalls?.[0] === "read")!;
     expect(read.messages.at(-1)!.content).toMatch(/^<system-reminder>This memory is 3 days old\. Memories are point-in-time observations, not live state — claims about people, places, files or plans may be outdated\.[^<]*<\/system-reminder>\nAn old memory\.\n?$/);
     expect(state("memory_changes")).toBe("1");
 
     // The cursor moved on: the next pass looks only at the next run.
     gateway.say("general", "bob", `@${ME} thanks`);
+    await waitFor(() => passes().length === 2, { what: "the next pass" });
+    expect(passes()[1]!.messages).toBe(4);
+  });
+
+  it("refuses a fork's change to a memory file that another writer changed since the pass began, until the fork reads it again", async () => {
+    let wake2 = false;
+    const drink = () => join(own(), "drink.md");
+    const script = (request: FakeRequest): FakeReply => {
+      const last = request.messages.at(-1)!;
+      if (last.role === "user" && last.content.includes("I drink coffee now")) return write(drink(), "Coffee.\n");
+      return coworker(request);
+    };
+    await setUp(async (request) => {
+      if (!request.messages.filter((message) => message.role === "user").at(-2)?.content.includes("I drink tea")) return { text: "Nothing to save." };
+      switch (turn(request)) {
+        case 0:
+          // A slow pass: the main agent saves something newer meanwhile.
+          wake2 = true;
+          await waitFor(() => existsSync(drink()), { what: "the main agent's write" });
+          return write(drink(), "Tea.\n");
+        case 1:
+          return { call: { name: "read", arguments: { path: drink() } } };
+        case 2:
+          return write(drink(), "Coffee, tea before.\n");
+        default:
+          return { text: "Saved." };
+      }
+    }, script);
+    gateway.say("general", "alice", `@${ME} I drink tea`);
+    await waitFor(() => wake2, { what: "the pass" });
+    gateway.say("general", "alice", `@${ME} I drink coffee now`);
+    await waitFor(() => passes().length === 1, { what: "the slow pass" });
+    const results = model.requests.filter(isMemoryPass).at(-1)!.messages.filter((message) => message.role === "tool");
+    expect(results.at(-3)!.content).toContain(`Tool call blocked: ${drink()} changed after this memory pass began. Read it again before you change it.`);
+    // Once it read the file again, it may change it.
+    expect(readFileSync(drink(), "utf8")).toBe("Coffee, tea before.\n");
+  });
+
+  it("tells the next wake what a fork changed also when its model failed after, and keeps the cursor", async () => {
+    await setUp((request) => {
+      if (!request.messages.filter((message) => message.role === "user").at(-2)?.content.includes("I like tea")) return { text: "Nothing to save." };
+      return turn(request) === 0 ? write(join(own(), "tea.md"), "Tea.\n") : { fail: { status: 401, message: "the login expired" } };
+    });
+    gateway.say("general", "alice", `@${ME} I like tea`);
+    await waitFor(() => gateway.output.some((line) => line.message === "memory pass got no answer"), { what: "the failed pass" });
+    expect(state("memory_cursor")).toBeUndefined();
+    expect(state("memory_changes")).toBe("1");
+    expect(forks()).toEqual([]);
+    gateway.say("general", "alice", `@${ME} anything else?`);
     await waitFor(() => passes().length === 1, { what: "the next pass" });
-    expect(passes()[0]!.messages).toBe(4);
+    expect(wakes(model).at(-1)!).toMatch(/Background memory extraction updated your memory: saved 1 memory\nFiles changed: \S+\/tea\.md\n/);
+    // The same messages again, with the new ones.
+    expect(passes()[0]!.messages).toBe(8);
+    gateway.output.splice(gateway.output.findIndex((line) => line.message === "memory pass got no answer"), 1);
   });
 
   it("catches up after a restart, and deletes a fork the stop left", async () => {
@@ -213,12 +272,19 @@ describe("memory", { timeout: 90_000 }, () => {
     expect(state("memory_changes")).toBe("1");
   });
 
-  it("is off with settings.autoMemory false: no memory section and no pass", async () => {
-    await setUp(undefined, coworker, { autoMemory: false });
+  it("is off with settings.autoMemory false: no memory section and no pass, at once when it is set while running", async () => {
+    await setUp();
     gateway.say("general", "alice", `@${ME} hello`);
-    await waitFor(() => gateway.sent().length === 1, { what: "the reply" });
+    await waitFor(() => passes().length === 1, { what: "the pass" });
+    expect(agentRequests(model).at(-1)!.system).toContain("# Memory");
+    const file = join(gateway.botDir, "bot.json");
+    const definition = JSON.parse(readFileSync(file, "utf8")) as { settings: Record<string, unknown> };
+    writeFileSync(file, JSON.stringify({ ...definition, settings: { ...definition.settings, autoMemory: false } }));
+    await waitFor(() => gateway.output.some((line) => line.message === "definition applied"), { what: "the new definition" });
+    gateway.say("general", "alice", `@${ME} hello again`);
+    await waitFor(() => gateway.sent().length === 2, { what: "the second reply" });
     await pause(1_500);
-    expect(model.requests.filter(isMemoryPass)).toHaveLength(0);
+    expect(model.requests.filter(isMemoryPass)).toHaveLength(1);
     expect(agentRequests(model).at(-1)!.system).not.toContain("# Memory");
   });
 });
@@ -237,6 +303,8 @@ describe("memory parts", () => {
     make();
     const cwd = join(dir, "bot", "workspace");
     symlinkSync(join(dir, "outside"), join(folders.own, "link"));
+    symlinkSync(join(dir, "outside", "missing.txt"), join(folders.own, "dangling.md"));
+    const outside = join(dir, "outside");
     const refused = async (name: string, args: Record<string, unknown>) => (await forkRefusal(name, args, folders, cwd)) !== undefined;
     for (const command of [
       "ls -la",
@@ -246,6 +314,10 @@ describe("memory parts", () => {
       `sqlite3 -readonly -safe ${dir}/bot.sqlite "SELECT text FROM gw_messages LIMIT 5"`,
       `rm -f ${folders.own}/old.md ${folders.shared}/x.md`,
       `rm -- ${folders.own}/new.md`,
+      `find ${folders.own} -maxdepth 2 -type f -name '*.md' -mtime -2 -print`,
+      `find ${folders.own} ! -name MEMORY.md -o -newer ${folders.own}/MEMORY.md`,
+      `grep -c 'a$' ${folders.own}/MEMORY.md 2>&1`,
+      `sqlite3 -readonly -safe -json -header ${dir}/bot.sqlite "SELECT 1"`,
     ]) {
       expect(await refused("bash", { command }), command).toBe(false);
     }
@@ -274,6 +346,28 @@ describe("memory parts", () => {
       `/bin/rm ${folders.own}/a.md`,
       `ls | rm ${folders.own}/a.md`,
       "ls\ntouch x",
+      // What a review found: a word before a redirect, braces, $'...', sqlite3's .nonce.
+      `find ${outside} -delete>/dev/null`,
+      `rm -f ${folders.own}/a.md ${outside}/b.md>/dev/null`,
+      `rm -f ${folders.own}/{keep,../outside}.md`,
+      `find ${outside} $'-delete'`,
+      `sqlite3 -readonly -safe -nonce secret :memory: '.nonce secret' '.shell touch /tmp/escaped'`,
+      // What bash would expand or interpret, and options that are not on the lists.
+      `find ${outside} $"-delete"`,
+      `find ${outside} \\-delete`,
+      `ls ${folders.own}/*.md`,
+      "cat ~/.ssh/id_rsa",
+      'grep -r "a$HOME" .',
+      "ls >/dev/null",
+      "ls 2> /dev/null",
+      `find ${outside} -fprint x`,
+      `find ${outside} -printf x`,
+      `sqlite3 -safe -readonly ${dir}/bot.sqlite "SELECT 1"`,
+      `sqlite3 -readonly -safe -cmd '.shell x' ${dir}/bot.sqlite`,
+      `sqlite3 -readonly -safe ${dir}/bot.sqlite " .shell touch x"`,
+      `sqlite3 -readonly -safe ${dir}/bot.sqlite -cmd x`,
+      `cat x.sql | sqlite3 -readonly -safe ${dir}/bot.sqlite`,
+      `rm ${folders.own}/dangling.md`,
     ]) {
       expect(await refused("bash", { command }), command).toBe(true);
     }
@@ -284,7 +378,23 @@ describe("memory parts", () => {
     expect(await refused("write", { path: join(folders.own, "a.txt"), content: "" })).toBe(true);
     expect(await refused("write", { path: join(folders.own, "link", "a.md"), content: "" })).toBe(true);
     expect(await refused("write", { path: join(dir, "outside", "a.md"), content: "" })).toBe(true);
+    // A link below the memory folder, also one that leads nowhere yet: write would follow it.
+    expect(await refused("write", { path: join(folders.own, "dangling.md"), content: "" })).toBe(true);
     for (const name of ["screen", "send", "react", "call", "task"]) expect(await refused(name, {}), name).toBe(true);
+  });
+
+  it("gives each note to one wake only, and the same wake given again the same notes, also when two take them at once", async () => {
+    const sql = await openDatabase(":memory:");
+    await sql.exec("CREATE TABLE bot_state (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE bot_wakes (id TEXT PRIMARY KEY)");
+    await recordMemoryChange(sql, "extract", "written", "/m/a.md");
+    expect(await settleMemory(sql, { cursor: 7 })).toEqual({ cursor: 7, changes: 1 });
+    const [one, two] = await Promise.all([claimMemoryNotes(sql, "wake-1"), claimMemoryNotes(sql, "wake-2")]);
+    expect(one!.map((note) => note.written)).toEqual([["/m/a.md"]]);
+    expect(two).toEqual([]);
+    expect(await claimMemoryNotes(sql, "wake-1")).toEqual(one);
+    await dropMemoryNotes(sql, "wake-1");
+    expect(await claimMemoryNotes(sql, "wake-3")).toEqual([]);
+    await sql.close();
   });
 
   it("dreams when 24 hours passed since the last dream and 5 memory changes came since then", () => {

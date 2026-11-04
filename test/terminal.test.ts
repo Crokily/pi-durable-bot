@@ -182,18 +182,23 @@ describe.skipIf(!python)("pots in a terminal", { timeout: 90_000 }, () => {
   });
 });
 
-// The tests above set BROWSER so that a sign-in opens no page.
-describe.skipIf(process.platform === "win32")("pots opens a page", () => {
+// The tests above set BROWSER so that a sign-in opens no page. xdg-open reads it on Linux; on macOS pots reads it.
+describe.runIf(process.platform === "darwin")("pots opens a page on macOS", () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it("with $BROWSER and its arguments when it is set", async () => {
+  it("with the first command in $BROWSER that starts, and its arguments", async () => {
     home = mkdtempSync(join(tmpdir(), "pots-browser-"));
-    const browser = join(home, "browser");
     const opened = join(home, "opened");
-    writeFileSync(browser, `#!/bin/sh\nprintf '%s\\n' "$@" > "${opened}"\n`, { mode: 0o755 });
-    vi.stubEnv("BROWSER", ` ${browser} --new-window `);
+    const recorder = (name: string) => {
+      writeFileSync(join(home, name), `#!/bin/sh\necho ${name} "$@" >> "${opened}"\n`, { mode: 0o755 });
+      return join(home, name);
+    };
+    // A fake open, first on PATH, so that this test opens no page when pots does not read $BROWSER.
+    recorder("open");
+    vi.stubEnv("PATH", `${home}:${process.env.PATH}`);
+    vi.stubEnv("BROWSER", `${join(home, "missing")}:${recorder("browser")} --new-window`);
     const url = "https://auth.example.com/authorize?a=1&b=2";
     openBrowser(url);
-    await vi.waitFor(() => expect(readFileSync(opened, "utf8")).toBe(`--new-window\n${url}\n`), { timeout: 5_000 });
+    await vi.waitFor(() => expect(readFileSync(opened, "utf8")).toBe(`browser --new-window ${url}\n`), { timeout: 3_000 });
   });
 });

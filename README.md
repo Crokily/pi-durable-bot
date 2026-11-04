@@ -206,7 +206,7 @@ flowchart LR
 
 - Messages that arrive close together are grouped: it waits 3 seconds after the last one (20 seconds at most) before it decides.
 - If it is already working in a place, itself or with a child, new messages there are handed to it as it works, so it can change course.
-- The wake message says where, who, why and when, and gives each new message's text, the start of its thread when it is a reply, and its files. The gateway downloads files as soon as a message comes, so the wake gives their paths on the machine. A file over 10 MB is not downloaded, and the wake waits for the other downloads at most 10 seconds past the moment it would go out without them; for a file that is not saved, it gives the URL, and the bot downloads it itself if it needs it. Earlier messages and other details are in the log.
+- The wake message says where, who, why and when, and gives each new message's text, the start of its thread when it is a reply, and its files. The gateway downloads files as soon as a message comes, into the bot's `files/tmp/`, so the wake gives their paths on the machine; it deletes them 30 days later, and the log keeps each file's name, type, size and URL, so the bot can download it again. A file over 10 MB is not downloaded, and the wake waits for the other downloads at most 10 seconds past the moment it would go out without them; for a file that is not saved, it gives the URL, and the bot downloads it itself if it needs it. Earlier messages and other details are in the log.
 
 ## How it works
 
@@ -254,7 +254,7 @@ One gateway process runs every bot on the machine. Everything lives in `~/.pots/
 | `responsibilities.md` | What it is responsible for. The judge reads it. The bot maintains it. |
 | `notes.md` | Its handoff to the next page: what it is doing and what it promised. |
 | `workspace/` | Its working directory. |
-| `files/` | Files people sent in messages: one folder per message, and in it one numbered folder per file. |
+| `files/` | Files people sent in messages, in `files/tmp/`: one folder per message, and in it one numbered folder per file. Pots deletes them 30 days after they were saved, and nothing else in the bot folder; the bot moves or copies out of `files/tmp/` what it keeps. |
 | `terminal/` | Its terminal channel: what you and the bot say in `pots chat`. |
 | `bot.sqlite` | Message log, timers, its memory and the agent's journal in one file. |
 

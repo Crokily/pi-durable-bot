@@ -3,7 +3,7 @@ import { age, type ChildEnd, type ChildInfo, describeChild } from "../agent/chil
 import type { PersonInfo } from "../core/channel.ts";
 import { formatTime } from "../core/time.ts";
 import type { PlaceWake, WakeEvent, WakeFile } from "../core/wake.ts";
-import { MAX_FILE_BYTES } from "../gateway/files.ts";
+import { FILE_DAYS, MAX_FILE_BYTES } from "../gateway/files.ts";
 import { LOG_SCHEMA } from "../gateway/log.ts";
 import type { Timer } from "../gateway/timers.ts";
 import type { BotPaths } from "./definition.ts";
@@ -119,7 +119,7 @@ export function folderSection(facts: PromptFacts): string {
 - responsibilities.md: what you are responsible for. The judge uses it to decide whether an event that does not mention you is about you. When your responsibilities change, update it.
 - notes.md: your handoff to the next page: what you are doing, what you promised, how far you got. After you turn the page, you find what you need again from them and the message log. What you want to know beyond that goes into your memory.
 - workspace/: your working directory.
-- files/: the files of messages people send, one folder per message. They are saved when the message comes, and the wake gives each file's path. Files over ${MAX_FILE_BYTES / 1024 / 1024} MB, and files not saved in time, are not saved: the wake gives their URL, and you download them yourself if you need them; a file URL may need the channel account's token.
+- files/: the files of messages people send. They are saved under files/tmp/, one folder per message, when the message comes, and the wake gives each file's path. Pots deletes them ${FILE_DAYS} days after they are saved; to keep one, move or copy it out of files/tmp/. Files over ${MAX_FILE_BYTES / 1024 / 1024} MB, and files not saved in time, are not saved: the wake gives their URL, and you download them yourself if you need them. The message log keeps each file's name, type, size and URL (gw_messages.files), so you can download a file again later from the platform. A file URL may need the channel account's token.
 - Channel types: slack, terminal (the person who set you up, in their terminal), test. How to connect a new chat app yourself is in ${facts.docs}/channels/; put its tokens in ${facts.secretsDir}, readable only by this user. When the person has to give you secrets, such as tokens they copied, ask in the terminal channel with call <its channel id> ask-secret {"text": "…", "file": "<app>.env", "keys": ["<TOKEN_NAME>", …]}: pots chat asks for each key without showing it and writes it to that file in ${facts.secretsDir}, and you get a message that names the keys it wrote. You never see the values, so they stay out of your log.
 - Other bots are in ${facts.botsDir}, one subfolder per bot. You can change their definitions. A new folder with a bot.json is a new bot.`;
 }

@@ -18,7 +18,7 @@ export interface GatewayOptions {
   readonly fallbackWakeMinutes: () => number;
   /** Hand a due timer to the bot. Resolves once the wake is durable. caller: the wake's span. */
   readonly fireTimer: (timer: Timer, caller?: TelemetrySpan) => Promise<Delivered>;
-  /** Where the files of messages are saved, one folder per message. */
+  /** Where the files of messages are saved, one folder per message. What is in it is deleted FILE_DAYS days after it was saved. */
   readonly filesDir: string;
   readonly print: Print;
 }

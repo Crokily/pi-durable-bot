@@ -70,8 +70,8 @@ export function botPaths(dir: string) {
     responsibilities: join(dir, "responsibilities.md"),
     notes: join(dir, "notes.md"),
     workspace: join(dir, "workspace"),
-    /** Files of messages people sent, one folder per message. */
-    files: join(dir, "files"),
+    /** Where the gateway saves the files of messages people sent, one folder per message; it deletes them 30 days later. */
+    files: join(dir, "files", "tmp"),
     db: join(dir, "bot.sqlite"),
     socket: controlAddress(dir),
     crashAfterSend: join(dir, "crash-after-send"),

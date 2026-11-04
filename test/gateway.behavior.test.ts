@@ -1,5 +1,5 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { agentRequests, coworker, type FakeModel, judgeRequests, startFakeModel, wakeLine, wakes } from "./support/fake-model.ts";
 import { CHANNEL, ME, pause, TestGateway, waitFor } from "./support/gateway.ts";
@@ -132,10 +132,34 @@ describe("what a wake gives", { timeout: 60_000 }, () => {
     expect(wake).toContain(`Thread started by bob (${CHANNEL}:@bob): here is the plan\n    second line`);
     expect(wake).toContain(`  Text: @${ME} see these`);
     const saved = /^ {2}File: report\.txt \(text\/plain\), saved at (.+)$/m.exec(wake)?.[1];
-    expect(saved?.startsWith(join(gateway.botDir, "files"))).toBe(true);
+    expect(saved?.startsWith(join(gateway.botDir, "files", "tmp"))).toBe(true);
     expect(readFileSync(saved!, "utf8")).toBe("the numbers");
     // A download that fails does not hold up the wake: it says so and gives the URL.
     expect(wake).toMatch(/^ {2}File: gone\.png \(image\/png\), not saved: download failed: .*\. URL: gone\.png$/m);
+  });
+});
+
+describe("saved files", { timeout: 60_000 }, () => {
+  it("deletes what is in files/tmp/ 30 days after it was saved, and nothing outside it", async () => {
+    model = await startFakeModel();
+    gateway = new TestGateway({ model });
+    const tmp = join(gateway.botDir, "files", "tmp");
+    const file = (path: string, daysAgo: number) => {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, "content");
+      const at = new Date(Date.now() - daysAgo * 86_400_000);
+      utimesSync(path, at, at);
+    };
+    file(join(tmp, "test_general_m-1", "1", "old.txt"), 31);
+    file(join(tmp, "test_general_m-2", "1", "recent.txt"), 29);
+    file(join(gateway.botDir, "files", "kept.txt"), 31);
+    file(join(gateway.botDir, "workspace", "kept.txt"), 31);
+
+    await gateway.start();
+    await waitFor(() => !existsSync(join(tmp, "test_general_m-1")), { what: "the old file's folder to be deleted" });
+    expect(existsSync(join(tmp, "test_general_m-2", "1", "recent.txt"))).toBe(true);
+    expect(existsSync(join(gateway.botDir, "files", "kept.txt"))).toBe(true);
+    expect(existsSync(join(gateway.botDir, "workspace", "kept.txt"))).toBe(true);
   });
 });
 

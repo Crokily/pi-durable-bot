@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createWriteStream, existsSync } from "node:fs";
-import { mkdir, rename, rm } from "node:fs/promises";
+import { lstat, mkdir, readdir, rename, rm, rmdir } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -16,6 +16,10 @@ import type { UndecidedEvent } from "./log.ts";
 export const MAX_FILE_BYTES = 10 * 1024 * 1024;
 /** A wake waits at most this long for the downloads of its files, from when it would go out without them. */
 export const FILE_WAIT_MS = 10_000;
+/** What is in the files folder is deleted this many days after it was saved. */
+export const FILE_DAYS = 30;
+/** One day: the gateway looks for files to delete when it starts, and then this often. */
+const DAY_MS = 86_400_000;
 
 /** Events whose files the wake gives: the ones that bring or change a message. */
 const KINDS = new Set(["message", "edit", "update"]);
@@ -27,6 +31,8 @@ const KINDS = new Set(["message", "edit", "update"]);
  * waits for the others at most FILE_WAIT_MS, then stops the downloads that have not ended. A file not saved gives its
  * URL and why instead. Nothing here holds up the adapter's acknowledgement: the event is in the inbox before the
  * download starts. Before the event's channel runs, nothing starts: the wake saves the files when it asks for them.
+ * What is in the files folder is deleted FILE_DAYS days after it was saved (its modification time), when the gateway
+ * starts and then once a day; nothing outside it.
  */
 export class Attachments extends Context.Service<
   Attachments,
@@ -52,6 +58,17 @@ export class Attachments extends Context.Service<
       const running = yield* FiberSet.make<WakeFile>();
       /** Per event, one download per file. */
       const saving = new Map<number, readonly Fiber.Fiber<WakeFile>[]>();
+
+      // On the wall clock, as the trace cleanup: it is about the disk, and a test's TestClock must not move it. In the
+      // background, so a large folder does not hold up the start.
+      const clean = () =>
+        void removeOld(config.filesDir, Date.now() - FILE_DAYS * DAY_MS).then(
+          (failed) => failed && config.print("files cleanup failed", failed),
+          (error: unknown) => config.print("files cleanup failed", { error: message(error) }),
+        );
+      clean();
+      const cleaning = setInterval(clean, DAY_MS).unref();
+      yield* Effect.addFinalizer(() => Effect.sync(() => clearInterval(cleaning)));
 
       const start = (event: UndecidedEvent) =>
         Effect.gen(function* () {
@@ -154,6 +171,49 @@ async function download(fetch: () => Promise<Uint8Array | AsyncIterable<Uint8Arr
     await rm(part, { force: true });
     throw error;
   }
+}
+
+/**
+ * Delete what in dir was last modified before `before` (Unix ms), and the folders that are then empty, but not dir
+ * itself. A new empty folder stays: a download may be about to write into it. A symbolic link is deleted as a link, and
+ * what it points to is not looked at. Returns what could not be deleted, if anything.
+ */
+async function removeOld(dir: string, before: number): Promise<{ failed: number; error: string } | undefined> {
+  let failed = 0;
+  let error: string | undefined;
+  /** Whether it deleted something in folder. */
+  const walk = async (folder: string): Promise<boolean> => {
+    let entries;
+    try {
+      entries = await readdir(folder, { withFileTypes: true });
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw cause;
+    }
+    let removed = false;
+    for (const entry of entries) {
+      const path = join(folder, entry.name);
+      try {
+        const old = (await lstat(path)).mtimeMs < before;
+        if (!entry.isDirectory()) {
+          if (old) await rm(path, { force: true });
+          removed ||= old;
+          continue;
+        }
+        if (((await walk(path)) || old) && (await readdir(path)).length === 0) {
+          await rmdir(path);
+          removed = true;
+        }
+      } catch (cause) {
+        if ((cause as NodeJS.ErrnoException).code === "ENOENT") continue;
+        failed++;
+        error ??= message(cause);
+      }
+    }
+    return removed;
+  };
+  await walk(dir);
+  return error === undefined ? undefined : { failed, error };
 }
 
 /** One folder per message: its address with only letters, digits, ".", "_" and "-". */

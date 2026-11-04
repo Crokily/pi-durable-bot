@@ -3,6 +3,7 @@ import { age, type ChildEnd, type ChildInfo, describeChild } from "../agent/chil
 import type { PersonInfo } from "../core/channel.ts";
 import { formatTime } from "../core/time.ts";
 import type { PlaceWake, WakeEvent, WakeFile } from "../core/wake.ts";
+import { MAX_FILE_BYTES } from "../gateway/files.ts";
 import { LOG_SCHEMA } from "../gateway/log.ts";
 import type { Timer } from "../gateway/timers.ts";
 import type { BotPaths } from "./definition.ts";
@@ -117,7 +118,7 @@ export function folderSection(facts: PromptFacts): string {
 - responsibilities.md: what you are responsible for. The judge uses it to decide whether an event that does not mention you is about you. When your responsibilities change, update it.
 - notes.md: your handoff to the next page: what you are doing, what you promised, how far you got. After you turn the page, you find what you need again from them and the message log. What you want to know beyond that goes into your memory.
 - workspace/: your working directory.
-- files/: the files of messages people send, one folder per message. They are saved when the message comes, and the wake gives each file's path.
+- files/: the files of messages people send, one folder per message. They are saved when the message comes, and the wake gives each file's path. Files over ${MAX_FILE_BYTES / 1024 / 1024} MB, and files not saved in time, are not saved: the wake gives their URL, and you download them yourself if you need them; a file URL may need the channel account's token.
 - Channel types: slack, terminal (the person who set you up, in their terminal), test. How to connect a new chat app yourself is in ${facts.docs}/channels/; put its tokens in ${facts.secretsDir}, readable only by this user. When the person has to give you secrets, such as tokens they copied, ask in the terminal channel with call <its channel id> ask-secret {"text": "…", "file": "<app>.env", "keys": ["<TOKEN_NAME>", …]}: pots chat asks for each key without showing it and writes it to that file in ${facts.secretsDir}, and you get a message that names the keys it wrote. You never see the values, so they stay out of your log.
 - Other bots are in ${facts.botsDir}, one subfolder per bot. You can change their definitions. A new folder with a bot.json is a new bot.`;
 }
@@ -200,8 +201,16 @@ function block(label: string, text: string): string {
   return `  ${label}: ${text.replace(/\r?\n/g, "\n    ")}`;
 }
 
+/** A size in words: "512 bytes", "40 KB", "12.5 MB". */
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} bytes`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${Math.round((10 * bytes) / 1024 / 1024) / 10} MB`;
+}
+
 function renderFile(file: WakeFile): string {
-  const name = `${file.name ?? "(no name)"}${file.type ? ` (${file.type})` : ""}`;
+  const about = [file.type, file.size === undefined ? undefined : formatSize(file.size)].filter((part) => part !== undefined);
+  const name = `${file.name ?? "(no name)"}${about.length ? ` (${about.join(", ")})` : ""}`;
   if (file.path) return `  File: ${name}, saved at ${file.path}`;
   return `  File: ${name}, not saved: ${file.error ?? "unknown"}${file.url ? `. URL: ${file.url}` : ""}`;
 }

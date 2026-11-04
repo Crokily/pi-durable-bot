@@ -4,7 +4,7 @@ import { Effect } from "effect";
 import type { JudgeAnswer, JudgeInput } from "../src/core/judge.ts";
 import type { ChannelSink } from "../src/core/channel.ts";
 import { Channels } from "../src/gateway/channels.ts";
-import { DOWNLOAD_MS } from "../src/gateway/files.ts";
+import { FILE_WAIT_MS, MAX_FILE_BYTES } from "../src/gateway/files.ts";
 import { MessageLog } from "../src/gateway/log.ts";
 import { Waker } from "../src/gateway/waker.ts";
 import { advance, FILES_DIR, logHappening, MemoryChannel, message, settle, withCore } from "./support/core.ts";
@@ -32,32 +32,61 @@ const decisions = (ids: readonly number[]) =>
   MessageLog.use((log) => log.undecided).pipe(Effect.map((undecided) => ids.map((id) => (undecided.some((event) => event.id === id) ? null : "decided"))));
 
 describe("files", () => {
-  it.effect("a download that never ends holds the wake no longer than DOWNLOAD_MS, and the place's next group comes after it", () =>
+  it.effect("a download that has not ended holds the wake FILE_WAIT_MS past its time, then stops, and the place's next group comes after it", () =>
     withCore({}, (recorder) =>
       Effect.gen(function* () {
+        let stopped: AbortSignal | undefined;
         const channel = new MemoryChannel();
-        channel.fetchFile = () => new Promise(() => {});
+        channel.fetchFile = (_file, signal) => {
+          stopped = signal;
+          return new Promise(() => {});
+        };
         yield* (yield* Channels).connect([channel], () => ({}) as ChannelSink);
         const waker = yield* Waker;
         waker.setTarget(recorder.target());
         const url = "https://files.example/report.pdf";
-        yield* waker.add(yield* logHappening({ ...message("general", "@bot the report"), files: [{ name: "report.pdf", url }] }));
-        yield* advance(10_000, 1_000);
+        yield* waker.add(yield* logHappening({ ...message("general", "@bot the report"), files: [{ name: "report.pdf", url, size: 2_000 }] }));
+        // Without the file, the wake would go out at 3 s.
+        yield* advance(5_000, 1_000);
         yield* arrive("general", "@bot did you see it?");
 
-        yield* advance(DOWNLOAD_MS - 10_000 - 1_000, 1_000);
+        yield* advance(3_000 + FILE_WAIT_MS - 5_000 - 1, 1_000);
         assert.strictEqual(recorder.wakes.length, 0);
-        yield* advance(1_000);
+        yield* advance(1);
         assert.deepStrictEqual(
           recorder.wakes.map(({ wake, at }) => ({ text: wake.events[0]!.text, at })),
           [
-            { text: "@bot the report", at: DOWNLOAD_MS },
-            { text: "@bot did you see it?", at: DOWNLOAD_MS },
+            { text: "@bot the report", at: 3_000 + FILE_WAIT_MS },
+            { text: "@bot did you see it?", at: 3_000 + FILE_WAIT_MS },
           ],
         );
-        assert.deepStrictEqual(recorder.wakes[0]!.wake.events[0]!.files, [{ name: "report.pdf", url, error: "download failed: it took longer than 60 s" }]);
+        assert.deepStrictEqual(recorder.wakes[0]!.wake.events[0]!.files, [{ name: "report.pdf", size: 2_000, url, error: "it was not downloaded in time" }]);
+        assert.strictEqual(stopped?.aborted, true);
       }),
     ));
+
+  it.effect("a file larger than MAX_FILE_BYTES is not downloaded: the wake gives its URL", () =>
+    withCore({}, (recorder) =>
+      Effect.gen(function* () {
+        let fetched = 0;
+        const channel = new MemoryChannel();
+        channel.fetchFile = async () => {
+          fetched++;
+          return new Uint8Array();
+        };
+        yield* (yield* Channels).connect([channel], () => ({}) as ChannelSink);
+        const waker = yield* Waker;
+        waker.setTarget(recorder.target());
+        const file = { name: "talk.mov", type: "video/quicktime", url: "https://files.example/talk.mov", size: MAX_FILE_BYTES + 1 };
+        yield* waker.add(yield* logHappening({ ...message("general", "@bot the talk"), files: [file] }));
+        yield* advance(3_000);
+
+        assert.deepStrictEqual(recorder.wakes[0]!.wake.events[0]!.files, [{ ...file, error: "it is larger than 10 MB" }]);
+        assert.strictEqual(recorder.wakes[0]!.at, 3_000);
+        assert.strictEqual(fetched, 0);
+      }),
+    ));
+
   it.effect("two files of one message never share a path, also when their names differ only in case", () =>
     withCore({}, (recorder) =>
       Effect.gen(function* () {

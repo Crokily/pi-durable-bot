@@ -30,6 +30,8 @@ export const FileInfo = Schema.Struct({
   name: Schema.optional(Schema.String),
   type: Schema.optional(Schema.String),
   url: Schema.optional(Schema.String),
+  /** In bytes, when the platform says. */
+  size: Schema.optional(Schema.Finite),
 });
 export type FileInfo = typeof FileInfo.Type;
 

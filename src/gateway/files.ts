@@ -12,8 +12,10 @@ import { GatewayConfig } from "./config.ts";
 import { message } from "./errors.ts";
 import type { UndecidedEvent } from "./log.ts";
 
-/** A download that takes longer fails, so a wake never waits longer for its files. */
-export const DOWNLOAD_MS = 60_000;
+/** A file larger than this, in bytes, is not downloaded: the wake gives its URL. */
+export const MAX_FILE_BYTES = 10 * 1024 * 1024;
+/** A wake waits at most this long for the downloads of its files, from when it would go out without them. */
+export const FILE_WAIT_MS = 10_000;
 
 /** Events whose files the wake gives: the ones that bring or change a message. */
 const KINDS = new Set(["message", "edit", "update"]);
@@ -21,17 +23,23 @@ const KINDS = new Set(["message", "edit", "update"]);
 /**
  * Saves the files of messages people send, as soon as the event comes, so the wake can give each file's local path.
  * One folder per message in the bot's files folder, and in it one numbered folder per file, so two files never share a
- * path; a file already there is not downloaded again. A download that fails or takes too long gives the file's URL and
- * why instead. Nothing here holds up the adapter's acknowledgement: the event is in the inbox before the download
- * starts. Before the event's channel runs, nothing starts: the wake saves the files when it asks for them.
+ * path; a file already there is not downloaded again. A file larger than MAX_FILE_BYTES is not downloaded. The wake
+ * waits for the others at most FILE_WAIT_MS, then stops the downloads that have not ended. A file not saved gives its
+ * URL and why instead. Nothing here holds up the adapter's acknowledgement: the event is in the inbox before the
+ * download starts. Before the event's channel runs, nothing starts: the wake saves the files when it asks for them.
  */
 export class Attachments extends Context.Service<
   Attachments,
   {
     /** Start saving the files of the event's message, in the background. */
     start(event: UndecidedEvent): Effect.Effect<void>;
-    /** The files of the event's message, once saving them ended; each download ends within DOWNLOAD_MS. */
+    /**
+     * The files of the event's message, once saving them ended, or after FILE_WAIT_MS: a download that has not ended by
+     * then is stopped, and the file is not saved.
+     */
     files(event: UndecidedEvent): Effect.Effect<readonly WakeFile[]>;
+    /** Stop the downloads of an event that no wake gives. */
+    drop(event: UndecidedEvent): Effect.Effect<void>;
     /** Stop the downloads in progress. A wake that waits for one stops waiting too, and its events stay undecided. */
     readonly stop: Effect.Effect<void>;
   }
@@ -41,39 +49,57 @@ export class Attachments extends Context.Service<
     Effect.gen(function* () {
       const channels = yield* Channels;
       const config = yield* GatewayConfig;
-      const running = yield* FiberSet.make<readonly WakeFile[]>();
-      const saving = new Map<number, Fiber.Fiber<readonly WakeFile[]>>();
-
-      const save = (event: UndecidedEvent, list: readonly FileInfo[], adapter: ChannelAdapter | undefined) =>
-        Effect.gen(function* () {
-          const folder = join(config.filesDir, folderName(event.message!));
-          const files = yield* Effect.forEach(list, (file, index) => saveOne(adapter, file, join(folder, String(index + 1), fileName(file, index))), {
-            concurrency: "unbounded",
-          });
-          const failed = files.filter((file) => file.error).length;
-          yield* Effect.annotateCurrentSpan({ saved: files.length - failed, failed });
-          if (failed) config.print("file not saved", { channel: event.channel, event: event.id, failed, error: files.find((file) => file.error)!.error });
-          return files;
-        }).pipe(Effect.withSpan("files.save", { attributes: { channel: event.channel, event: event.id, files: list.length } }));
+      const running = yield* FiberSet.make<WakeFile>();
+      /** Per event, one download per file. */
+      const saving = new Map<number, readonly Fiber.Fiber<WakeFile>[]>();
 
       const start = (event: UndecidedEvent) =>
         Effect.gen(function* () {
           const known = saving.get(event.id);
           if (known) return known;
-          const list = filesOf(event);
           const adapter = channels.running(event.channel);
-          const fiber = yield* FiberSet.run(running, list.length ? save(event, list, adapter) : Effect.succeed([]));
+          const folder = join(config.filesDir, folderName(event.message!));
+          const fibers = yield* Effect.forEach(filesOf(event), (file, index) =>
+            FiberSet.run(
+              running,
+              saveOne(adapter, file, join(folder, String(index + 1), fileName(file, index))).pipe(
+                Effect.tap((saved) => Effect.annotateCurrentSpan(saved.error ? { error: saved.error } : { saved: true })),
+                Effect.withSpan("files.save", { attributes: { channel: event.channel, event: event.id, file: index + 1 } }),
+              ),
+            ),
+          );
           // Without its channel, the result is not kept: the next ask tries again.
-          if (adapter) saving.set(event.id, fiber);
-          return fiber;
+          if (adapter) saving.set(event.id, fibers);
+          return fibers;
         });
+
+      /** A file whose download had not ended in time: the download stops. */
+      const late = (fiber: Fiber.Fiber<WakeFile>, file: FileInfo) => Effect.as(Fiber.interrupt(fiber), notSaved(file, "it was not downloaded in time"));
+
+      const files = (event: UndecidedEvent) =>
+        Effect.gen(function* () {
+          const list = filesOf(event);
+          const fibers = yield* start(event);
+          // All at once, so no file waits longer than FILE_WAIT_MS from here.
+          const files = yield* Effect.forEach(
+            fibers,
+            (fiber, index) => Fiber.join(fiber).pipe(Effect.timeoutOrElse({ duration: FILE_WAIT_MS, orElse: () => late(fiber, list[index]!) })),
+            { concurrency: "unbounded" },
+          );
+          const failed = files.filter((file) => file.error);
+          if (failed.length) config.print("file not saved", { channel: event.channel, event: event.id, failed: failed.length, error: failed[0]!.error });
+          return files;
+        }).pipe(Effect.ensuring(Effect.sync(() => saving.delete(event.id))));
 
       return Attachments.of({
         start: (event) => (filesOf(event).length && channels.running(event.channel) ? Effect.asVoid(start(event)) : Effect.void),
-        files: (event) =>
-          filesOf(event).length
-            ? Effect.flatMap(start(event), Fiber.join).pipe(Effect.ensuring(Effect.sync(() => saving.delete(event.id))))
-            : Effect.succeed([]),
+        files: (event) => (filesOf(event).length ? files(event) : Effect.succeed([])),
+        drop: (event) =>
+          Effect.suspend(() => {
+            const fibers = saving.get(event.id);
+            saving.delete(event.id);
+            return fibers ? Fiber.interruptAll(fibers) : Effect.void;
+          }),
         stop: Effect.gen(function* () {
           saving.clear();
           yield* FiberSet.clear(running);
@@ -94,18 +120,25 @@ function filesOf(event: UndecidedEvent): readonly FileInfo[] {
   }
 }
 
+/** A file that is not saved, with its URL and why. */
+function notSaved(file: FileInfo, error: string): WakeFile {
+  return { ...about(file), ...(file.url ? { url: file.url } : {}), error };
+}
+
+function about(file: FileInfo): WakeFile {
+  return { ...(file.name ? { name: file.name } : {}), ...(file.type ? { type: file.type } : {}), ...(file.size === undefined ? {} : { size: file.size }) };
+}
+
 /** Save one file at path, or say why not. */
 function saveOne(adapter: ChannelAdapter | undefined, file: FileInfo, path: string): Effect.Effect<WakeFile> {
-  const about = { ...(file.name ? { name: file.name } : {}), ...(file.type ? { type: file.type } : {}) };
-  const failed = (error: string): WakeFile => ({ ...about, ...(file.url ? { url: file.url } : {}), error });
-  if (existsSync(path)) return Effect.succeed({ ...about, path });
-  if (!file.url) return Effect.succeed(failed("the channel gave no URL"));
-  if (!adapter) return Effect.succeed(failed("the channel is not running"));
-  if (!adapter.fetchFile) return Effect.succeed(failed(`the ${adapter.id} channel does not download files`));
+  if (existsSync(path)) return Effect.succeed({ ...about(file), path });
+  if (!file.url) return Effect.succeed(notSaved(file, "the channel gave no URL"));
+  if (file.size !== undefined && file.size > MAX_FILE_BYTES) return Effect.succeed(notSaved(file, `it is larger than ${MAX_FILE_BYTES / 1024 / 1024} MB`));
+  if (!adapter) return Effect.succeed(notSaved(file, "the channel is not running"));
+  if (!adapter.fetchFile) return Effect.succeed(notSaved(file, `the ${adapter.id} channel does not download files`));
   const fetchFile = adapter.fetchFile.bind(adapter);
   return Effect.tryPromise({ try: (signal) => download(() => fetchFile(file, signal), path, signal), catch: message }).pipe(
-    Effect.timeoutOrElse({ duration: DOWNLOAD_MS, orElse: () => Effect.fail(`it took longer than ${DOWNLOAD_MS / 1000} s`) }),
-    Effect.match({ onSuccess: (): WakeFile => ({ ...about, path }), onFailure: (error) => failed(`download failed: ${error}`) }),
+    Effect.match({ onSuccess: (): WakeFile => ({ ...about(file), path }), onFailure: (error) => notSaved(file, `download failed: ${error}`) }),
   );
 }
 

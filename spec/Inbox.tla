@@ -11,10 +11,11 @@
 (* change between two runs).                                               *)
 (*                                                                         *)
 (* Before it records a wake, the waker reads the events' text and waits    *)
-(* for their files (src/gateway/files.ts). That is in memory and ends in   *)
-(* at most a minute, so here it is part of the time between Flush and      *)
-(* RecordWake. The code decides the groups of a place one after the other; *)
-(* the model lets them overlap, which includes that order.                 *)
+(* for their files (src/gateway/files.ts). That is in memory and ends at   *)
+(* most 10 seconds after the waker has its reason, so here it is part of   *)
+(* the time between Flush and RecordWake. The code decides the groups of a *)
+(* place one after the other; the model lets them overlap, which includes  *)
+(* that order.                                                             *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets
 

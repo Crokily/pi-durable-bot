@@ -47,8 +47,9 @@ interface Batch {
  * 1. the bot works on this place now → steer;
  * 2. an event @-mentions the bot, or the place is a one-to-one DM → wake;
  * 3. otherwise the judge decides; with no judge, every event wakes the bot.
- * A wake gives each event with its text, the start of its thread and its files, which it waits for (see files.ts).
- * The groups of a place are decided one after the other, so their wakes come in order.
+ * A wake gives each event with its text, the start of its thread and its files. Their downloads start when the events
+ * come; once the wake would go out, it waits for them at most FILE_WAIT_MS (see files.ts). The groups of a place are
+ * decided one after the other, so their wakes come in order.
  */
 export class Waker extends Context.Service<
   Waker,
@@ -103,12 +104,18 @@ export class Waker extends Context.Service<
             ? { address: first.place, kind: first.place_kind ?? "channel", ...(first.place_name ? { name: first.place_name } : {}) }
             : { address: `${first.channel}:`, kind: "channel", name: first.channel };
           const ids = events.map((event) => event.id);
-          const files = yield* Effect.forEach(events, (event) => attachments.files(event));
           const id = (reason: string) => `${reason}:${place.address}:${ids.at(-1)}`;
           yield* Effect.annotateCurrentSpan({ place: place.address, events: ids.join(",") });
 
           const deliver = (reason: PlaceWakeReason, decision: string, judged?: PlaceWake["judged"]) =>
             Effect.gen(function* () {
+              const files = yield* Effect.forEach(events, (event) => attachments.files(event), { concurrency: "unbounded" });
+              // The bot may have started working on this place while the files came.
+              if (reason !== "steer" && bot.isWorkingOn(place.address)) {
+                reason = "steer";
+                decision = "steer";
+                judged = undefined;
+              }
               const wakeEvents = yield* withContent(events, files);
               const wake: PlaceWake = { id: id(reason), reason, place, events: wakeEvents, ...(judged ? { judged } : {}) };
               yield* log.recordWake(wake, ids, decision);
@@ -135,7 +142,11 @@ export class Waker extends Context.Service<
           if (bot.isWorkingOn(place.address)) return yield* deliver("steer", "steer");
           yield* log.setWake(ids, "judge_no");
           yield* Effect.annotateCurrentSpan({ reason: "judge_no" });
-        }).pipe(Effect.withSpan("wake", { root: true, links: links.map((span) => ({ span, attributes: { [LINK]: "event" } })) }));
+        }).pipe(
+          // No wake gives the files of events the judge said no to, or of a decision that failed.
+          Effect.ensuring(Effect.forEach(events, (event) => attachments.drop(event), { discard: true })),
+          Effect.withSpan("wake", { root: true, links: links.map((span) => ({ span, attributes: { [LINK]: "event" } })) }),
+        );
 
       const askJudge = (judge: Judge, bot: WakeTarget, place: PlaceInfo, events: UndecidedEvent[], settings: WakerSettings) =>
         Effect.gen(function* () {

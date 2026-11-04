@@ -203,7 +203,7 @@ flowchart LR
 
 - Messages that arrive close together are grouped: it waits 3 seconds after the last one (20 seconds at most) before it decides.
 - If it is already working in a place, itself or with a child, new messages there are handed to it as it works, so it can change course.
-- The wake message says where, who, why and when, and gives each new message's text, the start of its thread when it is a reply, and its files. The gateway downloads files as soon as a message comes, so the wake gives their paths on the machine. Earlier messages and other details are in the log.
+- The wake message says where, who, why and when, and gives each new message's text, the start of its thread when it is a reply, and its files. The gateway downloads files as soon as a message comes, so the wake gives their paths on the machine. A file over 10 MB is not downloaded, and the wake waits for the other downloads at most 10 seconds past the moment it would go out without them; for a file that is not saved, it gives the URL, and the bot downloads it itself if it needs it. Earlier messages and other details are in the log.
 
 ## How it works
 

@@ -7,6 +7,8 @@ import type { JudgeAnswer } from "./judge.ts";
 export interface WakeFile {
   readonly name?: string;
   readonly type?: string;
+  /** In bytes, when the platform says. */
+  readonly size?: number;
   /** Where the gateway saved it on this computer. */
   readonly path?: string;
   /** Where the platform has it, when it was not saved. */

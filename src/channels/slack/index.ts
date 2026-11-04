@@ -555,6 +555,7 @@ function files(message: SlackMessage): { files?: FileInfo[] } {
       ...(file.name ? { name: file.name } : {}),
       ...(file.mimetype ? { type: file.mimetype } : {}),
       ...(file.url_private ? { url: file.url_private } : {}),
+      ...(typeof file.size === "number" ? { size: file.size } : {}),
     })),
   };
 }

@@ -1,4 +1,4 @@
-import { readFileSync, rmSync } from "node:fs";
+import { readdirSync, readFileSync, rmSync } from "node:fs";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect } from "effect";
 import type { JudgeAnswer, JudgeInput } from "../src/core/judge.ts";
@@ -84,6 +84,30 @@ describe("files", () => {
         assert.deepStrictEqual(recorder.wakes[0]!.wake.events[0]!.files, [{ ...file, error: "it is larger than 10 MB" }]);
         assert.strictEqual(recorder.wakes[0]!.at, 3_000);
         assert.strictEqual(fetched, 0);
+      }),
+    ));
+
+  it.effect("a file that passes MAX_FILE_BYTES as it downloads, when the channel gave no size, is not saved: the wake gives its URL", () =>
+    withCore({}, (recorder) =>
+      Effect.gen(function* () {
+        rmSync(FILES_DIR, { recursive: true, force: true });
+        const channel = new MemoryChannel();
+        // A stream: the size is known only as the bytes come.
+        channel.fetchFile = async () =>
+          (async function* () {
+            for (let i = 0; i < 11; i++) yield new Uint8Array(1024 * 1024);
+          })();
+        yield* (yield* Channels).connect([channel], () => ({}) as ChannelSink);
+        const waker = yield* Waker;
+        waker.setTarget(recorder.target());
+        const file = { name: "talk.mov", url: "https://files.example/talk.mov" };
+        yield* waker.add(yield* logHappening({ ...message("general", "@bot the talk"), files: [file] }));
+        yield* advance(3_000);
+        yield* settleUntil(() => recorder.wakes.length > 0);
+
+        assert.deepStrictEqual(recorder.wakes[0]!.wake.events[0]!.files, [{ ...file, error: "it is larger than 10 MB" }]);
+        // Neither the file nor a part of it stays.
+        assert.deepStrictEqual(readdirSync(FILES_DIR, { recursive: true }).filter((name) => String(name).includes("talk")), []);
       }),
     ));
 

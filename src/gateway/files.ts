@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createWriteStream, existsSync } from "node:fs";
 import { lstat, mkdir, readdir, rename, rm, rmdir } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { Context, Effect, Fiber, FiberSet, Layer } from "effect";
 import type { ChannelAdapter, FileInfo } from "../core/channel.ts";
@@ -32,7 +32,7 @@ const KINDS = new Set(["message", "edit", "update"]);
  * URL and why instead. Nothing here holds up the adapter's acknowledgement: the event is in the inbox before the
  * download starts. Before the event's channel runs, nothing starts: the wake saves the files when it asks for them.
  * What is in the files folder is deleted FILE_DAYS days after it was saved (its modification time), when the gateway
- * starts and then once a day; nothing outside it.
+ * starts and then once a day; nothing outside it, so nothing when the folder itself is a symbolic link.
  */
 export class Attachments extends Context.Service<
   Attachments,
@@ -61,9 +61,15 @@ export class Attachments extends Context.Service<
 
       // On the wall clock, as the trace cleanup: it is about the disk, and a test's TestClock must not move it. In the
       // background, so a large folder does not hold up the start.
+      let skipped = false;
       const clean = () =>
         void removeOld(config.filesDir, Date.now() - FILE_DAYS * DAY_MS).then(
-          (failed) => failed && config.print("files cleanup failed", failed),
+          (result) => {
+            if (result === "not a folder") {
+              if (!skipped) config.print("files cleanup skipped: the files folder is a symbolic link or not a folder", { dir: config.filesDir });
+              skipped = true;
+            } else if (result) config.print("files cleanup failed", result);
+          },
           (error: unknown) => config.print("files cleanup failed", { error: message(error) }),
         );
       clean();
@@ -146,26 +152,44 @@ function about(file: FileInfo): WakeFile {
   return { ...(file.name ? { name: file.name } : {}), ...(file.type ? { type: file.type } : {}), ...(file.size === undefined ? {} : { size: file.size }) };
 }
 
+const TOO_LARGE = `it is larger than ${MAX_FILE_BYTES / 1024 / 1024} MB`;
+
+/** A download that passed MAX_FILE_BYTES. */
+class TooLarge extends Error {}
+
 /** Save one file at path, or say why not. */
 function saveOne(adapter: ChannelAdapter | undefined, file: FileInfo, path: string): Effect.Effect<WakeFile> {
   if (existsSync(path)) return Effect.succeed({ ...about(file), path });
   if (!file.url) return Effect.succeed(notSaved(file, "the channel gave no URL"));
-  if (file.size !== undefined && file.size > MAX_FILE_BYTES) return Effect.succeed(notSaved(file, `it is larger than ${MAX_FILE_BYTES / 1024 / 1024} MB`));
+  if (file.size !== undefined && file.size > MAX_FILE_BYTES) return Effect.succeed(notSaved(file, TOO_LARGE));
   if (!adapter) return Effect.succeed(notSaved(file, "the channel is not running"));
   if (!adapter.fetchFile) return Effect.succeed(notSaved(file, `the ${adapter.id} channel does not download files`));
   const fetchFile = adapter.fetchFile.bind(adapter);
-  return Effect.tryPromise({ try: (signal) => download(() => fetchFile(file, signal), path, signal), catch: message }).pipe(
-    Effect.match({ onSuccess: (): WakeFile => ({ ...about(file), path }), onFailure: (error) => notSaved(file, `download failed: ${error}`) }),
+  return Effect.tryPromise({ try: (signal) => download(() => fetchFile(file, signal), path, signal), catch: (error) => error }).pipe(
+    Effect.match({
+      onSuccess: (): WakeFile => ({ ...about(file), path }),
+      onFailure: (error) => notSaved(file, error instanceof TooLarge ? TOO_LARGE : `download failed: ${message(error)}`),
+    }),
   );
 }
 
-/** Write to a part file first, so a file at the path is always whole. */
+/**
+ * Write to a part file first, so a file at the path is always whole. The bytes are counted as they come, also when the
+ * channel gave no size: past MAX_FILE_BYTES the download stops and the part file is deleted.
+ */
 async function download(fetch: () => Promise<Uint8Array | AsyncIterable<Uint8Array>>, path: string, signal: AbortSignal): Promise<void> {
   const part = `${path}.${randomUUID().slice(0, 8)}.part`;
   try {
     const content = await fetch();
     await mkdir(dirname(path), { recursive: true });
-    await pipeline(Readable.from(content instanceof Uint8Array ? [content] : content), createWriteStream(part), { signal });
+    let bytes = 0;
+    const limit = new Transform({
+      transform(chunk: Uint8Array, _encoding, done) {
+        bytes += chunk.byteLength;
+        done(bytes > MAX_FILE_BYTES ? new TooLarge(TOO_LARGE) : null, bytes > MAX_FILE_BYTES ? undefined : chunk);
+      },
+    });
+    await pipeline(Readable.from(content instanceof Uint8Array ? [content] : content), limit, createWriteStream(part), { signal });
     await rename(part, path);
   } catch (error) {
     await rm(part, { force: true });
@@ -176,9 +200,17 @@ async function download(fetch: () => Promise<Uint8Array | AsyncIterable<Uint8Arr
 /**
  * Delete what in dir was last modified before `before` (Unix ms), and the folders that are then empty, but not dir
  * itself. A new empty folder stays: a download may be about to write into it. A symbolic link is deleted as a link, and
- * what it points to is not looked at. Returns what could not be deleted, if anything.
+ * what it points to is not looked at; when dir itself is one, or not a folder, nothing is deleted. Returns what could
+ * not be deleted, if anything.
  */
-async function removeOld(dir: string, before: number): Promise<{ failed: number; error: string } | undefined> {
+async function removeOld(dir: string, before: number): Promise<{ failed: number; error: string } | "not a folder" | undefined> {
+  try {
+    const root = await lstat(dir);
+    if (root.isSymbolicLink() || !root.isDirectory()) return "not a folder";
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw cause;
+  }
   let failed = 0;
   let error: string | undefined;
   /** Whether it deleted something in folder. */
@@ -194,8 +226,10 @@ async function removeOld(dir: string, before: number): Promise<{ failed: number;
     for (const entry of entries) {
       const path = join(folder, entry.name);
       try {
-        const old = (await lstat(path)).mtimeMs < before;
-        if (!entry.isDirectory()) {
+        // lstat, not the listing: a folder that became a link since is not followed.
+        const info = await lstat(path);
+        const old = info.mtimeMs < before;
+        if (!info.isDirectory()) {
           if (old) await rm(path, { force: true });
           removed ||= old;
           continue;

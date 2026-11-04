@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { agentRequests, coworker, type FakeModel, judgeRequests, startFakeModel, wakeLine, wakes } from "./support/fake-model.ts";
@@ -160,6 +160,22 @@ describe("saved files", { timeout: 60_000 }, () => {
     expect(existsSync(join(tmp, "test_general_m-2", "1", "recent.txt"))).toBe(true);
     expect(existsSync(join(gateway.botDir, "files", "kept.txt"))).toBe(true);
     expect(existsSync(join(gateway.botDir, "workspace", "kept.txt"))).toBe(true);
+  });
+
+  it("deletes nothing when files/tmp/ itself is a symbolic link, and says so once", async () => {
+    model = await startFakeModel();
+    gateway = new TestGateway({ model });
+    const elsewhere = join(gateway.home, "elsewhere");
+    mkdirSync(join(elsewhere, "m-1"), { recursive: true });
+    writeFileSync(join(elsewhere, "m-1", "old.txt"), "content");
+    const at = new Date(Date.now() - 31 * 86_400_000);
+    utimesSync(join(elsewhere, "m-1", "old.txt"), at, at);
+    mkdirSync(join(gateway.botDir, "files"), { recursive: true });
+    symlinkSync(elsewhere, join(gateway.botDir, "files", "tmp"));
+
+    await gateway.start();
+    await waitFor(() => gateway.output.some((line) => String(line.message).startsWith("files cleanup skipped")), { what: "the skipped cleanup" });
+    expect(existsSync(join(elsewhere, "m-1", "old.txt"))).toBe(true);
   });
 });
 

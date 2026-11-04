@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createWriteStream, existsSync } from "node:fs";
 import { lstat, mkdir, readdir, rename, rm, rmdir } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
@@ -27,7 +27,9 @@ const KINDS = new Set(["message", "edit", "update"]);
 /**
  * Saves the files of messages people send, as soon as the event comes, so the wake can give each file's local path.
  * One folder per message in the bot's files folder, and in it one numbered folder per file, so two files never share a
- * path; a file already there is not downloaded again. A file larger than MAX_FILE_BYTES is not downloaded. The wake
+ * path; a file already there is not downloaded again. Both names end with a short hash, of the message's address and
+ * of the file's URL, so two messages never share a folder, and a file that an edit puts in another's place does not
+ * take the one saved before. A file larger than MAX_FILE_BYTES is not downloaded. The wake
  * waits for the others at most FILE_WAIT_MS, then stops the downloads that have not ended. A file not saved gives its
  * URL and why instead. Nothing here holds up the adapter's acknowledgement: the event is in the inbox before the
  * download starts. Before the event's channel runs, nothing starts: the wake saves the files when it asks for them.
@@ -85,7 +87,7 @@ export class Attachments extends Context.Service<
           const fibers = yield* Effect.forEach(filesOf(event), (file, index) =>
             FiberSet.run(
               running,
-              saveOne(adapter, file, join(folder, String(index + 1), fileName(file, index))).pipe(
+              saveOne(adapter, file, join(folder, fileFolder(file, index), fileName(file, index))).pipe(
                 Effect.tap((saved) => Effect.annotateCurrentSpan(saved.error ? { error: saved.error } : { saved: true })),
                 Effect.withSpan("files.save", { attributes: { channel: event.channel, event: event.id, file: index + 1 } }),
               ),
@@ -250,9 +252,19 @@ async function removeOld(dir: string, before: number): Promise<{ failed: number;
   return error === undefined ? undefined : { failed, error };
 }
 
-/** One folder per message: its address with only letters, digits, ".", "_" and "-". */
+/** A short hash: readable names lose characters, and two of them can be the same. */
+function digest(text: string): string {
+  return createHash("sha256").update(text).digest("hex").slice(0, 10);
+}
+
+/** One folder per message: its address with only letters, digits, ".", "_" and "-", then a hash of the whole address. */
 function folderName(address: string): string {
-  return address.replace(/[^\w.-]+/g, "_");
+  return `${address.replace(/[^\w.-]+/g, "_").slice(0, 80)}-${digest(address)}`;
+}
+
+/** One folder per file: its place in the message, then a hash of which file it is, its URL. */
+function fileFolder(file: FileInfo, index: number): string {
+  return `${index + 1}-${digest(file.url ?? `${file.name ?? ""} ${file.size ?? ""}`)}`;
 }
 
 /** A file name that is safe on every system. */

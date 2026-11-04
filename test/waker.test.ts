@@ -134,6 +134,56 @@ describe("files", () => {
       }),
     ));
 
+  it.effect("two messages whose addresses differ only in punctuation never share a file", () =>
+    withCore({}, (recorder) =>
+      Effect.gen(function* () {
+        rmSync(FILES_DIR, { recursive: true, force: true });
+        let fetched = 0;
+        const channel = new MemoryChannel();
+        channel.fetchFile = async () => new TextEncoder().encode(`download ${++fetched}`);
+        yield* (yield* Channels).connect([channel], () => ({}) as ChannelSink);
+        const waker = yield* Waker;
+        waker.setTarget(recorder.target());
+        // The same name, place and URL; only the message differs, and its address in letters and digits does not.
+        const file = { name: "x.txt", url: "https://files.example/x.txt" };
+        for (const [index, [place, address]] of ([
+          ["a_b", "mem:#a_b/c"],
+          ["a", "mem:#a/b_c"],
+        ] as const).entries()) {
+          yield* waker.add(yield* logHappening({ ...message(place, "@bot a file"), message: address, files: [file] }));
+          yield* advance(3_000);
+          yield* settleUntil(() => recorder.wakes.length === index + 1);
+        }
+
+        const saved = recorder.wakes.map((wake) => wake.wake.events[0]!.files![0]!.path!);
+        assert.notStrictEqual(saved[0], saved[1]);
+        assert.deepStrictEqual(saved.map((path) => readFileSync(path, "utf8")), ["download 1", "download 2"]);
+      }),
+    ));
+
+  it.effect("a file that an edit puts in another's place is downloaded, not taken from the one saved before", () =>
+    withCore({}, (recorder) =>
+      Effect.gen(function* () {
+        rmSync(FILES_DIR, { recursive: true, force: true });
+        const channel = new MemoryChannel();
+        channel.fetchFile = async (file) => new TextEncoder().encode(`content of ${file.url}`);
+        yield* (yield* Channels).connect([channel], () => ({}) as ChannelSink);
+        const waker = yield* Waker;
+        waker.setTarget(recorder.target());
+        const sent = message("general", "@bot two files");
+        yield* waker.add(yield* logHappening({ ...sent, files: [{ name: "x.txt", url: "url-1" }, { name: "x.txt", url: "url-2" }] }));
+        yield* advance(3_000);
+        yield* settleUntil(() => recorder.wakes.length === 1);
+        // The edit takes out the first: the second is now first, with the same name.
+        yield* waker.add(yield* logHappening({ ...sent, kind: "edit", text: "@bot one file", files: [{ name: "x.txt", url: "url-2" }] }));
+        yield* advance(3_000);
+        yield* settleUntil(() => recorder.wakes.length === 2);
+
+        const [edited] = recorder.wakes[1]!.wake.events.at(-1)!.files!;
+        assert.strictEqual(readFileSync(edited!.path!, "utf8"), "content of url-2");
+      }),
+    ));
+
   it.effect("files of events from before a start are saved once their channel connects", () =>
     withCore({}, (recorder) =>
       Effect.gen(function* () {

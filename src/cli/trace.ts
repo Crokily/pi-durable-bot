@@ -52,7 +52,14 @@ export const traceCommand = Command.make(
       if (Option.isNone(input.id)) {
         const wakes = all("SELECT * FROM gw_spans WHERE name = 'wake' AND parent_id IS NULL ORDER BY start_at DESC LIMIT ?", input.last).reverse();
         if (wakes.length === 0) return yield* Console.log("No wakes in the last 7 days.");
-        for (const wake of wakes) yield* Console.log(summary(wake, [...trace(wake.trace_id), ...runs(linking, wake).flatMap(trace)]));
+        const requests = new Map<string, Span>();
+        for (const wake of wakes) {
+          const agentRuns = runs(linking, wake);
+          const spans = [...trace(wake.trace_id), ...agentRuns.flatMap(trace), ...childRuns(all, agentRuns).flatMap(trace)];
+          for (const span of spans) if (span.name === "pi.ai.request") requests.set(span.span_id, span);
+          yield* Console.log(summary(wake, spans));
+        }
+        yield* Console.log(cacheTotals([...requests.values()]));
         return;
       }
       const key = input.id.value;
@@ -69,11 +76,13 @@ export const traceCommand = Command.make(
           .filter((span) => span.name === "pi.durable.submit")
           .flatMap((span) => links(span))
           .flatMap((id) => all("SELECT * FROM gw_spans WHERE span_id = ? AND name = 'wake'", id))[0];
-      const parts = wake ? [trace(wake.trace_id), ...runs(linking, wake).map(trace)] : [start];
+      const agentRuns = wake ? runs(linking, wake) : [];
+      const parts = wake ? [trace(wake.trace_id), ...agentRuns.map(trace)] : [start];
+      const children = childRuns(all, agentRuns).map(trace);
       const events = (wake ? linkList(wake).filter((link) => !isRun(link)) : [])
         .flatMap((link) => all("SELECT * FROM gw_spans WHERE span_id = ?", link.span_id))
         .flatMap((span) => trace(span.trace_id));
-      yield* Console.log(view(parts, events));
+      yield* Console.log(view(parts, children, events));
     }).pipe(Effect.scoped),
 ).pipe(Command.withDescription("Show what the gateway did: the last wakes, or one wake from its events to the messages sent for it."));
 
@@ -137,13 +146,73 @@ function runs(linking: (id: string) => Span[], wake: Span): string[] {
   return [...traces];
 }
 
+/**
+ * The traces of the children's runs that the agent's runs started: a child's submission is the start of its own trace,
+ * linked to the phase of the run that gave it the message (the reporter in src/agent/children.ts). The run's own
+ * conversation is the main one; a submission of another conversation is a child's.
+ */
+function childRuns(all: (sql: string, ...params: (string | number)[]) => Span[], runTraces: readonly string[]): string[] {
+  const found: string[] = [];
+  for (const traceId of runTraces) {
+    const main = all("SELECT * FROM gw_spans WHERE trace_id = ? AND name = 'pi.durable.submit' LIMIT 1", traceId)[0];
+    const conversation = main ? attributes(main)["conversation.id"] : undefined;
+    for (const span of all("SELECT * FROM gw_spans WHERE name = 'pi.durable.submit' AND links LIKE ? ORDER BY start_at", `%"trace_id":"${traceId}"%`)) {
+      if (attributes(span)["conversation.id"] !== conversation && !found.includes(span.trace_id)) found.push(span.trace_id);
+    }
+  }
+  return found;
+}
+
+/** A model request's tokens: all input (pi's usage.input is only the part not read from the cache), and the output. */
+function usage(span: Span) {
+  const facts = attributes(span);
+  const count = (key: string) => Number(facts[key] ?? 0);
+  const cacheRead = count("usage.cache_read");
+  return { input: count("usage.input") + cacheRead + count("usage.cache_write"), cacheRead, output: count("usage.output"), cost: count("cost.total") };
+}
+
+/** "92% cached": the share of input the provider read from its prompt cache. */
+function cached(cacheRead: number, input: number): string {
+  return `${input > 0 ? Math.round((100 * cacheRead) / input) : 0}% cached`;
+}
+
+/**
+ * The model requests of the listed wakes together: how much input the prompt cache served, and what the requests that
+ * missed it cost. For people; the agent is not told, as it cannot steer the provider's cache.
+ */
+function cacheTotals(requests: Span[]): string {
+  if (requests.length === 0) return "No model requests.";
+  let input = 0;
+  let cacheRead = 0;
+  let cost = 0;
+  let missed = 0;
+  let missedCost = 0;
+  for (const span of requests) {
+    const use = usage(span);
+    input += use.input;
+    cacheRead += use.cacheRead;
+    cost += use.cost;
+    if (use.cacheRead * 2 < use.input) {
+      missed++;
+      missedCost += use.cost;
+    }
+  }
+  const share = cost > 0 ? ` (${Math.round((100 * missedCost) / cost)}% of the cost)` : "";
+  return (
+    `Model requests: ${requests.length}, ${input} input tokens, ${cached(cacheRead, input)}, $${cost.toFixed(4)}. ` +
+    `${missed} read less than half from the cache: $${missedCost.toFixed(4)}${share}.`
+  );
+}
+
 /** One line per wake: when, why, where, events, sends, model requests, how long, and its trace ID. */
 function summary(wake: Span, spans: Span[]): string {
   const facts = attributes(wake);
   const events = typeof facts.events === "string" && facts.events ? facts.events.split(",").length : 0;
   const sends = spans.filter((span) => span.name === "send").length;
-  const requests = spans.filter((span) => span.name === "pi.ai.request");
-  const tokens = requests.reduce((sum, span) => sum + Number(attributes(span)["usage.input"] ?? 0) + Number(attributes(span)["usage.output"] ?? 0), 0);
+  const requests = spans.filter((span) => span.name === "pi.ai.request").map(usage);
+  const tokens = requests.reduce((sum, use) => sum + use.input + use.output, 0);
+  const input = requests.reduce((sum, use) => sum + use.input, 0);
+  const cacheRead = requests.reduce((sum, use) => sum + use.cacheRead, 0);
   const end = Math.max(...spans.map((span) => span.end_at));
   const failed = spans.some((span) => span.status === "error");
   return [
@@ -152,22 +221,26 @@ function summary(wake: Span, spans: Span[]): string {
     String(facts.place ?? (facts.timer !== undefined ? `timer ${String(facts.timer)}` : "-")).padEnd(28),
     (events ? `${events} event${events === 1 ? "" : "s"}` : "").padEnd(10),
     (sends ? `sent ${sends}` : "").padEnd(8),
-    (requests.length ? `model ${requests.length}×, ${tokens} tokens` : "").padEnd(24),
+    (requests.length ? `model ${requests.length}×, ${tokens} tokens, ${cached(cacheRead, input)}` : "").padEnd(36),
     duration(end - wake.start_at).padStart(8),
     wake.trace_id.slice(0, 12),
     failed ? "  (an error; see the trace)" : "",
   ].join("  ");
 }
 
-/** A wake as trees: the wake, then the agent's runs for it, then the events it is about. Times count from the wake. */
-function view(parts: Span[][], events: Span[]): string {
+/**
+ * A wake as trees: the wake, then the agent's runs for it, the runs of the children they started, then the events it is
+ * about. Times count from the wake.
+ */
+function view(parts: Span[][], children: Span[][], events: Span[]): string {
   const start = Math.min(...parts.flat().map((span) => span.start_at));
   const lines: string[] = [];
-  parts.forEach((spans, index) => {
-    if (spans.length === 0) return;
-    lines.push(`${index === 0 ? "trace" : "agent run, trace"} ${spans[0]!.trace_id}  ${time(spans[0]!.start_at)}`);
+  const labelled = [...parts.map((spans, index) => [index === 0 ? "trace" : "agent run, trace", spans] as const), ...children.map((spans) => ["child run, trace", spans] as const)];
+  for (const [title, spans] of labelled) {
+    if (spans.length === 0) continue;
+    lines.push(`${title} ${spans[0]!.trace_id}  ${time(spans[0]!.start_at)}`);
     lines.push(...tree(spans, start));
-  });
+  }
   if (events.length > 0) {
     lines.push("events:");
     lines.push(...tree(events, start).map((text) => `  ${text}`));
@@ -209,8 +282,9 @@ function label(span: Span): string {
       return `${task}${tool} ${String(facts.phase ?? "")} → ${String(facts.outcome ?? "?")}${facts.resumed === true ? " (resumed)" : ""}`;
     }
     case "pi.ai.request": {
-      const cost = Number(facts["cost.total"] ?? 0);
-      return `model ${String(facts.provider)}/${String(facts.model)}, ${String(facts["usage.input"] ?? "?")} in, ${String(facts["usage.output"] ?? "?")} out${cost ? `, $${cost.toFixed(4)}` : ""}, ${String(facts.stop ?? "?")}`;
+      if (facts["usage.input"] === undefined) return `model ${String(facts.provider)}/${String(facts.model)}, ${String(facts.stop ?? "no answer")}`;
+      const use = usage(span);
+      return `model ${String(facts.provider)}/${String(facts.model)}, ${use.input} in (${cached(use.cacheRead, use.input)}), ${use.output} out${use.cost ? `, $${use.cost.toFixed(4)}` : ""}, ${String(facts.stop ?? "?")}`;
     }
     default:
       return [span.name, ...Object.entries(facts).map(([key, value]) => `${key}=${typeof value === "string" ? value : JSON.stringify(value)}`)].join(" ");

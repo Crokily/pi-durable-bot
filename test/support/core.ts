@@ -1,3 +1,5 @@
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Clock, Effect } from "effect";
 import { TestClock } from "effect/testing";
 import { openDatabase } from "../../src/agent/agent.ts";
@@ -12,6 +14,9 @@ import type { Timer } from "../../src/gateway/timers.ts";
 import type { WakerSettings } from "../../src/gateway/waker.ts";
 
 // The gateway core in one process, on an in-memory SQLite database, for tests that use Effect's TestClock.
+
+/** The test gateways' files folder. Only tests with files write there. */
+export const FILES_DIR = join(tmpdir(), "pots-test-files");
 
 export const SETTINGS: WakerSettings = { debounceMs: 3_000, debounceMaxMs: 20_000, judgeThreshold: 0.5, judgeContextMessages: 20 };
 
@@ -71,6 +76,7 @@ export const withCore = <A, E, R>(options: CoreOptions, body: (recorder: Recorde
         recorder.timers.push({ timer, at: recorder.now() });
         return { submission: `timer-${timer.id}` };
       },
+      filesDir: FILES_DIR,
       print: (message, data) => recorder.prints.push({ message, ...(data ? { data } : {}) }),
     };
     return yield* body(recorder, sql).pipe(Effect.provide(gatewayLayer(sql, gatewayOptions)));
@@ -131,6 +137,8 @@ export class MemoryChannel implements ChannelAdapter {
   readonly platform: { id: string; place: string; text: string; sendId?: string }[] = [];
   /** Throw from send before the platform takes the message. */
   failBeforeSend = false;
+  /** Downloads a file of a message, when a test sets it. */
+  fetchFile?: ChannelAdapter["fetchFile"];
   /** What the gateway gave the adapter at start, for tests that act as the platform. */
   sink: ChannelSink | undefined;
   #ids = 0;

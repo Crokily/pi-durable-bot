@@ -9,11 +9,11 @@ If you are here to change Pots' own code, read [AGENTS.md](../AGENTS.md) instead
 Pots (the npm package `pi-durable-bot`, the command `pots`) is an open-source AI coworker. It lives on a computer of its own and works in the chat apps a team already uses. It is not a chat bot that answers when someone @s it:
 
 - **It sees everything in the places it is invited to.** That covers channel messages that never mention it, DMs, edits, reactions and people joining. All of it goes into one local SQLite log, and the bot reads that log with SQL when it needs context.
-- **It decides when to act.** A mention or a DM wakes it at once. For every other message, a judge asks "is this about me, and should I respond?", using the bot's own list of responsibilities. The bot also sets its own timed wakes, such as "check Acme's pricing every Monday", and keeps them. Being woken does not mean speaking: most of the time the right answer is to stay quiet.
+- **It decides when to act.** A mention or a DM wakes it at once. Every other message comes to it too, and it decides whether it is about its work; a judge can read those first and ask "is this about me, and should I respond?", using the bot's own list of responsibilities. The bot also sets its own timed wakes, such as "check Acme's pricing every Monday", and keeps them. Being woken does not mean speaking: most of the time the right answer is to stay quiet.
 - **It works on its own computer.** It has a shell, files, the internet and, when there is one, the screen, mouse and keyboard. It writes and runs the code it needs instead of waiting for someone to add a plugin. That covers research, reports, watching a web page, filling forms, and code.
-- **It remembers.** One long conversation runs across every channel. When the context gets full, the bot writes notes for itself and "turns the page". Its persona, responsibilities and notes are plain files it edits itself.
+- **It remembers.** One long conversation runs across every channel. The bot saves what is worth keeping (preferences, rules, facts about people and the work, decisions) to its memory by itself, as Claude Code's automatic memory does: plain markdown files with an index, in its folder, and one more memory that the bots of the computer share about the person. People change that memory by talking to it. When the context gets full, the bot writes notes for itself and "turns the page"; its memory comes along. Its persona and responsibilities are plain files it edits itself.
 - **It survives crashes.** Every step is journaled ([pi-durable](https://github.com/earendil-works/pi)). Every incoming event is on disk before it is acknowledged. Every outgoing message has a send ID, so the bot never sends the same message twice.
-- **It is open and yours.** It is MIT-licensed and runs on the person's own machine. It can use a subscription they already pay for (ChatGPT, Claude, GitHub Copilot, Grok, Kimi and more), an API key from any of 40+ providers, or a local model (Ollama, LM Studio, llama.cpp). The data stays in one SQLite file per bot. One machine can run several bots, each with its own name, persona and memory.
+- **It is open and yours.** It is MIT-licensed and runs on the person's own machine. It can use a subscription they already pay for (ChatGPT, Claude, GitHub Copilot, Grok, Kimi and more), an API key from any of 40+ providers, or a local model (Ollama, LM Studio, llama.cpp). The data stays on their machine, in each bot's folder. One machine can run several bots, each with its own name, persona and memory.
 
 Slack works today, and so does the person's own terminal (`pots chat`). Discord, Teams, Telegram and email are next. The [README](../README.md) has the full picture, a demo video and diagrams.
 
@@ -77,6 +77,7 @@ Tell your person:
 ## When something goes wrong
 
 - `pots status` shows whether the gateway runs and each bot's state. When the bot cannot use its model, which is usually a model login, it says "I could not work on this" in the place that woke it; `pots status` and `pots chat` show why.
+- `pots children` lists the children a bot started for longer work in the background, and `pots children --stop <id>` or `--stop-all` stops them; a stopped child reports nothing.
 - If a bot's `bot.json` has an error, the reason is in `bot.json.error` next to it, and the old definition stays in use.
 - `pots service logs` and `pots trace` show what happened.
 - Report bugs at https://github.com/Crokily/pi-durable-bot/issues.

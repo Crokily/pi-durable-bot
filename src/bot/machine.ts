@@ -10,17 +10,16 @@ export interface Machine {
   user: string;
   /** How the bash tool runs: plain bash, or Git Bash on Windows. */
   shell: string;
-  /** True when `sudo -n true` works: root commands need no password. */
-  sudo: boolean;
 }
 
-/** Asks the system in the background, so the gateway starts while the commands run. */
+/**
+ * Asks the system in the background, so the gateway starts while the commands run. Only facts that stay the same from
+ * one start to the next: they are in the prompt's start, which the provider caches. Whether sudo needs a password is
+ * not one of them (on macOS it depends on when sudo last asked), so the agent checks that itself.
+ */
 export async function describeMachine(): Promise<Machine> {
   const platform = process.platform;
-  const [macOS, sudo] = await Promise.all([
-    platform === "darwin" ? run("sw_vers", ["-productVersion"]) : undefined,
-    platform === "win32" ? undefined : run("sudo", ["-n", "true"]),
-  ]);
+  const macOS = platform === "darwin" ? await run("sw_vers", ["-productVersion"]) : undefined;
   const os =
     platform === "darwin"
       ? `macOS ${macOS ?? release()}`
@@ -32,7 +31,6 @@ export async function describeMachine(): Promise<Machine> {
     hostname: hostname(),
     user: userInfo().username,
     shell: platform === "win32" ? "Git Bash (Windows paths also work, for example C:/Users)" : "bash",
-    sudo: sudo !== undefined,
   };
 }
 

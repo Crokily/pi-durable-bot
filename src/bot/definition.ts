@@ -13,9 +13,18 @@ export interface BotDefinition {
   /** "provider/modelId", any model pi can use. */
   model: string;
   thinking: Thinking;
-  /** Who judges events that do not mention the bot: "main" (its own model), "off" (every event wakes it), or a classifier "provider/modelId". */
+  /** The model of the children the main agent starts; unset: the main model. */
+  childModel?: string;
+  /** The thinking level of a new child when the main agent does not choose one. */
+  childThinking: Thinking;
+  /** Who judges events that do not mention the bot: "off" (every event wakes it), a classifier "provider/modelId", or "main" (its own model). */
   judge: JudgeSetting;
   channels: ChannelConfig[];
+  /**
+   * The environment of the bot's screen, such as {"DISPLAY": ":99"}, which the screen tool runs with. The bot writes it
+   * when it sets up or finds a desktop. Unset: the gateway's own screen variables.
+   */
+  screen?: Record<string, string>;
   settings: BotSettings;
 }
 
@@ -32,6 +41,10 @@ export interface BotSettings {
   fallbackWakeMinutes: number;
   /** pi-durable compaction, the fallback when the agent does not turn the page. Unset values fit the model's context window. */
   compaction: Compaction;
+  /** How many children may work at once. At the cap, the task tool says so and lists them. */
+  maxChildren: number;
+  /** The memory, as Claude Code's autoMemoryEnabled: false, no memory section, no memory passes, no dream and no age note. */
+  autoMemory: boolean;
 }
 
 const DEFAULT_SETTINGS: BotSettings = {
@@ -41,10 +54,15 @@ const DEFAULT_SETTINGS: BotSettings = {
   judgeContextMessages: 20,
   fallbackWakeMinutes: 120,
   compaction: {},
+  maxChildren: 50,
+  autoMemory: true,
 };
 
 export const DEFAULT_MODEL = "openai/gpt-6.1-sol";
-export const DEFAULT_JUDGE: JudgeSetting = "main";
+/** The thinking level of children the main agent starts without choosing one. */
+export const DEFAULT_CHILD_THINKING = "xhigh" as const;
+/** No judge: every message that does not mention the bot comes to it, and it decides itself. */
+export const DEFAULT_JUDGE: JudgeSetting = "off";
 
 export function botPaths(dir: string) {
   return {
@@ -55,10 +73,18 @@ export function botPaths(dir: string) {
     responsibilities: join(dir, "responsibilities.md"),
     notes: join(dir, "notes.md"),
     workspace: join(dir, "workspace"),
+    /** Where the gateway saves the files of messages people sent, one folder per message; it deletes them 30 days later. */
+    files: join(dir, "files", "tmp"),
     db: join(dir, "bot.sqlite"),
+    /** The bot's memory: one markdown file per memory, and MEMORY.md, their index. */
+    memory: join(dir, "memory"),
     socket: controlAddress(dir),
     crashAfterSend: join(dir, "crash-after-send"),
     crashAfterWake: join(dir, "crash-after-wake"),
+    crashBeforeChildReport: join(dir, "crash-before-child-report"),
+    crashAfterChildReport: join(dir, "crash-after-child-report"),
+    crashAfterChildStop: join(dir, "crash-after-child-stop"),
+    crashBeforeMemoryPass: join(dir, "crash-before-memory-pass"),
     /** A note from pots init: the bot is woken with it at its first start, then the file is removed. */
     firstWake: join(dir, "first-wake.md"),
   };
@@ -81,12 +107,15 @@ function controlAddress(dir: string): string {
 export const BOT_ID = /^[a-z0-9][a-z0-9_-]*$/;
 
 const PROVIDER_MODEL = /^[^/]+\/.+$/;
+const THINKING = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 /** bot.json as a schema: the checks, the defaults and the types. */
 const Definition = Schema.Struct({
   name: Schema.Trim.check(Schema.isNonEmpty()),
   model: Schema.String.check(Schema.isPattern(PROVIDER_MODEL)).pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_MODEL))),
-  thinking: Schema.Literals(["off", "minimal", "low", "medium", "high", "xhigh"]).pipe(Schema.withDecodingDefaultKey(Effect.succeed("medium" as const))),
+  thinking: Schema.Literals(THINKING).pipe(Schema.withDecodingDefaultKey(Effect.succeed("medium" as const))),
+  childModel: Schema.optionalKey(Schema.String.check(Schema.isPattern(PROVIDER_MODEL))),
+  childThinking: Schema.Literals(THINKING).pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_CHILD_THINKING))),
   judge: Schema.String.check(Schema.makeFilter((judge) => judge === "main" || judge === "off" || PROVIDER_MODEL.test(judge))).pipe(
     Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_JUDGE)),
   ),
@@ -95,6 +124,7 @@ const Definition = Schema.Struct({
       Schema.Record(Schema.String, Schema.Unknown),
     ]),
   ),
+  screen: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
   settings: Schema.Struct({
     debounceMs: Schema.Finite.pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_SETTINGS.debounceMs))),
     debounceMaxMs: Schema.Finite.pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_SETTINGS.debounceMaxMs))),
@@ -106,6 +136,8 @@ const Definition = Schema.Struct({
       keepRecentTokens: Schema.optionalKey(Schema.Finite),
       backgroundTokens: Schema.optionalKey(Schema.Finite),
     }).pipe(Schema.withDecodingDefaultKey(Effect.succeed({}))),
+    maxChildren: Schema.Finite.pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_SETTINGS.maxChildren))),
+    autoMemory: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_SETTINGS.autoMemory))),
   }).pipe(Schema.withDecodingDefaultKey(Effect.succeed({}))),
 });
 
@@ -122,10 +154,15 @@ function problem(raw: unknown, issue: { message: string; path?: readonly (Proper
       return `"name" is required`;
     case "model":
       return `"model" must be "provider/modelId"`;
+    case "childModel":
+      return `"childModel" must be "provider/modelId"`;
     case "judge":
       return `"judge" must be "main", "off" or "provider/modelId"`;
+    case "screen":
+      return `"screen" must be an object of environment variables with text values, such as {"DISPLAY": ":99"}`;
     case "thinking":
-      return `"thinking" must be off, minimal, low, medium, high or xhigh`;
+    case "childThinking":
+      return `"${String(path[0])}" must be off, minimal, low, medium, high, xhigh or max`;
     case "channels":
       if (path.length === 1) return `"channels" must be a list`;
       if (path[2] === "type") return `channel ${String(channel?.id)} needs a "type"`;
@@ -154,8 +191,11 @@ export function readDefinition(file: string): { definition: BotDefinition; text:
       name: decoded.name,
       model: decoded.model,
       thinking: decoded.thinking,
+      ...(decoded.childModel === undefined ? {} : { childModel: decoded.childModel }),
+      childThinking: decoded.childThinking,
       judge: decoded.judge,
       channels: decoded.channels.map((channel) => ({ ...channel })),
+      ...(decoded.screen === undefined ? {} : { screen: { ...decoded.screen } }),
       settings: { ...decoded.settings, compaction: { ...decoded.settings.compaction } },
     },
   };

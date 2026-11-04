@@ -3,7 +3,32 @@ import type { TelemetryCarrier, TelemetrySpan } from "@earendil-works/pi-telemet
 import type { Address, PersonInfo, PlaceInfo } from "./channel.ts";
 import type { JudgeAnswer } from "./judge.ts";
 
-/** One logged event the gateway tells the bot about. No content: the agent reads that from the log. */
+/** A file of a message, as a wake gives it. */
+export interface WakeFile {
+  readonly name?: string;
+  readonly type?: string;
+  /** In bytes, when the platform says. */
+  readonly size?: number;
+  /** Where the gateway saved it on this computer. */
+  readonly path?: string;
+  /** Where the platform has it, when it was not saved. */
+  readonly url?: string;
+  /** Why it was not saved. */
+  readonly error?: string;
+}
+
+/** The message that starts the thread a message is in. */
+export interface ThreadStart {
+  readonly person?: PersonInfo;
+  readonly fromMe: boolean;
+  readonly text: string;
+  readonly deleted?: boolean;
+}
+
+/**
+ * One logged event the gateway tells the bot about, with what it says: the text, the start of its thread and its files.
+ * Earlier messages and other details are in the log.
+ */
 export interface WakeEvent {
   /** Row ID in the log's event table. */
   readonly id: number;
@@ -13,6 +38,15 @@ export interface WakeEvent {
   readonly thread?: Address;
   readonly person?: PersonInfo;
   readonly mentionsMe: boolean;
+  /** The message's current text for a message or an edit; the emoji for a reaction. */
+  readonly text?: string;
+  /** A message whose text was edited after it came: the text is the edited one. */
+  readonly edited?: boolean;
+  /** The message was deleted since. */
+  readonly deleted?: boolean;
+  /** When the message is a reply in a thread: the message that starts it, as it is now. */
+  readonly threadStart?: ThreadStart;
+  readonly files?: readonly WakeFile[];
 }
 
 /**

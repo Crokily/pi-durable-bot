@@ -55,7 +55,7 @@ It is woken in three ways, the same three ways a person notices work:
 | | Like a coworker who... | How |
 |---|---|---|
 | **Someone asks** | gets a message or an @ | A mention or a DM wakes it at once (after a short pause, so you can finish typing) |
-| **It notices** | overhears something that is their job | A judge reads each message that does not mention it and asks two questions: *is this about me?* and *should I respond?* It sees the bot's own list of responsibilities. The judge is the bot's own model, a fast classifier such as TypeSafe's Jev, or a local model |
+| **It notices** | overhears something that is their job | Every message that does not mention it comes to it too, and it decides itself whether it is about its work. You can also set a judge that reads these messages first and asks two questions: *is this about me?* and *should I respond?* It sees the bot's own list of responsibilities. The judge is a fast classifier such as TypeSafe's Jev, a local model, or the bot's own model |
 | **It checks in** | looks around now and then, and keeps promises | It sets its own timed wakes: "check Acme's pricing every Monday", "follow up at 5 pm". If it has none, it looks around every two hours |
 
 Being woken is not the same as speaking. Each time, the agent reads the log and decides if it should say anything, where, and when. Most of the time the right answer is to stay quiet.
@@ -64,7 +64,17 @@ Being woken is not the same as speaking. Each time, the agent reads the log and 
 
 It has a real machine with a shell, files, the internet, and a screen it uses like a person: the browser and the apps on it, with the mouse and keyboard. It does not wait for a plugin. It writes the script it needs, runs it, fixes it, and keeps the useful ones. That covers research, spreadsheets, reports, monitoring a web page, filling a form, or booking a flight, and also code.
 
-This is **code mode**: the agent gets a few general tools (`read`, `write`, `edit`, `bash`) plus three channel actions (`send`, `react`, `call`), and builds the rest itself.
+This is **code mode**: the agent gets a few general tools (`read`, `write`, `edit`, `bash`, `screen`) plus three channel actions (`send`, `react`, `call`), and builds the rest itself. One more tool, `task`, hands work to its helpers (below).
+
+`screen` is `bash` with the screen's environment, such as `DISPLAY`; `bash` does not have it. A screen runs one task at a time, as a person's desktop does: the first `screen` command of an agent takes the screen until its work ends, also across bots and the Pots processes of the same user on the machine. Another agent that tries then learns who has it, since when, and when it frees, and decides itself what to do. A bot that sets up its own desktop, such as an Xvfb display, writes its environment into `screen` in its `bot.json`.
+
+One agent at a time per screen is enforced only on Linux, where plain `bash` has no `DISPLAY` or `WAYLAND_DISPLAY` and so cannot reach the screen. On macOS and Windows the screen does not depend on those variables, so `bash` can still use it; there the agents use the `screen` tool because the prompt tells them to.
+
+### 👥 Its own helpers
+
+Longer work does not keep it from talking. With its `task` tool the bot starts **children**: agents that work in the background with `read`, `write`, `edit`, `bash` and `screen`, without the channel actions and `task`, on a brief it writes for them. It answers the person first, hands the work to a child, and stays free for the next message. A child starts from an empty conversation and its brief, so the bot's own context stays small; it sees the bot's memory index as it was when it started. When a child ends, done, failed or with a question for a person, its final message comes back to the bot as a wake, exactly once, also across crashes and restarts; the bot passes on what matters, and sends the child the answer to its question. While a child works for a place, new messages there go to the bot, so it can pass them on. Its timed and fallback wakes list the children that work and how long each has run. A stopped child reports nothing and does nothing more, also when the process dies in the middle of the stop.
+
+Children use the bot's model, or the `childModel` of `bot.json`; a change counts for new children and those that exist, also when `childModel` is taken out. The bot chooses each child's thinking level when it starts it: `high`, `xhigh` or `max`, and without a choice the `childThinking` of `bot.json` (`xhigh` by default). A child keeps its level for its whole life, so a new `childThinking` counts for new children only; a level the model does not have becomes the nearest one it has, as in pi. `settings.maxChildren` (50 by default) caps how many work at once. `pots children` lists them, and `pots children --stop <id>` or `--stop-all` stops them.
 
 It works like a [pi](https://github.com/earendil-works/pi) session: it reads `AGENTS.md` and uses [Agent Skills](https://agentskills.io) from the same places pi does, so the skills you give pi, the bot can use too. Screenshots and photos are shrunk to fit the model, as in pi.
 
@@ -78,7 +88,9 @@ It promises to come back, and it does. Timed wakes live in the same database as 
 
 ### 📓 Its own memory
 
-Each bot has one long conversation, across every channel. When the context gets full, the bot decides when to **turn the page**: it writes notes for itself, starts a fresh context, and the notes come with it. The full message log stays on disk, so nothing is lost. Its `AGENTS.md`, its responsibilities and its notes are plain files it edits itself.
+Each bot has one long conversation, across every channel. Its **memory** works as Claude Code's automatic memory: plain markdown files, one per memory, and an index, `MEMORY.md`, that the bot sees at the start of every page and that points to them. The bot saves what is worth keeping (preferences, rules, facts about people and the work, decisions) when it sees it, and after each piece of work its own model, continuing the same conversation in the background, saves what it missed. That pass never sends a message or holds up a reply, its request starts as the bot's last one did, so the provider's prompt cache serves most of it, and code lets it change nothing but the memory. Once a day, after enough changes, a dream tidies the memory up the same way. The bot's next wake says what a pass or a dream changed; as in Claude Code, a restart before that wake loses the note, not the memory. A memory file read two days or more after it changed says how old it is. Each bot has its own memory, in `memory/` in its folder, and the bots of one computer share one more, in `~/.pots/memory/`, for facts about you. "Remember this" and "forget that" work by talking to it; to forget is to delete the file, as in Claude Code. `"settings": {"autoMemory": false}` in `bot.json` turns the memory off.
+
+When the context gets full, the bot decides when to **turn the page**: it writes notes for itself, starts a fresh context, and the notes and the memory come with it. The full message log stays on disk, so nothing is lost. Its `AGENTS.md`, its responsibilities and its notes are plain files it edits itself.
 
 ### 🛟 Durable by design
 
@@ -93,7 +105,7 @@ Grok Bot, dots, Muse and Claude Duet are closed products. They run on someone el
 | Source code | Closed | Open, MIT |
 | Where it runs | The vendor's cloud | Your server, your VM, your office box |
 | Model | The vendor's | Your subscription login, any of 40+ providers, or a local model |
-| Your data | Sent to the vendor | Stays on your machine in one SQLite file per bot |
+| Your data | Sent to the vendor | Stays on your machine, in each bot's folder |
 | Channels | The ones the vendor supports | Any channel with a [Chat SDK](https://chat-sdk.dev) adapter |
 | Custom work | What the vendor allows | Anything. Change the code, add tools, connect your own systems |
 
@@ -133,20 +145,24 @@ It joins only the places it is invited to, like a new hire who is added to the r
 | `pots service install \| uninstall \| restart \| logs` | The gateway as a background service: launchd on macOS, systemd on Linux (`--system` for a server), Task Scheduler on Windows |
 | `pots start` | Run the gateway in this terminal instead |
 | `pots bot new \| list` | Create and list bots |
-| `pots trace` | What a bot did: its last wakes, or one wake from the events to its run and the messages it sent |
+| `pots trace` | What a bot did: its last wakes, or one wake from the events to its run, the runs of the children it started, and the messages it sent, with how much of each model request the provider's prompt cache served |
+| `pots children [--stop <id> \| --stop-all]` | The children a bot started for longer work, with each one's thinking level, or stop them |
 
 To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`. To remove it, run `pots service uninstall`, then `npm uninstall -g pi-durable-bot`. The bots stay in `~/.pots/` until you delete that folder.
 
 ### Choose the models
 
-`pots init` sets up the model. Each bot's `bot.json` names two models, and you can change them at any time; edits apply within seconds. Logins, API keys and local endpoints are stored in pi's files in `~/.pi/agent/`, so the [pi](https://github.com/earendil-works/pi) command line, if you use it, shares them.
+`pots init` sets up the model. Each bot's `bot.json` names its model and, if you want one, a judge, and you can change them at any time; edits apply within seconds. Logins, API keys and local endpoints are stored in pi's files in `~/.pi/agent/`, so the [pi](https://github.com/earendil-works/pi) command line, if you use it, shares them.
 
 | Field | What it does | Values |
 |---|---|---|
 | `model` | The agent that reads, thinks and acts | Any pi model as `provider/modelId`, for example `openai/gpt-6.1-sol` or `anthropic/claude-opus-5-5` |
-| `judge` | Decides which messages that do not mention the bot should wake it | `main` (default): the bot's own model judges, no extra account<br>`provider/modelId` of a classifier: `typesafe/jev-latest`, `openrouter/typesafe/jev-1.14`, `opencode/jev-1.13-free`, or a llama.cpp model<br>`off`: every message wakes the bot, and the agent decides |
+| `thinking` | How hard the agent thinks. A level the model does not have becomes the nearest one it has, as in pi | `off`, `minimal`, `low`, `medium` (default), `high`, `xhigh`, `max` |
+| `childModel` | The model of the children that do longer work in the background | Unset (default): the bot's `model` |
+| `childThinking` | The thinking level of a child the bot starts without choosing one | As `thinking`; `xhigh` (default) |
+| `judge` | Decides which messages that do not mention the bot should wake it | `off` (default): every message wakes the bot, and the agent decides<br>`provider/modelId` of a classifier: `typesafe/jev-latest`, `openrouter/typesafe/jev-1.14`, `opencode/jev-1.13-free`, or a llama.cpp model<br>`main`: the bot's own model judges, no extra account, but slower |
 
-A fast classifier is cheaper and quicker than the main model: Jev answers in about 0.3 seconds. With `main`, each group of messages costs one short request to the main model.
+With `off`, each group of messages is a wake of the main model, which then decides. A fast classifier keeps the messages that are not for the bot away from it, and is cheaper and quicker than the main model: Jev answers in about 0.3 seconds. With `main`, each group of messages costs one short request to the main model before the bot hears of it.
 
 **OpenAI-compatible and local endpoints** (Ollama, LM Studio, vLLM, a proxy): `pots init` adds them for you. By hand, they go in pi's `~/.pi/agent/models.json` ([fields](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md)):
 
@@ -179,18 +195,18 @@ flowchart LR
   E[New event] --> L[(Message log)]
   E --> M{Mention or DM?}
   M -- yes --> W[Wake the agent]
-  M -- no --> J{Judge: about me?<br/>need to respond?}
+  M -- no --> J{Judge, if set:<br/>about me?<br/>need to respond?}
   J -- yes --> W
   J -- no --> Q[Stay quiet, remember it]
   T[Its own timers] --> W
-  W --> A{Agent reads the log<br/>and decides}
+  W --> A{Agent reads the wake<br/>and decides}
   A --> S[Speak, react or act]
   A --> N[Do nothing]
 ```
 
-- Messages that arrive close together are grouped: it waits 3 seconds after the last one (20 seconds at most) before it judges.
-- If it is already working in a place, new messages there are handed to it as it works, so it can change course.
-- The wake message says only where, who, why and when. The agent reads the content itself.
+- Messages that arrive close together are grouped: it waits 3 seconds after the last one (20 seconds at most) before it decides.
+- If it is already working in a place, itself or with a child, new messages there are handed to it as it works, so it can change course.
+- The wake message says where, who, why and when, and gives each new message's text, the start of its thread when it is a reply, and its files. The gateway downloads files as soon as a message comes, into the bot's `files/tmp/`, so the wake gives their paths on the machine; it deletes them 30 days later, and the log keeps each file's name, type, size and URL, so the bot can download it again. A file over 10 MB is not downloaded, and a download that passes 10 MB, when the channel gave no size, stops and is deleted; the wake waits for the other downloads at most 10 seconds past the moment it would go out without them; for a file that is not saved, it gives the URL, and the bot downloads it itself if it needs it. Earlier messages and other details are in the log.
 
 ## How it works
 
@@ -208,7 +224,9 @@ flowchart LR
   end
   subgraph Bot[Bot]
     P[Persona, responsibilities, notes, timers]
-    A[pi-durable agent<br/>read write edit bash<br/>send react call]
+    A[pi-durable agent<br/>read write edit bash screen<br/>send react call task]
+    C[Children<br/>read write edit bash screen]
+    A --> C
   end
   S --> I
   T --> I
@@ -227,19 +245,23 @@ flowchart LR
 | Bot | Identity, persona, responsibilities, notes, timers, workspace and one long conversation. |
 | Agent | [pi-durable](https://github.com/earendil-works/pi): runs the model, journals every step, owns the tools. |
 
-One gateway process runs every bot on the machine. Everything lives in `~/.pots/` (or `$POTS_HOME`): one folder per bot in `bots/`, channel tokens in `secrets/`, the gateway's output in `logs/` on macOS and Windows (on Linux, `pots service logs` reads the journal). Each bot folder holds:
+One gateway process runs every bot on the machine. Everything lives in `~/.pots/` (or `$POTS_HOME`): one folder per bot in `bots/`, channel tokens in `secrets/`, the memory the bots share about you in `memory/`, the gateway's output in `logs/` on macOS and Windows (on Linux, `pots service logs` reads the journal). Each bot folder holds:
 
 | File | What it is |
 |---|---|
-| `bot.json` | Name, model, judge, channel accounts, settings. Edits apply within seconds. |
+| `bot.json` | Name, model, children's model, judge, channel accounts, its screen, settings. Edits apply within seconds. |
 | `AGENTS.md` | Personality and voice, read the way pi reads AGENTS.md. The bot maintains it. |
 | `responsibilities.md` | What it is responsible for. The judge reads it. The bot maintains it. |
-| `notes.md` | Notes it carries across pages. |
+| `notes.md` | Its handoff to the next page: what it is doing and what it promised. |
 | `workspace/` | Its working directory. |
+| `files/` | Files people sent in messages, in `files/tmp/`: one folder per message, and in it one numbered folder per file. Pots deletes them 30 days after they were saved, and nothing else in the bot folder; the bot moves or copies out of `files/tmp/` what it keeps. |
 | `terminal/` | Its terminal channel: what you and the bot say in `pots chat`. |
+| `memory/` | Its memory: one markdown file per memory, and `MEMORY.md`, their index. The bot maintains it. |
 | `bot.sqlite` | Message log, timers and the agent's journal in one file. |
 
-The same `pots` command gives the bot (and its scripts and cron jobs) its actions from a shell: `pots send`, `pots react`, `pots call`, `pots wake`, `pots context`, `pots turn-page`. Tokens stay inside the running gateway; the agent never sees them.
+The same `pots` command gives the bot (and its scripts and cron jobs) its actions from a shell: `pots send`, `pots react`, `pots call`, `pots wake`, `pots context`, `pots turn-page`, `pots children`. Tokens stay inside the running gateway; the agent never sees them.
+
+The bot sends its whole conversation with each model request, so the provider's prompt cache matters: a request whose start the provider has cached costs a fraction. The system prompt holds only facts that stay the same, and the bot's own parts of it, its memory too, keep their text for the whole page; a change, such as a new `settings` value in `bot.json`, shows after the page turns, after pi compacts, or after an upgrade. What changes from one wake to the next, such as the time, the context use and the bot's own address in a channel, is in the wake. `pots trace` and `pots context` show how much of the input the cache served and what the requests that missed it cost.
 
 ## Status
 
@@ -249,11 +271,13 @@ pi-durable-bot runs every day as a teammate in a real workspace. What works toda
 - [x] Mention, DM, judge and timer wakes, grouping, and steering
 - [x] Code mode on its own machine, `pots` command line
 - [x] Turning the page with notes, compaction as a fallback
+- [x] Memory it keeps by itself after each piece of work, its own and one shared about you
 - [x] Crash-safe inbox and outbox, tested with a forced crash mid-send
 - [x] Several bots per machine
 - [x] `pots init`: name, AI and one sentence, then the bot sets up its own chat apps from the terminal
 - [x] macOS, Linux and Windows, as a background service of the user
 - [x] The screen, mouse and keyboard of its computer, used like a person (computer use), or no screen on a server
+- [x] Children for longer work in the background, reported back once, also across restarts
 - [x] Any model pi can use: subscription logins, API keys, OpenAI-compatible endpoints, local models
 - [x] A judge you choose: the bot's own model, Jev or another classifier, a local llama.cpp model, or none
 - [x] `AGENTS.md`, Agent Skills and images as in a pi session

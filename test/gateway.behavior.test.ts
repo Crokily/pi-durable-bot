@@ -1,3 +1,5 @@
+import { existsSync, mkdirSync, readFileSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { agentRequests, coworker, type FakeModel, judgeRequests, startFakeModel, wakeLine, wakes } from "./support/fake-model.ts";
 import { CHANNEL, ME, pause, TestGateway, waitFor } from "./support/gateway.ts";
@@ -53,12 +55,13 @@ describe("receive, log, wake, send", { timeout: 60_000 }, () => {
     // pots trace shows the whole wake: the event, the decision, the agent's run with its model requests, and the send
     // under the send tool's call.
     await gateway.stop();
-    expect(gateway.pots("trace")).toMatch(/mention\s+test:#general\s+1 event\s+sent 1\s+model 2×, 220 tokens/);
+    expect(gateway.pots("trace")).toMatch(/mention\s+test:#general\s+1 event\s+sent 1\s+model 2×, 220 tokens, 80% cached/);
+    expect(gateway.pots("trace")).toMatch(/^Model requests: 2, 200 input tokens, 80% cached, \$0\.0000\. 0 read less than half from the cache: \$0\.0000\.$/m);
     const trace = gateway.pots("trace", reply!.send_id!);
     expect(trace).toMatch(/^wake .*reason=mention/m);
     expect(trace).toMatch(/^agent run, trace /m);
     expect(trace).toMatch(/^submission \d+ \(placed\)/m);
-    expect(trace).toMatch(/─ model fake\/coworker, 100 in, 10 out, toolUse/);
+    expect(trace).toMatch(/─ model fake\/coworker, 100 in \(80% cached\), 10 out, toolUse/);
     expect(trace).toMatch(/─ tool send call → done[^\n]*\n[│ ]*└─ send send=tool:\d+ .*result=sent/);
     expect(trace).toContain(`event=${id}`);
   });
@@ -105,6 +108,74 @@ describe("receive, log, wake, send", { timeout: 60_000 }, () => {
 
     await waitFor(() => gateway.sent().length === 2, { what: "two replies" });
     expect(gateway.sent().map((record) => record.place).sort()).toEqual(["general", "random"]);
+  });
+});
+
+describe("what a wake gives", { timeout: 60_000 }, () => {
+  it("gives each message's text, the start of its thread and its files, saved when the message came", async () => {
+    await setUp();
+    mkdirSync(gateway.platformDir, { recursive: true });
+    writeFileSync(join(gateway.platformDir, "report.txt"), "the numbers");
+    const root = gateway.say("general", "bob", "here is the plan\nsecond line");
+    await waitFor(() => gateway.sent().length === 1, { what: "the first reply" });
+    const files = [
+      { name: "report.txt", type: "text/plain", url: "report.txt" },
+      { name: "gone.png", type: "image/png", url: "gone.png" },
+    ];
+    gateway.share("general", "alice", `@${ME} see these`, files, root);
+
+    await waitFor(() => gateway.sent().length === 2, { what: "the second reply" });
+    const wake = wakes(model)[1]!;
+    // The bot's own address is in the wake, not in the system prompt, which stays the same while a channel connects.
+    expect(wake).toContain(`\nYou here: ${CHANNEL}:@${ME}\n`);
+    expect(agentRequests(model).at(-1)!.system).not.toContain(`${CHANNEL}:@${ME}`);
+    expect(wake).toContain(`Thread started by bob (${CHANNEL}:@bob): here is the plan\n    second line`);
+    expect(wake).toContain(`  Text: @${ME} see these`);
+    const saved = /^ {2}File: report\.txt \(text\/plain\), saved at (.+)$/m.exec(wake)?.[1];
+    expect(saved?.startsWith(join(gateway.botDir, "files", "tmp"))).toBe(true);
+    expect(readFileSync(saved!, "utf8")).toBe("the numbers");
+    // A download that fails does not hold up the wake: it says so and gives the URL.
+    expect(wake).toMatch(/^ {2}File: gone\.png \(image\/png\), not saved: download failed: .*\. URL: gone\.png$/m);
+  });
+});
+
+describe("saved files", { timeout: 60_000 }, () => {
+  it("deletes what is in files/tmp/ 30 days after it was saved, and nothing outside it", async () => {
+    model = await startFakeModel();
+    gateway = new TestGateway({ model });
+    const tmp = join(gateway.botDir, "files", "tmp");
+    const file = (path: string, daysAgo: number) => {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, "content");
+      const at = new Date(Date.now() - daysAgo * 86_400_000);
+      utimesSync(path, at, at);
+    };
+    file(join(tmp, "test_general_m-1", "1", "old.txt"), 31);
+    file(join(tmp, "test_general_m-2", "1", "recent.txt"), 29);
+    file(join(gateway.botDir, "files", "kept.txt"), 31);
+    file(join(gateway.botDir, "workspace", "kept.txt"), 31);
+
+    await gateway.start();
+    await waitFor(() => !existsSync(join(tmp, "test_general_m-1")), { what: "the old file's folder to be deleted" });
+    expect(existsSync(join(tmp, "test_general_m-2", "1", "recent.txt"))).toBe(true);
+    expect(existsSync(join(gateway.botDir, "files", "kept.txt"))).toBe(true);
+    expect(existsSync(join(gateway.botDir, "workspace", "kept.txt"))).toBe(true);
+  });
+
+  it("deletes nothing when files/tmp/ itself is a symbolic link, and says so once", async () => {
+    model = await startFakeModel();
+    gateway = new TestGateway({ model });
+    const elsewhere = join(gateway.home, "elsewhere");
+    mkdirSync(join(elsewhere, "m-1"), { recursive: true });
+    writeFileSync(join(elsewhere, "m-1", "old.txt"), "content");
+    const at = new Date(Date.now() - 31 * 86_400_000);
+    utimesSync(join(elsewhere, "m-1", "old.txt"), at, at);
+    mkdirSync(join(gateway.botDir, "files"), { recursive: true });
+    symlinkSync(elsewhere, join(gateway.botDir, "files", "tmp"));
+
+    await gateway.start();
+    await waitFor(() => gateway.output.some((line) => String(line.message).startsWith("files cleanup skipped")), { what: "the skipped cleanup" });
+    expect(existsSync(join(elsewhere, "m-1", "old.txt"))).toBe(true);
   });
 });
 
@@ -175,7 +246,7 @@ describe("crashes and restarts", { timeout: 90_000 }, () => {
     expect(gateway.pots("trace")).toMatch(/mention\s+test:#general\s+1 event\s+sent 1\s+model \d+×/);
     const trace = gateway.pots("trace", "mention:test:#general:1");
     expect(trace).toMatch(/^agent run, trace /m);
-    expect(trace).toMatch(/─ model fake\/coworker, 100 in, 10 out, toolUse/);
+    expect(trace).toMatch(/─ model fake\/coworker, 100 in \(80% cached\), 10 out, toolUse/);
     expect(trace).toMatch(/└─ send send=tool:\d+ .*result=sent/);
   });
 

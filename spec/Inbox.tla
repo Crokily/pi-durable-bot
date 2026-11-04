@@ -9,6 +9,13 @@
 (* here it may decide on its batch at any time, with any reason (the      *)
 (* reason depends on the judge and on what the agent works on, which can  *)
 (* change between two runs).                                               *)
+(*                                                                         *)
+(* Before it records a wake, the waker reads the events' text and waits    *)
+(* for their files (src/gateway/files.ts). That is in memory and ends at   *)
+(* most 10 seconds after the waker has its reason, so here it is part of   *)
+(* the time between Flush and RecordWake. The code decides the groups of a *)
+(* place one after the other; the model lets them overlap, which includes  *)
+(* that order.                                                             *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets
 
@@ -99,7 +106,9 @@ Apply ==
     /\ queue' = Tail(queue)
     /\ UNCHANGED <<acked, repeats, receiving, received, decided, pending, wakes, woken, deciding, crashes>>
 
-\* The waker's timer fires: the whole batch is decided, with a reason.
+\* The waker's timer fires: the whole batch is decided, with a reason. Reading its text and waiting for its files come
+\* before RecordWake and change nothing the model tracks (saved files are not in it); a crash in that time leaves the
+\* events undecided.
 Flush ==
     /\ batch # {}
     /\ \E r \in Reasons : deciding' = deciding \cup {[events |-> batch, reason |-> r, id |-> <<>>, step |-> "record"]}

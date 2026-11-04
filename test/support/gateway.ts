@@ -23,6 +23,8 @@ export interface BotOptions {
   /** bot.json "judge". */
   readonly judge?: string;
   readonly settings?: Record<string, unknown>;
+  /** bot.json "childModel": fake/helper, which the fake provider then has too. */
+  readonly childModel?: string;
   /** Also a terminal channel, for `pots chat`. */
   readonly terminal?: boolean;
 }
@@ -36,6 +38,8 @@ export interface PlatformRecord {
   readonly text?: string;
   readonly thread?: string;
   readonly send_id?: string;
+  /** url: a path relative to the platform directory. */
+  readonly files?: readonly { name?: string; type?: string; url?: string }[];
 }
 
 export class TestGateway {
@@ -58,6 +62,7 @@ export class TestGateway {
       model: "fake/coworker",
       thinking: "off",
       judge: options.judge ?? "off",
+      ...(options.childModel ? { childModel: options.childModel } : {}),
       channels: [{ id: CHANNEL, type: "test", dir: this.platformDir, me: ME }, ...(options.terminal ? [{ id: "terminal", type: "terminal" }] : [])],
       settings: { debounceMs: 300, debounceMaxMs: 2_000, ...options.settings },
     };
@@ -69,8 +74,12 @@ export class TestGateway {
           baseUrl: options.model.url,
           api: "openai-completions",
           apiKey: "fake",
-          compat: { supportsDeveloperRole: false, supportsReasoningEffort: false },
-          models: [{ id: "coworker", contextWindow: 128_000, input: ["text", "image"] }],
+          // The session header shows which provider session a request names, as a provider's cache sees it.
+          compat: { supportsDeveloperRole: false, supportsReasoningEffort: false, sendSessionAffinityHeaders: true, sessionAffinityFormat: "openai" },
+          models: [
+            { id: "coworker", contextWindow: 128_000, input: ["text", "image"] },
+            ...(options.childModel ? [{ id: "helper", contextWindow: 128_000, input: ["text", "image"] }] : []),
+          ],
         },
       },
     };
@@ -174,11 +183,31 @@ export class TestGateway {
     writeFileSync(join(this.botDir, "crash-after-send"), "");
   }
 
+  /** Make the gateway die right before the next memory pass forks the main conversation. */
+  crashBeforeNextMemoryPass(): void {
+    writeFileSync(join(this.botDir, "crash-before-memory-pass"), "");
+  }
+
+  /** Make the gateway die just before, or just after, the next child's end is handed to the main agent. */
+  crashAroundNextChildReport(when: "before" | "after"): void {
+    writeFileSync(join(this.botDir, `crash-${when}-child-report`), "");
+  }
+
+  /** Make the gateway die right after the next stop marks a child stopped, before the child's work ends. */
+  crashAfterNextChildStop(): void {
+    writeFileSync(join(this.botDir, "crash-after-child-stop"), "");
+  }
+
   // ---- The test platform ----
 
   /** A person says something. Returns the new message's ID on the platform. */
   say(place: string, person: string, text: string, thread?: string): string {
     return this.#append({ type: "message", place, person, text, ...(thread ? { thread } : {}) });
+  }
+
+  /** A person sends a message with files. Returns the new message's ID on the platform. */
+  share(place: string, person: string, text: string, files: NonNullable<PlatformRecord["files"]>, thread?: string): string {
+    return this.#append({ type: "message", place, person, text, files, ...(thread ? { thread } : {}) });
   }
 
   #append(record: Omit<PlatformRecord, "id" | "at">): string {

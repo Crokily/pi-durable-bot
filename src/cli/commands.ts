@@ -13,8 +13,8 @@ import * as ServiceLayer from "./service.ts";
 import { traceCommand } from "./trace.ts";
 
 // pots: one command for people and for the bots. People set up and run bots (init, chat, service, status); bots and
-// their scripts act in their channels (send, react, call, wake, context, turn-page). Each command loads only what it
-// uses: the agent's scripts run pots often, and only pots start needs the gateway and the agent.
+// their scripts act in their channels (send, react, call, wake, context, turn-page, children). Each command loads only
+// what it uses: the agent's scripts run pots often, and only pots start needs the gateway and the agent.
 
 const { version } = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { version: string };
 
@@ -45,9 +45,10 @@ const status = Command.make("status", {}, () =>
     for (const id of listBots()) {
       const line = yield* control(id, "GET", "/status").pipe(
         Effect.map((result) => {
-          const bot = result as { name: string; model: string; busy: boolean; channels: { id: string }[]; lastError?: { at: number; error: string } };
+          const bot = result as { name: string; model: string; busy: boolean; children?: number; channels: { id: string }[]; lastError?: { at: number; error: string } };
           const error = bot.lastError ? `; last failed run ${new Date(bot.lastError.at).toLocaleString()}: ${bot.lastError.error}` : "";
-          return `${id}: ${bot.name}, ${bot.model}, ${bot.busy ? "working" : "idle"}, channels ${bot.channels.map((channel) => channel.id).join(", ") || "none"}${error}`;
+          const children = bot.children ? `, ${bot.children} child${bot.children === 1 ? "" : "ren"} working` : "";
+          return `${id}: ${bot.name}, ${bot.model}, ${bot.busy ? "working" : "idle"}${children}, channels ${bot.channels.map((channel) => channel.id).join(", ") || "none"}${error}`;
         }),
         Effect.orElseSucceed(() => `${id}: not running`),
       );

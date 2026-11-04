@@ -1,9 +1,10 @@
-import { Cause, Clock, Context, Effect, FiberMap, FiberSet, Layer, Option, Result, type Tracer } from "effect";
+import { Cause, Clock, Context, Effect, Fiber, FiberMap, FiberSet, Layer, Option, Result, type Tracer } from "effect";
 import type { PlaceInfo } from "../core/channel.ts";
 import type { Judge, JudgeItem } from "../core/judge.ts";
-import type { PlaceWake, PlaceWakeReason, WakeEvent, WakeTarget } from "../core/wake.ts";
+import type { PlaceWake, PlaceWakeReason, ThreadStart, WakeEvent, WakeFile, WakeTarget } from "../core/wake.ts";
 import { GatewayConfig } from "./config.ts";
 import { DeliverError, failureText, JudgeError, type LogError, message, NoWakeTarget } from "./errors.ts";
+import { Attachments } from "./files.ts";
 import { type LoggedMessage, MessageLog, type UndecidedEvent } from "./log.ts";
 import { LINK, Telemetry } from "./telemetry.ts";
 import { WakeSpans } from "./tracing.ts";
@@ -46,6 +47,9 @@ interface Batch {
  * 1. the bot works on this place now → steer;
  * 2. an event @-mentions the bot, or the place is a one-to-one DM → wake;
  * 3. otherwise the judge decides; with no judge, every event wakes the bot.
+ * A wake gives each event with its text, the start of its thread and its files. Their downloads start when the events
+ * come; once the wake would go out, it waits for them at most FILE_WAIT_MS (see files.ts). The groups of a place are
+ * decided one after the other, so their wakes come in order.
  */
 export class Waker extends Context.Service<
   Waker,
@@ -66,7 +70,10 @@ export class Waker extends Context.Service<
       const config = yield* GatewayConfig;
       const wakeSpans = yield* WakeSpans;
       const telemetry = yield* Telemetry;
+      const attachments = yield* Attachments;
       const batches = new Map<string, Batch>();
+      /** Per place, the decision of its last group. */
+      const lastDecision = new Map<string, Fiber.Fiber<void>>();
       const timers = yield* FiberMap.make<string>();
       const deciding = yield* FiberSet.make();
       let target: WakeTarget | undefined;
@@ -97,12 +104,19 @@ export class Waker extends Context.Service<
             ? { address: first.place, kind: first.place_kind ?? "channel", ...(first.place_name ? { name: first.place_name } : {}) }
             : { address: `${first.channel}:`, kind: "channel", name: first.channel };
           const ids = events.map((event) => event.id);
-          const wakeEvents = events.map(toWakeEvent);
           const id = (reason: string) => `${reason}:${place.address}:${ids.at(-1)}`;
           yield* Effect.annotateCurrentSpan({ place: place.address, events: ids.join(",") });
 
           const deliver = (reason: PlaceWakeReason, decision: string, judged?: PlaceWake["judged"]) =>
             Effect.gen(function* () {
+              const files = yield* Effect.forEach(events, (event) => attachments.files(event), { concurrency: "unbounded" });
+              // The bot may have started working on this place while the files came.
+              if (reason !== "steer" && bot.isWorkingOn(place.address)) {
+                reason = "steer";
+                decision = "steer";
+                judged = undefined;
+              }
+              const wakeEvents = yield* withContent(events, files);
               const wake: PlaceWake = { id: id(reason), reason, place, events: wakeEvents, ...(judged ? { judged } : {}) };
               yield* log.recordWake(wake, ids, decision);
               yield* handOver(bot, wake);
@@ -128,7 +142,11 @@ export class Waker extends Context.Service<
           if (bot.isWorkingOn(place.address)) return yield* deliver("steer", "steer");
           yield* log.setWake(ids, "judge_no");
           yield* Effect.annotateCurrentSpan({ reason: "judge_no" });
-        }).pipe(Effect.withSpan("wake", { root: true, links: links.map((span) => ({ span, attributes: { [LINK]: "event" } })) }));
+        }).pipe(
+          // No wake gives the files of events the judge said no to, or of a decision that failed.
+          Effect.ensuring(Effect.forEach(events, (event) => attachments.drop(event), { discard: true })),
+          Effect.withSpan("wake", { root: true, links: links.map((span) => ({ span, attributes: { [LINK]: "event" } })) }),
+        );
 
       const askJudge = (judge: Judge, bot: WakeTarget, place: PlaceInfo, events: UndecidedEvent[], settings: WakerSettings) =>
         Effect.gen(function* () {
@@ -160,6 +178,18 @@ export class Waker extends Context.Service<
           Effect.catchDefect((defect) => Effect.fail(new JudgeError({ message: String(defect), cause: defect }))),
           Effect.withSpan("wake.judge"),
         );
+
+      /** The events as the wake gives them, with their saved files: their text and thread start as they are now. */
+      const withContent = (events: UndecidedEvent[], files: readonly (readonly WakeFile[])[]) =>
+        Effect.gen(function* () {
+          const addresses = new Set<string>();
+          for (const event of events) {
+            if (event.message) addresses.add(event.message);
+            if (event.thread && event.thread !== event.message) addresses.add(event.thread);
+          }
+          const messages = new Map((yield* log.messages([...addresses])).map((logged) => [logged.address, logged]));
+          return events.map((event, index): WakeEvent => toWakeEvent(event, messages, files[index]!));
+        });
 
       /** An event as the judge sees it: what happened, with the current state of the message it is about. */
       const describe = (event: UndecidedEvent, name: string): Effect.Effect<JudgeItem, LogError> =>
@@ -200,7 +230,16 @@ export class Waker extends Context.Service<
             const batch = batches.get(key);
             if (!batch) return Effect.void;
             batches.delete(key);
-            return FiberSet.run(deciding, decide(batch.events, batch.spans).pipe(reportFailure(key)));
+            const previous = lastDecision.get(key);
+            const decision = Effect.gen(function* () {
+              if (previous) {
+                yield* Fiber.await(previous);
+                // Stopped while the group before waited: these events stay undecided for the next start.
+                if (stopped) return;
+              }
+              yield* decide(batch.events, batch.spans);
+            }).pipe(reportFailure(key));
+            return Effect.map(FiberSet.run(deciding, decision), (fiber) => void lastDecision.set(key, fiber));
           }),
         );
 
@@ -236,6 +275,7 @@ export class Waker extends Context.Service<
             const span = yield* Effect.currentSpan.pipe(Effect.option);
             let batch = batches.get(key);
             if (batch?.ids.has(event.id)) return;
+            yield* attachments.start(event);
             if (!batch) batches.set(key, (batch = { events: [], ids: new Set(), spans: [], first: now }));
             batch.events.push(event);
             batch.ids.add(event.id);
@@ -247,14 +287,30 @@ export class Waker extends Context.Service<
           stopped = true;
           yield* FiberMap.clear(timers);
           batches.clear();
+          // A decision that waits for files gives up; its events come back on the next start, and so do the downloads.
+          yield* attachments.stop;
           yield* FiberSet.awaitEmpty(deciding);
+          lastDecision.clear();
         }),
       });
     }),
   );
 }
 
-function toWakeEvent(event: UndecidedEvent): WakeEvent {
+const MESSAGE_KINDS = new Set(["message", "edit", "update"]);
+
+function toWakeEvent(event: UndecidedEvent, messages: ReadonlyMap<string, LoggedMessage>, files: readonly WakeFile[]): WakeEvent {
+  const logged = event.message ? messages.get(event.message) : undefined;
+  const root = event.thread && event.thread !== event.message ? messages.get(event.thread) : undefined;
+  // A message or an edit: the message's text as it is now. An update does not change the text. Other events: their own
+  // text, such as a reaction's emoji.
+  const text = event.kind === "message" || event.kind === "edit" ? (logged?.text ?? event.text) : event.kind === "update" ? null : event.text;
+  const threadStart: ThreadStart | undefined = root && {
+    fromMe: root.from_me === 1,
+    text: root.text,
+    ...(root.person ? { person: { address: root.person, ...(root.person_name ? { name: root.person_name } : {}) } } : {}),
+    ...(root.deleted_at !== null ? { deleted: true } : {}),
+  };
   return {
     id: event.id,
     kind: event.kind,
@@ -263,6 +319,11 @@ function toWakeEvent(event: UndecidedEvent): WakeEvent {
     ...(event.message ? { message: event.message } : {}),
     ...(event.thread ? { thread: event.thread } : {}),
     ...(event.person ? { person: { address: event.person, ...(event.person_name ? { name: event.person_name } : {}) } } : {}),
+    ...(text ? { text } : {}),
+    ...(event.kind === "message" && logged?.edited_at != null ? { edited: true } : {}),
+    ...(MESSAGE_KINDS.has(event.kind) && logged?.deleted_at != null ? { deleted: true } : {}),
+    ...(threadStart ? { threadStart } : {}),
+    ...(files.length ? { files } : {}),
   };
 }
 

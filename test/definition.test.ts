@@ -55,6 +55,48 @@ describe("bot.json while running", { timeout: 90_000 }, () => {
     expect(gateway.output.filter((line) => line.message === "definition applied")).toHaveLength(1);
   });
 
+  it("takes the thinking level max, also for a model without it, and names the levels when one is wrong", async () => {
+    model = await startFakeModel();
+    gateway = new TestGateway({ model });
+    const file = join(gateway.botDir, "bot.json");
+    const errorFile = join(gateway.botDir, "bot.json.error");
+    const definition = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+    // The fake model has no thinking levels: pi makes max the nearest one it has.
+    writeFileSync(file, `${JSON.stringify({ ...definition, thinking: "max", childThinking: "max" }, null, 2)}\n`);
+    await gateway.start();
+    gateway.say("general", "alice", `@${ME} think hard`);
+    await waitFor(() => gateway.sent().length === 1, { what: "the reply" });
+
+    writeFileSync(file, `${JSON.stringify({ ...definition, childThinking: "huge" }, null, 2)}\n`);
+    await waitFor(() => existsSync(errorFile), { what: "bot.json.error" });
+    expect(readFileSync(errorFile, "utf8")).toBe(`${file}: "childThinking" must be off, minimal, low, medium, high, xhigh or max\n`);
+  });
+
+  it("keeps the bot's own prompt sections for the page, and shows a change after the page turns", async () => {
+    model = await startFakeModel();
+    gateway = new TestGateway({ model });
+    await gateway.start();
+    const file = join(gateway.botDir, "bot.json");
+    const definition = JSON.parse(readFileSync(file, "utf8")) as { settings: Record<string, unknown> };
+    gateway.say("general", "alice", `@${ME} hello`);
+    await waitFor(() => gateway.sent().length === 1, { what: "the reply" });
+    expect(lastPrompt()).toContain("a fallback check-in comes every 120 minutes");
+
+    // The start of each request stays as it was, so the provider's prompt cache keeps serving it.
+    writeFileSync(file, `${JSON.stringify({ ...definition, settings: { ...definition.settings, fallbackWakeMinutes: 45 } }, null, 2)}\n`);
+    await waitFor(() => gateway.output.some((line) => line.message === "definition applied"), { what: "the new definition" });
+    gateway.say("general", "alice", `@${ME} still the same page?`);
+    await waitFor(() => gateway.sent().length === 2, { what: "the second reply" });
+    expect(lastPrompt()).toContain("a fallback check-in comes every 120 minutes");
+    expect(lastPrompt()).not.toContain("every 45 minutes");
+
+    expect((await gateway.run(["turn-page", "--note", "a new page"])).status).toBe(0);
+    gateway.say("general", "alice", `@${ME} and on the new page?`);
+    await waitFor(() => gateway.sent().length === 3, { what: "the reply on the new page" });
+    expect(lastPrompt()).toContain("a fallback check-in comes every 45 minutes");
+    expect(lastPrompt()).not.toContain("every 120 minutes");
+  });
+
   it("starts a bot whose folder appears and stops one whose folder goes", async () => {
     model = await startFakeModel();
     gateway = new TestGateway({ model });

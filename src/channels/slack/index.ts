@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
+import { Readable } from "node:stream";
+import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { createMemoryState } from "@chat-adapter/state-memory";
 import type { SlackEvent } from "@chat-adapter/slack";
 import { Chat } from "chat";
@@ -62,6 +64,7 @@ class SlackChannel implements ChannelAdapter {
   readonly #secrets: string;
   readonly #env: ChannelEnv;
   #sdk?: GatewaySlackAdapter;
+  #botToken?: string;
   #botUserId?: string;
   readonly #places = new Map<string, { info: PlaceInfo; at: number }>();
 
@@ -105,6 +108,7 @@ class SlackChannel implements ChannelAdapter {
     const chat = new Chat({ userName: this.#env.botName, adapters: { slack: sdk }, state: createMemoryState(), logger: "warn" });
     await chat.initialize();
     this.#sdk = sdk;
+    this.#botToken = tokens.SLACK_BOT_TOKEN!;
     this.#botUserId = sdk.botUserId;
     if (!this.#botUserId) throw new Error("Slack did not say who the bot is");
   }
@@ -501,6 +505,24 @@ class SlackChannel implements ChannelAdapter {
   }
 
   /**
+   * The content of a file of a message: its url_private, with the bot token (scope files:read). Only from Slack's own
+   * hosts, so the token goes nowhere else.
+   */
+  async fetchFile(file: FileInfo, signal: AbortSignal): Promise<AsyncIterable<Uint8Array>> {
+    if (!this.#botToken) throw new Error(`channel ${this.id} is not started`);
+    const url = new URL(file.url ?? "");
+    if (url.protocol !== "https:" || !/(^|\.)(slack|slack-files)\.com$/.test(url.hostname)) throw new Error(`not a Slack file URL: ${url.origin}`);
+    const response = await fetch(url, { headers: { authorization: `Bearer ${this.#botToken}` }, signal });
+    if (!response.ok || !response.body) throw new Error(`Slack answered ${response.status} ${response.statusText}`);
+    // Without files:read, Slack answers with its sign-in page instead of the file.
+    if (response.headers.get("content-type")?.startsWith("text/html") && !file.type?.startsWith("text/html")) {
+      await response.body.cancel();
+      throw new Error("Slack sent a web page instead of the file; the app may not have the files:read scope");
+    }
+    return Readable.fromWeb(response.body as WebReadableStream<Uint8Array>);
+  }
+
+  /**
    * Any Slack Web API method with the bot token, for example chat.update or files.uploadV2.
    * Methods the Slack SDK implements as helpers (files.uploadV2) run through the helper; a "file" given as a path is read.
    */
@@ -533,6 +555,7 @@ function files(message: SlackMessage): { files?: FileInfo[] } {
       ...(file.name ? { name: file.name } : {}),
       ...(file.mimetype ? { type: file.mimetype } : {}),
       ...(file.url_private ? { url: file.url_private } : {}),
+      ...(typeof file.size === "number" ? { size: file.size } : {}),
     })),
   };
 }

@@ -21,10 +21,14 @@ const arrive = (place: string, text: string) =>
     return event;
   });
 
-/** Let real work, such as writing files, finish while the TestClock stands still. */
+/**
+ * Let real work, such as writing files, finish while the TestClock stands still. Up to 5 seconds on the wall clock, not
+ * a number of turns: on a slow machine a download takes more turns of the event loop.
+ */
 const settleUntil = (done: () => boolean) =>
   Effect.gen(function* () {
-    for (let tries = 0; tries < 200 && !done(); tries++) yield* settle;
+    const end = Date.now() + 5_000;
+    while (!done() && Date.now() < end) yield* settle;
   });
 
 /** For each event: "decided", or null while it waits for a decision. */

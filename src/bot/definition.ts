@@ -102,7 +102,7 @@ function controlAddress(dir: string): string {
 export const BOT_ID = /^[a-z0-9][a-z0-9_-]*$/;
 
 const PROVIDER_MODEL = /^[^/]+\/.+$/;
-const THINKING = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+const THINKING = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 /** bot.json as a schema: the checks, the defaults and the types. */
 const Definition = Schema.Struct({
@@ -156,7 +156,7 @@ function problem(raw: unknown, issue: { message: string; path?: readonly (Proper
       return `"screen" must be an object of environment variables with text values, such as {"DISPLAY": ":99"}`;
     case "thinking":
     case "childThinking":
-      return `"${String(path[0])}" must be off, minimal, low, medium, high or xhigh`;
+      return `"${String(path[0])}" must be off, minimal, low, medium, high, xhigh or max`;
     case "channels":
       if (path.length === 1) return `"channels" must be a list`;
       if (path[2] === "type") return `channel ${String(channel?.id)} needs a "type"`;

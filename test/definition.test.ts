@@ -55,6 +55,23 @@ describe("bot.json while running", { timeout: 90_000 }, () => {
     expect(gateway.output.filter((line) => line.message === "definition applied")).toHaveLength(1);
   });
 
+  it("takes the thinking level max, also for a model without it, and names the levels when one is wrong", async () => {
+    model = await startFakeModel();
+    gateway = new TestGateway({ model });
+    const file = join(gateway.botDir, "bot.json");
+    const errorFile = join(gateway.botDir, "bot.json.error");
+    const definition = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+    // The fake model has no thinking levels: pi makes max the nearest one it has.
+    writeFileSync(file, `${JSON.stringify({ ...definition, thinking: "max", childThinking: "max" }, null, 2)}\n`);
+    await gateway.start();
+    gateway.say("general", "alice", `@${ME} think hard`);
+    await waitFor(() => gateway.sent().length === 1, { what: "the reply" });
+
+    writeFileSync(file, `${JSON.stringify({ ...definition, childThinking: "huge" }, null, 2)}\n`);
+    await waitFor(() => existsSync(errorFile), { what: "bot.json.error" });
+    expect(readFileSync(errorFile, "utf8")).toBe(`${file}: "childThinking" must be off, minimal, low, medium, high, xhigh or max\n`);
+  });
+
   it("keeps the bot's own prompt sections for the page, and shows a change after the page turns", async () => {
     model = await startFakeModel();
     gateway = new TestGateway({ model });

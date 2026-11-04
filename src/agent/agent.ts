@@ -59,7 +59,8 @@ export interface AgentActions {
   call(channel: string, method: string, params: Record<string, unknown>, trace?: TelemetrySpan): Promise<unknown>;
 }
 
-export type Thinking = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+/** pi's levels. A level the model does not have becomes the nearest one it has, at each request (pi-ai). */
+export type Thinking = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface Compaction {
   reserveTokens?: number;

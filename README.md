@@ -157,7 +157,7 @@ To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service resta
 | Field | What it does | Values |
 |---|---|---|
 | `model` | The agent that reads, thinks and acts | Any pi model as `provider/modelId`, for example `openai/gpt-6.1-sol` or `anthropic/claude-opus-5-5` |
-| `thinking` | How hard the agent thinks | `off`, `minimal`, `low`, `medium` (default), `high`, `xhigh` |
+| `thinking` | How hard the agent thinks. A level the model does not have becomes the nearest one it has, as in pi | `off`, `minimal`, `low`, `medium` (default), `high`, `xhigh`, `max` |
 | `childModel` | The model of the children that do longer work in the background | Unset (default): the bot's `model` |
 | `childThinking` | The thinking level of a child the bot starts without choosing one | As `thinking`; `xhigh` (default) |
 | `judge` | Decides which messages that do not mention the bot should wake it | `off` (default): every message wakes the bot, and the agent decides<br>`provider/modelId` of a classifier: `typesafe/jev-latest`, `openrouter/typesafe/jev-1.14`, `opencode/jev-1.13-free`, or a llama.cpp model<br>`main`: the bot's own model judges, no extra account, but slower |

@@ -251,20 +251,25 @@ export class Waker extends Context.Service<
           }),
         );
 
+      // In the place's order: a mention or a DM that comes after the start waits for the wakes from before it.
       const redeliver = Effect.gen(function* () {
         for (const wake of yield* log.pendingWakes) {
-          yield* FiberSet.run(
+          const key = wake.place.address;
+          const previous = lastDecision.get(key);
+          const fiber = yield* FiberSet.run(
             deciding,
             Effect.gen(function* () {
+              if (previous) yield* Fiber.await(previous);
               yield* Effect.sleep(config.settings().debounceMs);
               if (stopped) return;
               if (!target) return yield* Effect.fail(new NoWakeTarget({ message: "no wake target" }));
               yield* handOver(target, wake);
             }).pipe(
               Effect.withSpan("wake", { root: true, attributes: { place: wake.place.address, events: wake.events.map((event) => event.id).join(","), again: true } }),
-              reportFailure(wake.place.address),
+              reportFailure(key),
             ),
           );
+          lastDecision.set(key, fiber);
         }
       });
 

@@ -7,6 +7,7 @@ import { Channels } from "../src/gateway/channels.ts";
 import { FILE_WAIT_MS, MAX_FILE_BYTES } from "../src/gateway/files.ts";
 import { MessageLog } from "../src/gateway/log.ts";
 import { Waker } from "../src/gateway/waker.ts";
+import type { PlaceWake } from "../src/core/wake.ts";
 import { advance, FILES_DIR, logHappening, MemoryChannel, message, type Recorder, settle, withCore } from "./support/core.ts";
 
 // The waker on Effect's TestClock: the debounce and the judge's retries happen at exact times, without waiting.
@@ -318,6 +319,33 @@ describe("at once", () => {
         assert.deepStrictEqual(seen(recorder), [
           { reason: "dm", texts: ["ping"], at: 0 },
           { reason: "steer", texts: ["and one more thing"], at: 0 },
+        ]);
+      }),
+    ));
+
+  it.effect("a mention after a start waits for the wake that a crash left undelivered in its place", () =>
+    withCore({}, (recorder) =>
+      Effect.gen(function* () {
+        // Recorded, but not handed to the bot, before the crash.
+        const before = yield* logHappening(message("general", "@bot the first request"));
+        const wake: PlaceWake = {
+          id: `mention:mem:#general:${before.id}`,
+          reason: "mention",
+          place: { address: "mem:#general", kind: "channel", name: "general" },
+          events: [{ id: before.id, kind: "message", at: 0, mentionsMe: true, text: "@bot the first request" }],
+        };
+        yield* (yield* MessageLog).recordWake(wake, [before.id], "mention");
+        const waker = yield* Waker;
+        waker.setTarget(recorder.target());
+        yield* waker.redeliver;
+        yield* connect;
+        yield* arrive("general", "@bot and a follow-up");
+        assert.strictEqual(recorder.wakes.length, 0);
+        yield* advance(3_000);
+        yield* settleUntil(() => recorder.wakes.length === 2);
+        assert.deepStrictEqual(seen(recorder), [
+          { reason: "mention", texts: ["@bot the first request"], at: 3_000 },
+          { reason: "mention", texts: ["@bot and a follow-up"], at: 3_000 },
         ]);
       }),
     ));

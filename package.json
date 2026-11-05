@@ -56,13 +56,16 @@
     "@effect/platform-node": "4.0.7",
     "@effect/platform-node-shared": "4.0.7",
     "chat": "4.43.0",
+    "discord.js": "14.28.1",
     "effect": "4.0.7"
   },
   "devDependencies": {
     "@effect/vitest": "4.0.7",
     "@types/node": "26.6.5",
+    "@types/ws": "8.18.2",
     "fast-check": "4.10.2",
     "typescript": "7.0.2",
-    "vitest": "5.0.5"
+    "vitest": "5.0.5",
+    "ws": "8.22.0"
   }
 }

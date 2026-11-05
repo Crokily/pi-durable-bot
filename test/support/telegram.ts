@@ -57,6 +57,10 @@ export async function fakeTelegram() {
           },
         };
       }
+      case "getChat": {
+        const chat = [team, ops].find((known) => String(known.id) === String(params.chat_id));
+        return chat ? { ok: true, result: chat } : { ok: false, error_code: 400, description: "Bad Request: chat not found" };
+      }
       case "getFile": {
         const path = `photos/${params.file_id}.jpg`;
         return files.has(path) ? { ok: true, result: { file_id: params.file_id, file_unique_id: "u", file_size: files.get(path)!.length, file_path: path } } : { ok: false, error_code: 400, description: "Bad Request: invalid file_id" };

@@ -48,6 +48,8 @@ describe("receiving", () => {
       }, logs),
     );
     await vi.waitFor(() => expect(stored).toContain("update:1003"), { timeout: 5_000 });
+    // The poll after the last update stored, which tells Telegram it is stored.
+    await vi.waitFor(() => expect(methods("getUpdates").length).toBeGreaterThanOrEqual(3), { timeout: 5_000 });
     // The webhook is removed first, and the updates that wait are kept.
     expect(telegram.calls[1]).toMatchObject({ method: "deleteWebhook", params: { drop_pending_updates: false } });
     // The second poll asks again from the update that was not stored; the third from after the last one stored.
@@ -216,6 +218,28 @@ describe("sending", () => {
     telegram.script("sendRichMessage", { ok: false, error_code: 400, description: "Bad Request: chat not found" });
     await expect(channel.send("telegram:#-100999", "hi", "s4")).rejects.toThrow("Telegram sendRichMessage: Bad Request: chat not found");
     expect(methods("sendMessage")).toHaveLength(2);
+  });
+
+  it("lets Telegram refuse a reply in a forum when the message is gone and its topic is not known, so it does not go to General", async () => {
+    await channel.start(sink());
+    // The adapter has not seen the message since it started, so it does not know the message's topic.
+    await channel.send("telegram:#-100300/8", "on it", "s1");
+    expect(methods("sendRichMessage")[0]!.params).toEqual({ chat_id: "-100300", reply_parameters: { message_id: 8 }, rich_message: { markdown: "on it" } });
+
+    telegram.script("sendRichMessage", { ok: false, error_code: 400, description: "Bad Request: message to be replied not found" });
+    await expect(channel.send("telegram:#-100300/8", "on it", "s2")).rejects.toThrow(
+      "Telegram sendRichMessage: Bad Request: message to be replied not found. The message telegram:#-100300/8 is gone; send to its place (telegram:#-100300) or to its topic instead.",
+    );
+    // Whether the chat has topics was looked up once.
+    expect(methods("getChat").map((call) => call.params)).toEqual([{ chat_id: "-100300" }]);
+
+    // In a group without topics and in a private chat, a reply to a message that is gone still goes out.
+    await channel.send("telegram:#-100200/20", "ok", "s3");
+    await channel.send("telegram:#111/10", "ok", "s4");
+    expect(methods("sendRichMessage").slice(2).map((call) => call.params.reply_parameters)).toEqual([
+      { message_id: 20, allow_sending_without_reply: true },
+      { message_id: 10, allow_sending_without_reply: true },
+    ]);
   });
 
   it("writes to a person in their private chat, and says what to do when they never started the bot", async () => {

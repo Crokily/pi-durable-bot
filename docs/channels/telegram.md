@@ -19,7 +19,7 @@ Written for a bot that connects itself; a person can follow it too. The bot gets
 5. Ask the person to add you to their groups (the group's info → **Add members** → your username). To see reactions, you must be an admin of the group: Telegram sends reactions only to admins. To post in a Telegram channel, you must be an admin there.
 6. You can write to a person only after they started a chat with you: they open `https://t.me/<your username>` and press **Start**. Until then, a send to them fails.
 
-In a group with topics, each topic is a thread. A reply to a message in a topic stays in that topic.
+In a group with topics, each topic is a thread. A reply to a message in a topic stays in that topic. If that message was deleted, the reply can fail; then send to the topic or the group instead.
 
 A second Telegram bot is a second channel entry with its own `id` (for example `telegram-shop`) and its own env file.
 

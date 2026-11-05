@@ -146,10 +146,12 @@ const JEV = "typesafe/jev-latest";
 /**
  * Step 3 of pots init: who decides whether a group message that does not mention the bot wakes it. The bot itself
  * ("off": every such message wakes it), Jev with the person's TypeSafe API key, or a judge model already set up in pi.
- * The chosen judge is tried with one message first; one that cannot answer is not kept.
+ * The chosen judge is tried with one message first; one that cannot answer is not kept. When Jev could not answer,
+ * choosing it again asks for a key again: the one pi has may be wrong or revoked.
  */
 export const setUpJudge = (models: Models, name: string, mainModel: string) =>
   Effect.gen(function* () {
+    let newKey = false;
     for (;;) {
       const ready = (yield* Effect.promise(() => models.getAvailableOfType("classifier"))).map((model) => `${model.provider}/${model.id}`).filter((model) => model !== JEV);
       const choice = yield* Prompt.run(
@@ -164,7 +166,7 @@ export const setUpJudge = (models: Models, name: string, mainModel: string) =>
         }),
       );
       if (choice === "off") return choice;
-      if (choice === JEV && (yield* Effect.promise(() => models.getAvailableOfType("classifier", "typesafe"))).length === 0) {
+      if (choice === JEV && (newKey || (yield* Effect.promise(() => models.getAvailableOfType("classifier", "typesafe"))).length === 0)) {
         const error = yield* tryLogin(models, "typesafe", "api_key");
         if (error !== undefined) {
           yield* Console.log(`The TypeSafe API key was not saved: ${error}`);
@@ -175,6 +177,10 @@ export const setUpJudge = (models: Models, name: string, mainModel: string) =>
       const error = yield* tryJudge(models, choice, mainModel);
       if (error === undefined) return choice;
       yield* Console.log(`${choice} cannot be used as the judge: ${error}`);
+      if (choice === JEV) {
+        newKey = true;
+        yield* Console.log("Choose Jev again to give another TypeSafe API key.");
+      }
     }
   });
 

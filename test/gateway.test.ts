@@ -57,6 +57,20 @@ describe("Gateway", () => {
     await sql.close();
   });
 
+  it("refuses a text the channel would not take, before it records the send", async () => {
+    const { sql, gateway } = await openGateway();
+    const channel = new MemoryChannel();
+    channel.checkText = (_to, text) => (text.length > 5 ? `at most 5 characters in a message; this one has ${text.length}` : undefined);
+    await gateway.start(target, [channel]);
+    await expect(gateway.send("id-1", "mem:#general", "too long")).rejects.toThrow("at most 5 characters in a message; this one has 8");
+    expect(await sql.all("SELECT * FROM gw_outbox")).toEqual([]);
+    // The same send ID with a shorter text goes out.
+    expect(await gateway.send("id-1", "mem:#general", "short")).toMatchObject({ place: "mem:#general" });
+    expect(channel.platform.map((m) => m.text)).toEqual(["short"]);
+    await gateway.stop();
+    await sql.close();
+  });
+
   it("can be stopped twice, and says so to calls after the stop", async () => {
     const { sql, gateway, prints } = await openGateway();
     await gateway.start(target, [new MemoryChannel()]);

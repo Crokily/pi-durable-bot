@@ -44,8 +44,10 @@
     "prepare": "npm run build"
   },
   "dependencies": {
+    "@chat-adapter/discord": "4.43.0",
     "@chat-adapter/slack": "4.43.0",
     "@chat-adapter/state-memory": "4.43.0",
+    "@chat-adapter/telegram": "4.43.0",
     "@earendil-works/chord": "1.4.0",
     "@earendil-works/pi-ai": "1.4.0",
     "@earendil-works/pi-coding-agent": "1.4.0",

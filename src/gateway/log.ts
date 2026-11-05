@@ -193,6 +193,8 @@ export class MessageLog extends Context.Service<
     // Reads for backfill and the judge
     newestMessage(place: Address): Effect.Effect<Address | undefined, LogError>;
     threads(place: Address): Effect.Effect<Address[], LogError>;
+    /** The places of a channel account that the log knows. */
+    places(channel: string): Effect.Effect<Address[], LogError>;
     /** Messages in a place before an event, oldest first. */
     messagesBefore(place: Address, at: number, limit: number): Effect.Effect<LoggedMessage[], LogError>;
     message(address: Address): Effect.Effect<LoggedMessage | undefined, LogError>;
@@ -292,6 +294,9 @@ function makeLog(sql: Sql): MessageLog["Service"] {
         );
         return rows.map((row) => row.thread);
       }),
+
+    places: (channel) =>
+      db(async () => (await sql.all<{ address: string }>("SELECT address FROM gw_places WHERE channel = ? ORDER BY address", channel)).map((row) => row.address)),
 
     messagesBefore: (place, at, limit) =>
       db(async () => {

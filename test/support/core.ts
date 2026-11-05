@@ -139,6 +139,8 @@ export class MemoryChannel implements ChannelAdapter {
   failBeforeSend = false;
   /** Downloads a file of a message, when a test sets it. */
   fetchFile?: ChannelAdapter["fetchFile"];
+  /** Refuses texts, when a test sets it. */
+  checkText?: ChannelAdapter["checkText"];
   /** What the gateway gave the adapter at start, for tests that act as the platform. */
   sink: ChannelSink | undefined;
   #ids = 0;

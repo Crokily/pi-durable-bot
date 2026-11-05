@@ -21,6 +21,7 @@ const sink: ChannelSink = {
   receive: async () => {},
   newestMessage: async () => undefined,
   threads: async () => [],
+  places: async () => [],
   lastAlive: () => undefined,
   log: () => {},
 };

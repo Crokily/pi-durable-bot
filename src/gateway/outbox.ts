@@ -73,6 +73,8 @@ export class Outbox extends Context.Service<
               return { message: found.message, place: found.place, recovered: true };
             }
           } else {
+            const refused = adapter.checkText?.(to, text);
+            if (refused) return yield* Effect.fail(new BadSend({ message: refused }));
             yield* log.outboxStart(sendId, to, text);
           }
           const sent = yield* platform(adapter.id, () => adapter.send(record?.to_address ?? to, text, sendId)).pipe(

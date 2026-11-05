@@ -9,7 +9,7 @@ import { MemoryChannel, message, withCore } from "./support/core.ts";
 
 // What the inbox does with what adapters give it: the gateway checks happenings, and one bad event stops nothing.
 
-const sink: ChannelSink = { receive: async () => {}, newestMessage: async () => undefined, threads: async () => [], lastAlive: () => undefined, log: () => {} };
+const sink: ChannelSink = { receive: async () => {}, newestMessage: async () => undefined, threads: async () => [], places: async () => [], lastAlive: () => undefined, log: () => {} };
 
 /** A memory channel whose translate returns whatever the test says for a raw event. */
 class Scripted extends MemoryChannel {

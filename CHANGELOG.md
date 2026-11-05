@@ -2,6 +2,14 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
+## 0.4.1 (2026-11-05)
+
+### Added
+- **`pots init` asks who decides on group messages that do not mention the bot:** the bot itself (the default: every such message wakes it), Jev from TypeSafe with your TypeSafe API key, or a judge model you already set up in pi. Pots tries the judge with one message before it makes the bot. `--judge` gives the answer without the question.
+
+### Changed
+- **A mention or a DM wakes the bot at once.** The bot used to wait 3 seconds after the last message of a place, also when someone was waiting for it. Now a mention or a DM wakes it when it comes, with the messages of that place that were waiting; what comes after reaches it while it works there. In our test on Slack, a DM "ping" got its reply in about 10 seconds instead of about 33. Other messages are grouped as before.
+
 ## 0.4.0 (2026-11-04)
 
 A bot that works like a coworker: it hands longer work to helpers in the background, remembers by itself as Claude Code does, sees each new message in its wake, and keeps the start of its requests the same, so the provider's prompt cache serves most of them.

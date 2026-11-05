@@ -44,7 +44,7 @@ npm install -g pi-durable-bot
 pots init
 ```
 
-`pots init` asks three things: the bot's name, how it gets its AI, and one optional sentence about what it is for. Then it starts the gateway as a background service (launchd on macOS, a systemd user service on Linux, Task Scheduler on Windows), and the person is talking to their bot in the terminal.
+`pots init` asks four things: the bot's name, how it gets its AI, who decides on group messages that do not mention the bot (the bot itself by default, or a judge such as Jev, with a TypeSafe API key), and one optional sentence about what it is for. Then it starts the gateway as a background service (launchd on macOS, a systemd user service on Linux, Task Scheduler on Windows), and the person is talking to their bot in the terminal.
 
 `pots init` is interactive and needs a real terminal, and your own shell is probably not one. There are two ways to handle that:
 
@@ -53,7 +53,7 @@ pots init
    ```sh
    pots init --yes --name "Ada" --model anthropic/claude-opus-5-5 --about "our team's research and ops assistant" --no-chat
    ```
-   Then tell your person to run `pots chat` to meet the bot.
+   Without `--judge`, every group message that does not mention the bot wakes it; `--judge typesafe/jev-latest` uses Jev when pi has a TypeSafe API key. Then tell your person to run `pots chat` to meet the bot.
 
 On Linux, `pots init` turns on lingering for the user (with `sudo` when the system asks for it), so the bot keeps running after your person logs out of SSH; there is no need to run `loginctl enable-linger` yourself. `pots init --system` installs a system service instead (it needs sudo).
 

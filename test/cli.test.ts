@@ -217,6 +217,19 @@ describe("pots without a running gateway", { timeout: 120_000 }, () => {
     expect(silent.stderr.trim()).toMatch(/^ERROR\n {2}dead\/m cannot be used with this login: .+/);
     expect(existsSync(join(gateway.home, "bots", "third"))).toBe(false);
     expect(await init("fake/coworker")).toEqual({ status: 0, error: "" });
-    expect(JSON.parse(readFileSync(join(gateway.home, "bots", "third", "bot.json"), "utf8")).model).toBe("fake/coworker");
+    expect(JSON.parse(readFileSync(join(gateway.home, "bots", "third", "bot.json"), "utf8"))).toMatchObject({ model: "fake/coworker", judge: "off" });
+  });
+
+  it("init checks that the judge given with --judge can answer before it makes a bot", async () => {
+    const init = async (name: string, judge: string) => {
+      const args = ["init", "--yes", "--name", name, "--model", "fake/coworker", "--judge", judge, "--no-service", "--no-chat"];
+      const result = await gateway.run(args, { env: { PI_CODING_AGENT_DIR: join(gateway.home, "pi") } });
+      return { status: result.status, error: result.stderr.trim() };
+    };
+    expect(await init("Fourth", "jev")).toEqual({ status: 1, error: 'ERROR\n  --judge must be "off", "main" or "provider/modelId", for example typesafe/jev-latest' });
+    expect(await init("Fourth", "nope/x")).toEqual({ status: 1, error: "ERROR\n  nope/x cannot be used as the judge: unknown model nope/x" });
+    expect(existsSync(join(gateway.home, "bots", "fourth"))).toBe(false);
+    expect(await init("Fourth", "main")).toEqual({ status: 0, error: "" });
+    expect(JSON.parse(readFileSync(join(gateway.home, "bots", "fourth", "bot.json"), "utf8")).judge).toBe("main");
   });
 });

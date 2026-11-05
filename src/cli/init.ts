@@ -5,15 +5,16 @@ import { Console, Effect, Option, Schedule } from "effect";
 import { Command, Flag, Prompt } from "effect/cli";
 import { terminalPerson } from "../channels/terminal/index.ts";
 import { runningGateway } from "../core/home.ts";
-import { checkModel, setUpModel } from "./ai.ts";
+import { checkJudge, checkModel, setUpJudge, setUpModel } from "./ai.ts";
 import { createBot, idFor } from "./bots.ts";
 import { chatInteractive } from "./chat.ts";
 import { control, listBots, userError } from "./control.ts";
 import { Service } from "./service.ts";
 
-// pots init: 1 create your first bot, 2 give it an AI, 3 say in one sentence what it is for (optional), 4 talk to it in
-// this terminal. Everything else, such as joining chat apps, the bot does itself on this computer, asking only for
-// what it cannot do, like signing in.
+// pots init: 1 create your first bot, 2 give it an AI, 3 choose who decides on group messages that do not mention it
+// (the bot itself by default), 4 say in one sentence what it is for (optional), 5 talk to it in this terminal.
+// Everything else, such as joining chat apps, the bot does itself on this computer, asking only for what it cannot do,
+// like signing in.
 
 const step = (n: number, title: string) => Console.log(`\n${n}  ${title}`);
 
@@ -47,6 +48,12 @@ export const initCommand = Command.make(
   {
     name: Flag.String("name").pipe(Flag.optional, Flag.withDescription("The bot's name. Asked when not given.")),
     model: Flag.String("model").pipe(Flag.optional, Flag.withDescription('The model as "provider/modelId". Asked when not given.')),
+    judge: Flag.String("judge").pipe(
+      Flag.optional,
+      Flag.withDescription(
+        'Who decides whether a group message that does not mention the bot wakes it: "off" (the bot itself), "main" (its own model) or a judge model "provider/modelId", such as typesafe/jev-latest. Asked when not given; "off" when there is no terminal to ask in.',
+      ),
+    ),
     about: Flag.String("about").pipe(Flag.optional, Flag.withDescription("One sentence: what the bot is for.")),
     yes: Flag.Boolean("yes").pipe(Flag.withDefault(false), Flag.withDescription("Accept that the bot gets full control of this computer.")),
     noService: Flag.Boolean("no-service").pipe(Flag.withDefault(false), Flag.withDescription("Do not install the background service; run pots start yourself.")),
@@ -84,7 +91,10 @@ export const initCommand = Command.make(
       const models = yield* Effect.promise(async () => (await import("../agent/models.ts")).openModels());
       const model = given === undefined ? yield* setUpModel(models) : yield* checkModel(models, given);
 
-      yield* step(3, `In one sentence, what is ${name} for? (optional)`);
+      yield* step(3, `Group messages that do not mention ${name}`);
+      const judge = Option.isSome(input.judge) ? yield* checkJudge(models, input.judge.value, model) : interactive ? yield* setUpJudge(models, name, model) : "off";
+
+      yield* step(4, `In one sentence, what is ${name} for? (optional)`);
       const about = Option.isSome(input.about)
         ? input.about.value
         : interactive
@@ -92,7 +102,7 @@ export const initCommand = Command.make(
           : "";
 
       const address = `terminal:@${terminalPerson()}`;
-      const dir = yield* createBot({ id, name, model, ...(about ? { about } : {}), firstWake: firstWake(user, address, about || undefined) });
+      const dir = yield* createBot({ id, name, model, judge, ...(about ? { about } : {}), firstWake: firstWake(user, address, about || undefined) });
       yield* Console.log(`Created ${dir}`);
 
       if (input.noService) {
@@ -111,7 +121,7 @@ export const initCommand = Command.make(
       }
       yield* waitForBot(id);
 
-      yield* step(4, `Talk to ${name}`);
+      yield* step(5, `Talk to ${name}`);
       yield* Console.log(`${name} first checks that it can use this computer's screen and helps you with any permission it needs. Then it sets up the chat apps you want, and asks you only for what it cannot do itself.`);
       yield* Console.log(`Leave with Ctrl+C; come back any time with pots chat. ${name} keeps working when you leave.`);
       if (!input.noChat && interactive) yield* chatInteractive(id);

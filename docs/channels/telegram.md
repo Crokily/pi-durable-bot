@@ -39,7 +39,8 @@ To send a file, give its local path to `call`: `call <channel id> sendDocument {
 
 ## Limits
 
-- A message has at most 4096 characters. A longer text is refused, not cut: send it in parts.
+- Your Markdown goes as a Telegram rich message, which shows headings, lists and tables. A message has at most 32768 characters of shown text. A longer text is refused, not cut: send it in parts.
+- In a chat that does not take rich messages, the text goes as a plain message with simpler formatting, and then a message has at most 4096 characters. The send error says so; send the text in parts.
 - The Bot API cannot read history. Messages that came while you were not running arrive when you connect again, but only from the last 24 hours.
 - Telegram does not say when a message is deleted.
 - If the computer stops between Telegram taking a message you sent and Pots recording it, the message can go out twice.

@@ -64,7 +64,9 @@ interface TgFile {
   mime_type?: string;
 }
 
-/** Telegram's limit for the text of one message, counted after entities parsing. */
+/** Telegram's limit for the text of a rich message. */
+const MAX_RICH = 32768;
+/** Telegram's limit for the text of a plain message, counted after entities parsing. */
 const MAX_TEXT = 4096;
 /** message_reaction comes only when asked for, and only in chats where the bot is an admin. */
 const UPDATES = ["message", "edited_message", "channel_post", "edited_channel_post", "message_reaction", "my_chat_member", "callback_query"];
@@ -75,10 +77,9 @@ const REMEMBER = 50_000;
 /** Bot API parameters that take a file, and the field of an InputMedia that does. */
 const FILE_FIELDS = new Set(["photo", "audio", "document", "video", "animation", "voice", "video_note", "sticker", "thumbnail", "cover", "media", "certificate"]);
 
-export function createChannel(config: ChannelConfig, env: ChannelEnv): ChannelAdapter {
+/** apiUrl: Telegram's Bot API server. Only tests give another one, a fake server. */
+export function createChannel(config: ChannelConfig, _env: ChannelEnv, apiUrl = "https://api.telegram.org"): ChannelAdapter {
   if (typeof config.secrets !== "string") throw new Error(`channel ${config.id}: "secrets" must name the env file with TELEGRAM_BOT_TOKEN`);
-  // Telegram's own Bot API server, unless the entry names another one, such as a local Bot API server or a test's.
-  const apiUrl = typeof config.apiUrl === "string" ? config.apiUrl.replace(/\/+$/, "") : "https://api.telegram.org";
   return new TelegramChannel(config.id, expandHome(config.secrets), apiUrl);
 }
 
@@ -390,16 +391,18 @@ class TelegramChannel implements ChannelAdapter {
   // ---- Send ----
 
   checkText(_to: Address, text: string): string | undefined {
-    return tooLong(shownLength(markdownV2(this.#outgoing(text))));
+    return tooLong(richLength(this.#outgoing(text)), MAX_RICH);
   }
 
-  /** Markdown as MarkdownV2. A text over Telegram's limit is refused, never cut. */
+  /**
+   * The bot's Markdown as a rich message (Bot API 10.1). When Telegram does not take a rich message for this send, it
+   * goes as a plain message with MarkdownV2, whose limit is lower. A text over the limit is refused, never cut.
+   */
   async send(to: Address, text: string, sendId: string): Promise<SentMessage> {
     const target = this.#target(to);
     await this.#lookUp(text, target.chat);
     const markdown = this.#outgoing(text);
-    const formatted = markdownV2(markdown);
-    const refused = tooLong(shownLength(formatted));
+    const refused = tooLong(richLength(markdown), MAX_RICH);
     if (refused) throw new Error(refused);
     const params = {
       chat_id: target.chat,
@@ -409,14 +412,10 @@ class TelegramChannel implements ChannelAdapter {
     let sent: TgMessage;
     try {
       try {
-        sent = await this.#api<TgMessage>("sendMessage", { ...params, text: formatted, parse_mode: "MarkdownV2" });
+        sent = await this.#api<TgMessage>("sendRichMessage", { ...params, rich_message: { markdown } });
       } catch (error) {
-        if (!(error instanceof TelegramError && /can't parse entities/i.test(error.description))) throw error;
-        // Formatting Telegram could not read: the text without formatting, as the SDK does.
-        const plain = markdownToPlainText(markdown);
-        const refusedPlain = tooLong(plain.length);
-        if (refusedPlain) throw new Error(refusedPlain);
-        sent = await this.#api<TgMessage>("sendMessage", { ...params, text: plain });
+        if (!(error instanceof TelegramError && richNotTaken(error))) throw error;
+        sent = await this.#sendPlain(params, markdown, error);
       }
     } catch (error) {
       if (error instanceof TelegramError && "user" in this.#parse(to) && (error.code === 403 || /chat not found/i.test(error.description))) {
@@ -426,6 +425,29 @@ class TelegramChannel implements ChannelAdapter {
     }
     const chat = String(sent.chat.id);
     return { message: this.message(chat, sent.message_id), place: this.place(chat), raw: { sent, sendId } satisfies Raw };
+  }
+
+  /**
+   * A plain message with MarkdownV2, for a send Telegram did not take as a rich message (why). When Telegram cannot
+   * read the MarkdownV2 either, the text goes without formatting, as the SDK does.
+   */
+  async #sendPlain(params: Record<string, unknown>, markdown: string, why: TelegramError): Promise<TgMessage> {
+    const check = (length: number) => {
+      if (length <= MAX_TEXT) return;
+      throw new Error(
+        `This chat does not take rich messages (${why.message}), so the text goes as a plain message, and Telegram allows at most ${MAX_TEXT} characters in one of those; this one has ${length}. Send it in parts.`,
+      );
+    };
+    const formatted = markdownV2(markdown);
+    check(shownLength(formatted));
+    try {
+      return await this.#api<TgMessage>("sendMessage", { ...params, text: formatted, parse_mode: "MarkdownV2" });
+    } catch (error) {
+      if (!(error instanceof TelegramError && /can't parse entities/i.test(error.description))) throw error;
+      const plain = markdownToPlainText(markdown);
+      check(plain.length);
+      return await this.#api<TgMessage>("sendMessage", { ...params, text: plain });
+    }
   }
 
   /**
@@ -617,8 +639,33 @@ function files(m: TgMessage): { files?: FileInfo[] } {
   return list.length ? { files: list } : {};
 }
 
-function tooLong(length: number): string | undefined {
-  return length > MAX_TEXT ? `Telegram allows at most ${MAX_TEXT} characters in one message; this one has ${length}. Send it in parts.` : undefined;
+function tooLong(length: number, limit: number): string | undefined {
+  return length > limit ? `Telegram allows at most ${limit} characters in one message; this one has ${length}. Send it in parts.` : undefined;
+}
+
+/**
+ * How many characters Telegram counts in a rich message: the text it shows, without Markdown marks and link URLs, in
+ * Unicode characters. HTML tags count here too, which is on the safe side.
+ */
+function richLength(markdown: string): number {
+  return Array.from(markdownToPlainText(markdown)).length;
+}
+
+/**
+ * Whether an error means that Telegram does not take a rich message for this send, as the SDK reads it
+ * (canFallbackFromRichMessage): no sendRichMessage method, rich messages not supported here, rich Markdown it cannot
+ * read, or reply parameters it does not take with a rich message. Telegram's error codes may use "_" for spaces.
+ */
+function richNotTaken(error: TelegramError): boolean {
+  if (error.code === 404) return true;
+  if (error.code < 400 || error.code >= 500 || [401, 403, 429].includes(error.code)) return false;
+  const text = error.description.toLowerCase().replace(/_/g, " ");
+  return (
+    text.includes("can't parse") ||
+    (text.includes("method") && text.includes("not found")) ||
+    (text.includes("rich message") && text.includes("unsupported")) ||
+    text.includes("reply parameters")
+  );
 }
 
 /**

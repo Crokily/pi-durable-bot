@@ -17,10 +17,7 @@ beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), "pots-telegram-"));
   writeFileSync(join(dir, "telegram.env"), `TELEGRAM_BOT_TOKEN=${TOKEN}\n`);
   telegram = await fakeTelegram();
-  channel = createChannel(
-    { id: "telegram", type: "telegram", secrets: join(dir, "telegram.env"), apiUrl: telegram.url },
-    { botDir: dir, botName: "Pots", log: () => {} },
-  ) as ChannelAdapter;
+  channel = createChannel({ id: "telegram", type: "telegram", secrets: join(dir, "telegram.env") }, { botDir: dir, botName: "Pots", log: () => {} }, telegram.url);
 });
 
 afterEach(async () => {
@@ -151,32 +148,32 @@ describe("translate", () => {
 });
 
 describe("sending", () => {
-  it("refuses a text over 4096 characters as Telegram counts them, and never cuts one", async () => {
+  it("refuses a text over 32768 characters as Telegram counts them, and never cuts one", async () => {
     await channel.start(sink());
-    expect(channel.checkText!("telegram:#111", "x".repeat(4096))).toBeUndefined();
-    expect(channel.checkText!("telegram:#111", "x".repeat(4097))).toBe("Telegram allows at most 4096 characters in one message; this one has 4097. Send it in parts.");
-    await expect(channel.send("telegram:#111", "y".repeat(5000), "s1")).rejects.toThrow("this one has 5000");
-    expect(methods("sendMessage")).toEqual([]);
+    expect(channel.checkText!("telegram:#111", "x".repeat(32768))).toBeUndefined();
+    expect(channel.checkText!("telegram:#111", "x".repeat(32769))).toBe("Telegram allows at most 32768 characters in one message; this one has 32769. Send it in parts.");
+    // Telegram counts the text it shows, in characters: Markdown marks do not count, and an emoji is one character.
+    expect(channel.checkText!("telegram:#111", `**${"x".repeat(32768)}**`)).toBeUndefined();
+    expect(channel.checkText!("telegram:#111", "👍".repeat(32768))).toBeUndefined();
+    await expect(channel.send("telegram:#111", "y".repeat(40000), "s1")).rejects.toThrow("this one has 40000");
+    expect(telegram.calls.filter((call) => call.method.startsWith("send"))).toEqual([]);
 
-    // MarkdownV2 escapes each dot, so the text sent is twice as long, but Telegram counts what it shows.
-    const dots = ".".repeat(4000);
-    expect(channel.checkText!("telegram:#111", dots)).toBeUndefined();
-    await channel.send("telegram:#111", dots, "s2");
-    expect(methods("sendMessage")[0]!.params).toEqual({ chat_id: "111", text: "\\.".repeat(4000), parse_mode: "MarkdownV2" });
+    const long = "z".repeat(5000);
+    await channel.send("telegram:#111", long, "s2");
+    expect(methods("sendRichMessage")[0]!.params).toEqual({ chat_id: "111", rich_message: { markdown: long } });
   });
 
-  it("replies in the topic of the message it answers, as MarkdownV2, with mentions", async () => {
+  it("sends a rich message that replies in the topic of the message it answers, with mentions", async () => {
     await channel.start(sink());
     for (const update of [updates.dm, updates.topicMessage]) await channel.translate(JSON.parse(JSON.stringify(update)));
     telegram.script("getChatMember", { ok: true, result: { status: "member", user: { id: 222, is_bot: false, first_name: "Bob" } } });
 
     const sent = await channel.send("telegram:#-100300/8", "**done**, <telegram:@111> and <telegram:@222>", "s1");
-    expect(methods("sendMessage")[0]!.params).toEqual({
+    expect(methods("sendRichMessage")[0]!.params).toEqual({
       chat_id: "-100300",
       message_thread_id: 7,
       reply_parameters: { message_id: 8, allow_sending_without_reply: true },
-      text: "*done*, @alice and [Bob](tg://user?id=222)",
-      parse_mode: "MarkdownV2",
+      rich_message: { markdown: "**done**, @alice and [Bob](tg://user?id=222)" },
     });
     // Bob, not seen before and without a username, was looked up as a member of the chat.
     expect(methods("getChatMember").map((call) => call.params)).toEqual([{ chat_id: "-100300", user_id: 222 }]);
@@ -188,17 +185,47 @@ describe("sending", () => {
 
     // To a topic's first message: a message in the topic, not a reply.
     await channel.send("telegram:#-100300/7", "next", "s2");
-    expect(methods("sendMessage")[1]!.params).toEqual({ chat_id: "-100300", message_thread_id: 7, text: "next", parse_mode: "MarkdownV2" });
+    expect(methods("sendRichMessage")[1]!.params).toEqual({ chat_id: "-100300", message_thread_id: 7, rich_message: { markdown: "next" } });
+  });
+
+  it("sends MarkdownV2 where Telegram does not take a rich message, with the lower limit of a plain message", async () => {
+    await channel.start(sink());
+    await channel.translate(JSON.parse(JSON.stringify(updates.topicMessage)));
+    const notTaken = { ok: false as const, error_code: 400, description: "Bad Request: RICH_MESSAGE_UNSUPPORTED" };
+
+    telegram.script("sendRichMessage", notTaken);
+    await channel.send("telegram:#-100300/8", "**done**", "s1");
+    expect(methods("sendMessage")[0]!.params).toEqual({
+      chat_id: "-100300",
+      message_thread_id: 7,
+      reply_parameters: { message_id: 8, allow_sending_without_reply: true },
+      text: "*done*",
+      parse_mode: "MarkdownV2",
+    });
+
+    // MarkdownV2 escapes each dot, so the text sent is twice as long, but Telegram counts what it shows.
+    telegram.script("sendRichMessage", notTaken);
+    await channel.send("telegram:#111", ".".repeat(4000), "s2");
+    expect(methods("sendMessage")[1]!.params).toEqual({ chat_id: "111", text: "\\.".repeat(4000), parse_mode: "MarkdownV2" });
+
+    telegram.script("sendRichMessage", notTaken);
+    await expect(channel.send("telegram:#111", "y".repeat(5000), "s3")).rejects.toThrow(
+      "This chat does not take rich messages (Telegram sendRichMessage: Bad Request: RICH_MESSAGE_UNSUPPORTED), so the text goes as a plain message, and Telegram allows at most 4096 characters in one of those; this one has 5000. Send it in parts.",
+    );
+    // Another error is not a reason to send it differently.
+    telegram.script("sendRichMessage", { ok: false, error_code: 400, description: "Bad Request: chat not found" });
+    await expect(channel.send("telegram:#-100999", "hi", "s4")).rejects.toThrow("Telegram sendRichMessage: Bad Request: chat not found");
+    expect(methods("sendMessage")).toHaveLength(2);
   });
 
   it("writes to a person in their private chat, and says what to do when they never started the bot", async () => {
     await channel.start(sink());
     await channel.send("telegram:@111", "hi", "s1");
-    expect(methods("sendMessage")[0]!.params).toMatchObject({ chat_id: "111", text: "hi" });
+    expect(methods("sendRichMessage")[0]!.params).toEqual({ chat_id: "111", rich_message: { markdown: "hi" } });
 
-    telegram.script("sendMessage", { ok: false, error_code: 403, description: "Forbidden: bot can't initiate conversation with a user" });
+    telegram.script("sendRichMessage", { ok: false, error_code: 403, description: "Forbidden: bot can't initiate conversation with a user" });
     await expect(channel.send("telegram:@555", "hi", "s2")).rejects.toThrow(
-      "Telegram sendMessage: Forbidden: bot can't initiate conversation with a user. A bot can write to a person only after they started a chat with it",
+      "Telegram sendRichMessage: Forbidden: bot can't initiate conversation with a user. A bot can write to a person only after they started a chat with it",
     );
   });
 

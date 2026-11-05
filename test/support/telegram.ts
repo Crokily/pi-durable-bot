@@ -40,7 +40,8 @@ export async function fakeTelegram() {
         if (updates.length === 0) await Promise.race([new Promise<void>((resolve) => (wake = resolve)), closed]);
         return { ok: true, result: updates };
       }
-      case "sendMessage": {
+      case "sendMessage":
+      case "sendRichMessage": {
         const chat = Number(params.chat_id);
         const reply = params.reply_parameters?.message_id;
         return {
@@ -52,7 +53,7 @@ export async function fakeTelegram() {
             date: 1793080400,
             ...(params.message_thread_id ? { message_thread_id: params.message_thread_id, is_topic_message: true } : {}),
             ...(reply ? { reply_to_message: { message_id: reply, chat: { id: chat, type: "supergroup" }, date: 1793080300, text: "earlier" } } : {}),
-            text: params.text,
+            text: params.text ?? params.rich_message?.markdown,
           },
         };
       }

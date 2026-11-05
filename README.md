@@ -40,7 +40,7 @@ Most AI bots are a command line with a chat bubble. You @ them, they answer, the
 | **What it remembers** | This thread, maybe | One long memory across every channel, kept on disk |
 | **How it works** | Calls the tools someone wired in | Writes and runs its own code on its own computer |
 | **What happens later** | Nothing | It sets its own reminders and comes back |
-| **After a crash** | Starts over, or sends twice | Picks up where it stopped. Never sends the same message twice |
+| **After a crash** | Starts over, or sends twice | Picks up where it stopped. Never sends the same message twice (on Telegram it can, [see why](#status)) |
 
 ## What it does
 
@@ -54,7 +54,7 @@ It is woken in three ways, the same three ways a person notices work:
 
 | | Like a coworker who... | How |
 |---|---|---|
-| **Someone asks** | gets a message or an @ | A mention or a DM wakes it at once (after a short pause, so you can finish typing) |
+| **Someone asks** | gets a message or an @ | A mention or a DM wakes it at once |
 | **It notices** | overhears something that is their job | Every message that does not mention it comes to it too, and it decides itself whether it is about its work. You can also set a judge that reads these messages first and asks two questions: *is this about me?* and *should I respond?* It sees the bot's own list of responsibilities. The judge is a fast classifier such as TypeSafe's Jev, a local model, or the bot's own model |
 | **It checks in** | looks around now and then, and keeps promises | It sets its own timed wakes: "check Acme's pricing every Monday", "follow up at 5 pm". If it has none, it looks around every two hours |
 
@@ -111,7 +111,7 @@ Grok Bot, dots, Muse and Claude Duet are closed products. They run on someone el
 
 **Any model.** Log in once with a subscription you already pay for, use an API key from any of the 40+ providers [pi](https://github.com/earendil-works/pi) supports, point it at any OpenAI-compatible endpoint (vLLM, SGLang, a proxy), or run a local model with Ollama, LM Studio or llama.cpp. The bot uses pi's own model layer, so every model pi can use, the bot can use. With a local model for the agent and the judge, nothing leaves your machine. You are not locked to one model vendor.
 
-**Any channel.** The core speaks in five plain words: channel, place, thread, message, person. Platform details stay inside one adapter per platform, so adding Discord, Teams, Telegram or email is one adapter, not a rewrite. One bot can be in many channels and stays the same person everywhere.
+**Any channel.** The core speaks in five plain words: channel, place, thread, message, person. Platform details stay inside one adapter per platform. Slack, Discord and Telegram work today; Teams or email is one more adapter, not a rewrite. One bot can be in many channels and stays the same person everywhere.
 
 **Your business.** Give it your own tools, data and workflows. It can run several bots on one machine, each with its own name, persona, responsibilities and memory. A bot can even edit its own definition, or create a new bot.
 
@@ -215,8 +215,9 @@ flowchart LR
 flowchart LR
   subgraph Adapters[Channel adapters]
     S[Slack]
+    D[Discord]
+    TG[Telegram]
     T[Terminal]
-    D[Discord, Teams, ...]
   end
   subgraph Gateway[Gateway core, one per bot]
     I[Inbox] --> G[(Message log)]
@@ -230,13 +231,15 @@ flowchart LR
     A --> C
   end
   S --> I
-  T --> I
   D --> I
+  TG --> I
+  T --> I
   K --> A
   A --> O
   O --> S
-  O --> T
   O --> D
+  O --> TG
+  O --> T
 ```
 
 | Layer | Job |
@@ -269,6 +272,8 @@ The bot sends its whole conversation with each model request, so the provider's 
 pi-durable-bot runs every day as a teammate in a real workspace. What works today and what is next:
 
 - [x] Slack adapter (socket mode), with backfill after downtime
+- [x] Discord adapter (Gateway WebSocket), with backfill after downtime
+- [x] Telegram adapter (long polling). Telegram's Bot API cannot read history or look up a sent message, so the bot gets what it missed only within 24 hours, and a crash at the moment of a send can send it twice
 - [x] Mention, DM, judge and timer wakes, grouping, and steering
 - [x] Code mode on its own machine, `pots` command line
 - [x] Turning the page with notes, compaction as a fallback
@@ -283,7 +288,7 @@ pi-durable-bot runs every day as a teammate in a real workspace. What works toda
 - [x] A judge you choose: the bot's own model, Jev or another classifier, a local llama.cpp model, or none
 - [x] `AGENTS.md`, Agent Skills and images as in a pi session
 - [ ] MCP servers
-- [ ] More adapters: Discord, Teams, Telegram, email
+- [ ] More adapters: Teams, email
 - [ ] `pots init` in a web page, for people who do not use a terminal
 
 ## Develop

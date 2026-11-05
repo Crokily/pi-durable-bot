@@ -35,6 +35,12 @@ type TgMessage = TelegramMessage & {
   forum_topic_created?: { name: string };
 };
 
+/** A chat as this file reads it: the SDK's type, with whether a supergroup has topics. */
+type TgChat = TelegramChat & { is_forum?: boolean };
+
+/** The bot, from getMe. has_topics_enabled: its private chats have topics. */
+type TgBot = TelegramUser & { has_topics_enabled?: boolean };
+
 interface ChatMember {
   status: string;
   is_member?: boolean;
@@ -88,7 +94,7 @@ class TelegramChannel implements ChannelAdapter {
   readonly #secrets: string;
   readonly #apiUrl: string;
   #token?: string;
-  #bot?: TelegramUser;
+  #bot?: TgBot;
   #sdk?: GatewayTelegramAdapter;
   #stopping?: AbortController;
   #polling?: Promise<void>;
@@ -97,7 +103,7 @@ class TelegramChannel implements ChannelAdapter {
   /** People and chats seen since the start, by ID, and people by lowercase username, for mentions. */
   readonly #people = new Map<string, TelegramUser>();
   readonly #usernames = new Map<string, string>();
-  readonly #chats = new Map<string, TelegramChat>();
+  readonly #chats = new Map<string, TgChat>();
 
   constructor(id: string, secrets: string, apiUrl: string) {
     this.id = id;
@@ -112,7 +118,7 @@ class TelegramChannel implements ChannelAdapter {
 
   async start(sink: ChannelSink): Promise<void> {
     this.#token = readSecrets(this.#secrets, ["TELEGRAM_BOT_TOKEN"]).TELEGRAM_BOT_TOKEN!;
-    const bot = await this.#api<TelegramUser>("getMe");
+    const bot = await this.#api<TgBot>("getMe");
     if (!bot.username) throw new Error("Telegram did not say the bot's username");
     this.#sdk = new GatewayTelegramAdapter(this.#token, { id: bot.id, username: bot.username }, quietLogger(sink.log));
     this.#bot = bot;
@@ -399,7 +405,7 @@ class TelegramChannel implements ChannelAdapter {
    * goes as a plain message with MarkdownV2, whose limit is lower. A text over the limit is refused, never cut.
    */
   async send(to: Address, text: string, sendId: string): Promise<SentMessage> {
-    const target = this.#target(to);
+    const target = await this.#target(to);
     await this.#lookUp(text, target.chat);
     const markdown = this.#outgoing(text);
     const refused = tooLong(richLength(markdown), MAX_RICH);
@@ -407,7 +413,7 @@ class TelegramChannel implements ChannelAdapter {
     const params = {
       chat_id: target.chat,
       ...(target.topic ? { message_thread_id: target.topic } : {}),
-      ...(target.reply ? { reply_parameters: { message_id: target.reply, allow_sending_without_reply: true } } : {}),
+      ...(target.reply ? { reply_parameters: { message_id: target.reply, ...(target.anyway ? { allow_sending_without_reply: true } : {}) } } : {}),
     };
     let sent: TgMessage;
     try {
@@ -420,6 +426,9 @@ class TelegramChannel implements ChannelAdapter {
     } catch (error) {
       if (error instanceof TelegramError && "user" in this.#parse(to) && (error.code === 403 || /chat not found/i.test(error.description))) {
         throw new Error(`${error.message}. A bot can write to a person only after they started a chat with it: they open the bot in Telegram and press Start.`);
+      }
+      if (error instanceof TelegramError && target.reply && /repl(y|ied)\b.*not found/i.test(error.description)) {
+        throw new Error(`${error.message}. The message ${to} is gone; send to its place (${this.place(target.chat)}) or to its topic instead.`);
       }
       throw error;
     }
@@ -460,16 +469,39 @@ class TelegramChannel implements ChannelAdapter {
 
   /**
    * Where a send goes: a chat; a reply to a message; or the private chat with a person, which has the person's ID.
-   * Telegram puts a reply in the forum topic of the message it answers. The topic, when this adapter saw it, keeps the
-   * reply there also when that message is gone. A send to a topic's first message is a message in the topic, not a reply.
+   * Telegram puts a reply in the forum topic of the message it answers. A send to a topic's first message is a message
+   * in the topic, not a reply.
+   * anyway: send also when the message replied to is gone (allow_sending_without_reply). Telegram then sends to the
+   * topic given here, or to the chat's General topic. So only when this adapter knows the message's topic (it saw the
+   * message since the start), or the chat has no topics; otherwise Telegram refuses, and the bot sends elsewhere.
    */
-  #target(to: Address): { chat: string; reply?: number; topic?: number } {
+  async #target(to: Address): Promise<{ chat: string; reply?: number; topic?: number; anyway?: boolean }> {
     const parsed = this.#parse(to);
     if ("user" in parsed) return { chat: parsed.user };
     if (parsed.message === undefined) return { chat: parsed.chat };
     const topic = this.#topics.get(`${parsed.chat}/${parsed.message}`);
     if (topic === parsed.message) return { chat: parsed.chat, topic };
-    return { chat: parsed.chat, reply: parsed.message, ...(topic ? { topic } : {}) };
+    if (topic) return { chat: parsed.chat, reply: parsed.message, topic, anyway: true };
+    return { chat: parsed.chat, reply: parsed.message, anyway: (await this.#hasTopics(parsed.chat)) === false };
+  }
+
+  /**
+   * Whether a chat has forum topics: a supergroup that is a forum, or a private chat when the bot has topics in them.
+   * A chat this adapter has not seen is looked up once. Undefined when Telegram does not say.
+   */
+  async #hasTopics(chat: string): Promise<boolean | undefined> {
+    // Only private chats have positive IDs.
+    if (!chat.startsWith("-")) return this.#bot?.has_topics_enabled === true;
+    let known = this.#chats.get(chat);
+    if (!known) {
+      try {
+        known = await this.#api<TgChat>("getChat", { chat_id: chat });
+        remember(this.#chats, chat, known);
+      } catch {
+        return undefined;
+      }
+    }
+    return known.is_forum === true;
   }
 
   /** Person and place addresses in angle brackets, for #outgoing. */

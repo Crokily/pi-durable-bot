@@ -121,16 +121,94 @@ async function piDefaultModel(providerId: string): Promise<string | undefined> {
   return defaultModelPerProvider[providerId];
 }
 
-/** Run pi's login flow for a provider in this terminal. */
-const login = (models: Models, providerId: string, type: AuthType) =>
+/** Run pi's login flow for a provider in this terminal. Why it failed, or undefined when it worked. */
+const tryLogin = (models: Models, providerId: string, type: AuthType) =>
   Effect.gen(function* () {
     const terminal = yield* Effect.context<Prompt.Environment>();
     const deviceId = yield* Effect.promise(piDeviceId);
-    yield* Effect.tryPromise({
-      try: () => models.login(providerId, type, terminalInteraction(terminal), { getDeviceId: () => deviceId }),
-      catch: (error) => userError(`login failed: ${error instanceof Error ? error.message : String(error)}`),
-    });
-    yield* Console.log("Signed in.");
+    const error = yield* Effect.promise(() =>
+      models.login(providerId, type, terminalInteraction(terminal), { getDeviceId: () => deviceId }).then(
+        () => undefined,
+        (error: unknown) => (error instanceof Error ? error.message : String(error)),
+      ),
+    );
+    if (error === undefined) yield* Console.log("Signed in.");
+    return error;
+  });
+
+/** Run pi's login flow for a provider in this terminal; pots init ends when it fails. */
+const login = (models: Models, providerId: string, type: AuthType) =>
+  Effect.flatMap(tryLogin(models, providerId, type), (error) => (error === undefined ? Effect.void : Effect.fail(userError(`login failed: ${error}`))));
+
+/** Jev, a fast judge from TypeSafe: pi's provider "typesafe", with an API key. */
+const JEV = "typesafe/jev-latest";
+
+/**
+ * Step 3 of pots init: who decides whether a group message that does not mention the bot wakes it. The bot itself
+ * ("off": every such message wakes it), Jev with the person's TypeSafe API key, or a judge model already set up in pi.
+ * The chosen judge is tried with one message first; one that cannot answer is not kept.
+ */
+export const setUpJudge = (models: Models, name: string, mainModel: string) =>
+  Effect.gen(function* () {
+    for (;;) {
+      const ready = (yield* Effect.promise(() => models.getAvailableOfType("classifier"))).map((model) => `${model.provider}/${model.id}`).filter((model) => model !== JEV);
+      const choice = yield* Prompt.run(
+        Prompt.Select<string>({
+          message: `Who decides whether ${name} answers a group message that does not mention it?`,
+          maxPerPage: 15,
+          choices: [
+            { title: `${name} itself`, value: "off", description: "Every such message wakes it, and its own model decides" },
+            { title: "Jev, a fast judge from TypeSafe", value: JEV, description: `About 0.3 seconds; ${name} wakes only for messages about its work. Needs a TypeSafe API key` },
+            ...ready.map((model) => ({ title: model, value: model, description: "A judge model you already set up in pi" })),
+          ],
+        }),
+      );
+      if (choice === "off") return choice;
+      if (choice === JEV && (yield* Effect.promise(() => models.getAvailableOfType("classifier", "typesafe"))).length === 0) {
+        const error = yield* tryLogin(models, "typesafe", "api_key");
+        if (error !== undefined) {
+          yield* Console.log(`The TypeSafe API key was not saved: ${error}`);
+          continue;
+        }
+      }
+      yield* Console.log(`Trying ${choice}…`);
+      const error = yield* tryJudge(models, choice, mainModel);
+      if (error === undefined) return choice;
+      yield* Console.log(`${choice} cannot be used as the judge: ${error}`);
+    }
+  });
+
+/** Fail unless the judge given with --judge can answer, so a bot is never made with a judge it cannot use. */
+export const checkJudge = (models: Models, judge: string, mainModel: string) =>
+  Effect.gen(function* () {
+    // main is the bot's model, which checkModel has tried.
+    if (judge === "off" || judge === "main") return judge;
+    if (judge.indexOf("/") <= 0) return yield* Effect.fail(userError(`--judge must be "off", "main" or "provider/modelId", for example ${JEV}`));
+    const error = yield* tryJudge(models, judge, mainModel);
+    return error === undefined ? judge : yield* Effect.fail(userError(`${judge} cannot be used as the judge: ${error}`));
+  });
+
+/** Ask the judge about one message. The reason it cannot answer, or undefined when it can. */
+const tryJudge = (models: Models, judge: string, mainModel: string) =>
+  Effect.promise(async () => {
+    const { createJudge } = await import("../agent/judge.ts");
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error("no answer within 60 seconds")), 60_000)));
+    try {
+      const asked = createJudge(judge, models, () => mainModel)?.judge({
+        name: "Pots",
+        responsibilities: "The team's releases.",
+        place: "general (channel)",
+        earlier: [],
+        latest: [{ what: "new message", author: "alice", time: new Date().toISOString(), text: "Is the build green?" }],
+      });
+      await Promise.race([asked, timeout]);
+      return undefined;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    } finally {
+      clearTimeout(timer);
+    }
   });
 
 /**

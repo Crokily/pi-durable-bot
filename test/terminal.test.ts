@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
@@ -10,6 +10,7 @@ import { openBrowser } from "../src/cli/ai.ts";
 // type keys into a pseudo-terminal from Python's pty module (Linux and macOS) and read the screen.
 
 const POTS = fileURLToPath(new URL("../src/cli/pots.ts", import.meta.url));
+const FAKE_MODEL = new URL("./support/fake-model.ts", import.meta.url).href;
 const python = process.platform !== "win32" && spawnSync("python3", ["-c", "import pty"]).status === 0;
 
 // Runs a command in a pseudo-terminal. Each step waits until the screen shows a text, then, a moment later like a
@@ -151,6 +152,39 @@ describe.skipIf(!python)("pots in a terminal", { timeout: 90_000 }, () => {
     expect(screen).toContain(`local/m does not answer; it stays in ${join(home, "pi", "models.json")}. Run pots init again once it does.`);
     expect(screen).toContain("<<exited>>");
     expect(existsSync(join(home, "pots", "bots"))).toBe(false);
+  });
+
+  it("init asks who decides on group messages that do not mention the bot, and leaves it to the bot by default", async () => {
+    home = mkdtempSync(join(tmpdir(), "pots-terminal-"));
+    // In a process of its own: the terminal below holds this one until init ends.
+    const server = spawn(process.execPath, ["--input-type=module", "-e", `const { startFakeModel } = await import(${JSON.stringify(FAKE_MODEL)}); console.log((await startFakeModel()).url);`], {
+      stdio: ["ignore", "pipe", "inherit"],
+    });
+    try {
+      const url = await new Promise<string>((resolve) => server.stdout.once("data", (data) => resolve(String(data).trim())));
+      mkdirSync(join(home, "pi"), { recursive: true });
+      const fake = { baseUrl: url, api: "openai-completions", apiKey: "fake", models: [{ id: "coworker", contextWindow: 128_000 }] };
+      writeFileSync(join(home, "pi", "models.json"), JSON.stringify({ providers: { fake } }));
+      const screen = inTerminal(
+        ["init", "--no-service", "--no-chat"],
+        [
+          ["Continue?", "y"],
+          ["What is its name?", "\r"],
+          ["How should your bot get its AI?", "\r"],
+          ["Which model should it think with?", "\r"],
+          ["does not mention it?", "\r"],
+          ["For example", "\r"],
+          ["<<the command ends>>", null],
+        ],
+      );
+      expect(screen).toContain("3  Group messages that do not mention Pots");
+      expect(screen).toContain("Who decides whether Pots answers a group message that does not mention it?");
+      expect(screen).toContain("Jev, a fast judge from TypeSafe");
+      expect(screen).toContain("<<exited>>");
+      expect(JSON.parse(readFileSync(join(home, "pots", "bots", "pots", "bot.json"), "utf8"))).toMatchObject({ model: "fake/coworker", judge: "off" });
+    } finally {
+      server.kill();
+    }
   });
 
   it("chat takes a secret apart from what the person was typing, and forgets it", () => {

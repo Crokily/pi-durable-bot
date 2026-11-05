@@ -87,11 +87,13 @@ function message(fields: Record<string, unknown>) {
 }
 
 /** A sink like the gateway's: it drops a known event ID, and keeps raws as JSON, as the inbox does. */
-function memorySink(options: { lastAlive?: number; newest?: Record<string, string>; places?: string[] } = {}) {
+/** fail: the receive of this event ID fails while it returns true. */
+function memorySink(options: { lastAlive?: number; newest?: Record<string, string>; places?: string[]; fail?: (id: string) => boolean } = {}) {
   const events: { id: string; raw: any }[] = [];
   const logs: string[] = [];
   const sink: ChannelSink = {
     receive: async (id, raw) => {
+      if (options.fail?.(id)) throw new Error("database is locked");
       if (!events.some((event) => event.id === id)) events.push({ id, raw: JSON.parse(JSON.stringify(raw)) });
     },
     newestMessage: async (place) => options.newest?.[place],
@@ -102,6 +104,10 @@ function memorySink(options: { lastAlive?: number; newest?: Record<string, strin
   };
   return { sink, events, logs };
 }
+
+const DISCORD_EPOCH = 1420070400000n;
+const snowflake = (ms: number) => String((BigInt(ms) - DISCORD_EPOCH) << 22n);
+const timeOf = (id: string) => Number((BigInt(id) >> 22n) + DISCORD_EPOCH);
 
 async function until(check: () => boolean, ms = 5000): Promise<void> {
   for (const end = Date.now() + ms; !check(); await sleep(10)) {
@@ -163,6 +169,33 @@ describe("Discord channel", () => {
     expect(stored[0]!.id).toBe("MESSAGE_CREATE:session-1:3");
     const mine = (await translate(stored[1]!.raw))[0]!;
     expect(mine).toMatchObject({ kind: "message", fromMe: true, person: { address: "discord:@100" }, text: "mine" });
+  });
+
+  it("tries a failed store again, and the events after it wait for it", async () => {
+    let failures = 1;
+    const { gateway, logs } = await connect({ fail: (id) => id.startsWith("MESSAGE_CREATE") && failures-- > 0 });
+    const stored = await gateway([
+      ["MESSAGE_CREATE", message({ id: "501", content: "first" })],
+      ["MESSAGE_CREATE", message({ id: "502", content: "second" })],
+    ]);
+    expect(stored.map((event) => event.raw.d.id)).toEqual(["501", "502"]);
+    expect(logs.filter((line) => line.startsWith("gateway event not stored"))).toEqual([expect.stringContaining('"attempt":1')]);
+  });
+
+  it("keeps a thread message's addresses when the thread cannot be looked up later", async () => {
+    const first = await connect();
+    const [, inThread, reaction] = await first.gateway([
+      ["THREAD_CREATE", { ...thread("600", "20", "Release plan"), newly_created: true }],
+      ["MESSAGE_CREATE", message({ id: "601", channel_id: "600", channel_type: 11 })],
+      ["MESSAGE_REACTION_ADD", { user_id: ALICE.id, channel_id: "600", message_id: "601", guild_id: "10", member: { ...member(), user: ALICE }, emoji: { id: null, name: "👍" }, burst: false, type: 0 }],
+    ]);
+    expect(inThread!.raw.parent).toBe("20");
+    expect(reaction!.raw.parent).toBe("20");
+    // Another run, where Discord does not know the thread any more (GET /channels/600 answers 404).
+    const second = await connect();
+    expect(await second.translate(inThread!.raw)).toMatchObject([{ message: "discord:#20/600/601", thread: "discord:#20/600", place: { address: "discord:#20" } }]);
+    expect(await second.translate(reaction!.raw)).toMatchObject([{ message: "discord:#20/600/601", thread: "discord:#20/600" }]);
+    expect(second.fake.requested("GET", "/channels/600")).toEqual([]);
   });
 
   it("translates a channel message: names for mentions, files, and who it mentions", async () => {
@@ -454,7 +487,7 @@ describe("Discord channel", () => {
     const { fake, channel, sink, events, logs, translate } = await connect({
       lastAlive,
       newest: { "discord:#20": "discord:#20/600/2000", "discord:#24": "discord:#24/1999" },
-      places: ["discord:#20", "discord:#700", "discord:#999"],
+      places: ["discord:#20", "discord:#24", "discord:#700", "discord:#999"],
     });
     const at = (id: number) => message({ id: String(id), channel_type: undefined, guild_id: undefined, member: undefined });
     fake.route("GET", "/users/@me/guilds", () => [{ id: "10", name: "Lab" }]);
@@ -476,13 +509,27 @@ describe("Discord channel", () => {
     fake.route("GET", "/channels/23/messages", () => new Reply(403, { message: "Missing Access", code: 50001 }));
     fake.route("GET", "/channels/25/messages", () => new Reply(400, { message: "Bad", code: 0 }));
     fake.route("GET", "/channels/600/messages", () => [{ ...at(2150), channel_id: "600" }]);
+    // Archived threads: one archived after the place's start, one before (Discord lists the last archived first).
+    const archived = (id: string, when: string, last: string) => ({ ...thread(id, "20", `old ${id}`), last_message_id: last, thread_metadata: { archived: true, archive_timestamp: when } });
+    fake.route("GET", "/channels/\\d+/threads/archived/public", () => ({ threads: [], members: [], has_more: false }));
+    fake.route("GET", "/channels/20/threads/archived/public", () => ({
+      threads: [archived("610", "2026-11-05T00:30:00.000000+00:00", "2160"), archived("611", "2014-12-01T00:00:00.000000+00:00", "2170")],
+      members: [],
+      has_more: false,
+    }));
+    fake.route("GET", "/channels/23/threads/archived/public", () => new Reply(403, { message: "Missing Access", code: 50001 }));
+    fake.route("GET", "/channels/610/messages", () => [{ ...at(2160), channel_id: "610" }]);
     fake.route("GET", "/channels/700", () => ({ id: "700", type: 1, last_message_id: String(BigInt(since) + 1n), recipients: [ALICE] }));
     fake.route("GET", "/channels/700/messages", () => [{ ...at(0), id: String(BigInt(since) + 1n), channel_id: "700" }]);
 
     await channel.backfill(sink);
     const ids = events.map((event) => event.id);
     expect(ids.slice(0, 101)).toEqual(Array.from({ length: 101 }, (_, index) => `history:${2001 + index}:`));
-    expect(ids.slice(101)).toEqual(["history:2150:", `history:${BigInt(since) + 1n}:`]);
+    expect(ids.slice(101)).toEqual(["history:2150:", "history:2160:", `history:${BigInt(since) + 1n}:`]);
+    // A message read from a thread keeps the channel the thread is in.
+    expect(events[101]!.raw.parent).toBe("20");
+    // A thread archived before the place's start is not read.
+    expect(fake.requested("GET", "/channels/611/messages")).toEqual([]);
     expect(fake.requested("GET", "/channels/20/messages").map((request) => request.query.get("after"))).toEqual(["2000", "2100"]);
     // A thread starts where its channel's place starts.
     expect(fake.requested("GET", "/channels/600/messages")[0]!.query.get("after")).toBe("2000");
@@ -492,19 +539,45 @@ describe("Discord channel", () => {
     for (const quiet of ["21", "22", "24"]) expect(fake.requested("GET", `/channels/${quiet}/messages`)).toEqual([]);
     // A channel the bot may not read is skipped quietly; another failure is logged, and the rest goes on.
     expect(logs.filter((line) => line.startsWith("backfill skipped a place"))).toEqual([expect.stringContaining('"channel":"25"')]);
-    expect(logs.at(-1)).toBe('backfill done {"messages":103}');
+    expect(logs.at(-1)).toBe('backfill done {"messages":104}');
 
     expect(await translate(events[101]!.raw)).toMatchObject([
       { kind: "message", place: { address: "discord:#20", name: "Lab #general" }, message: "discord:#20/600/2150", thread: "discord:#20/600" },
     ]);
   });
 
-  it("backfills again when a new gateway session starts", { timeout: 20_000 }, async () => {
-    const { fake } = await connect({ lastAlive: Date.now() - 60_000 });
-    fake.route("GET", "/users/@me/guilds", () => []);
-    expect(fake.requested("GET", "/users/@me/guilds")).toEqual([]);
+  /** Server Lab with only #general, which has messages up to an hour from now. */
+  function oneChannel(fake: FakeDiscord) {
+    fake.route("GET", "/users/@me/guilds", () => [{ id: "10" }]);
+    fake.route("GET", "/guilds/10/channels", () => [{ ...textChannel("20", "general", 0, snowflake(Date.now() + 3_600_000)), guild_id: "10" }]);
+    fake.route("GET", "/guilds/10/threads/active", () => ({ threads: [], members: [] }));
+    fake.route("GET", "/channels/20/threads/archived/public", () => ({ threads: [], members: [], has_more: false }));
+    fake.route("GET", "/channels/20/messages", () => []);
+  }
+
+  it("starts the backfill where the log was when the channel started, not after live messages", async () => {
+    const newest: Record<string, string> = { "discord:#20": "discord:#20/2000" };
+    const { fake, channel, sink, gateway } = await connect({ lastAlive: Date.now() - 600_000, newest, places: ["discord:#20"] });
+    oneChannel(fake);
+    // A live message is stored and logged before the gateway's backfill reads.
+    await gateway([["MESSAGE_CREATE", message({ id: snowflake(Date.now()) })]]);
+    newest["discord:#20"] = `discord:#20/${snowflake(Date.now())}`;
+    await channel.backfill(sink);
+    expect(fake.requested("GET", "/channels/20/messages").map((request) => request.query.get("after"))).toEqual(["2000"]);
+  });
+
+  it("backfills every place from the old session's last event when a new session starts, also on the first run", { timeout: 20_000 }, async () => {
+    // The first run: no last time the gateway ran. What the log has does not matter for a new session.
+    const { fake, gateway } = await connect({ newest: { "discord:#20": "discord:#20/5" }, places: ["discord:#20"] });
+    oneChannel(fake);
+    const before = Date.now();
+    await gateway([["MESSAGE_CREATE", message({ id: "501" })]]);
+    const after = Date.now();
     fake.invalidSession();
-    await until(() => fake.requested("GET", "/users/@me/guilds").length === 1, 15_000);
+    await until(() => fake.requested("GET", "/channels/20/messages").length === 1, 15_000);
     expect(fake.identifies).toBe(2);
+    const start = timeOf(fake.requested("GET", "/channels/20/messages")[0]!.query.get("after")!);
+    expect(start).toBeGreaterThanOrEqual(before - 60_000);
+    expect(start).toBeLessThanOrEqual(after - 60_000);
   });
 });

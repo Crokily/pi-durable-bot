@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { Readable } from "node:stream";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
+import { setTimeout as sleep } from "node:timers/promises";
 import { DiscordFormatConverter } from "@chat-adapter/discord";
 import { convertEmojiPlaceholders, defaultEmojiResolver } from "chat";
 import { Client, DiscordAPIError, Events, GatewayIntentBits, type REST, type RequestMethod } from "discord.js";
@@ -28,13 +29,22 @@ import { expandHome, readSecrets } from "../../core/env-file.ts";
 //   person              <id>:@<user ID>                                 discord:@1500
 // A thread is the address of its first message: <id>:#<channel ID>/<thread ID>. A thread started from a message has
 // that message's ID, and the first message of a forum post has the post's ID, so both have this address. The place of
-// a message in a thread is the channel the thread is in.
+// a message in a thread is the channel the thread is in. A thread with no first message of its own (a private thread, or
+// one started without a message) has an address of the same form, but no message has it, so the wake shows no thread
+// start there.
 
-/** What the inbox stores for this channel. `at` is when the gateway event came, for events that carry no time. */
+/**
+ * What the inbox stores for this channel. `at` is when the gateway event came, for events that carry no time. `parent`
+ * is set when the event's channel is a thread: the channel the thread is in, known when the event came, so the event
+ * gets the same addresses also when the thread cannot be looked up later.
+ */
 type Raw =
-  | { source: "gateway"; at: number; t: string; d: any }
-  | { source: "history"; message: ApiMessage }
-  | { source: "sent"; sendId: string; message: ApiMessage };
+  | { source: "gateway"; at: number; t: string; d: any; parent?: string }
+  | { source: "history"; message: ApiMessage; parent?: string }
+  | { source: "sent"; sendId: string; message: ApiMessage; parent?: string };
+
+/** An address taken apart: a place (channel), a message in it or in one of its threads, or a person. */
+type Parsed = { channel: string; thread?: string; message?: string } | { user: string };
 
 interface ApiUser {
   id: string;
@@ -77,6 +87,7 @@ interface ApiChannel {
   owner_id?: string;
   recipients?: ApiUser[];
   last_message_id?: string | null;
+  thread_metadata?: { archive_timestamp?: string };
 }
 
 interface GuildInfo {
@@ -93,6 +104,8 @@ const GROUP_DM = 3;
 /** Server channels with their own messages: text, voice, announcement and stage channels. */
 const TEXT = new Set([0, 2, 5, 13]);
 const THREADS = new Set([10, 11, 12]);
+/** Channels that can have threads: text, announcement, forum and media channels. */
+const THREAD_PARENTS = new Set([0, 5, 15, 16]);
 /** Forum and media channels: their posts are threads, and a post's first message is in the thread. */
 const FORUMS = new Set([15, 16]);
 /** The copy of a thread's first message that Discord shows in the thread; the message itself is in the channel. */
@@ -141,6 +154,12 @@ export class DiscordChannel implements ChannelAdapter {
   /** The gateway session, for event IDs: a dispatch is unique by its session and sequence number. */
   #session?: string;
   #readies = 0;
+  /** When the last gateway event came, in Unix ms: where a new session's backfill starts. */
+  #lastEventAt = 0;
+  /** Stopped when the channel stops: a store that failed is not tried again after that. */
+  #running = new AbortController();
+  /** The newest logged message ID of each known place, by channel ID, read when the channel started. */
+  #starts = new Map<string, string>();
   /** Servers the bot is in. A GUILD_CREATE for another one means the bot was added. */
   readonly #servers = new Set<string>();
   /** Gateway events are stored one after another, in the order Discord sent them. */
@@ -177,6 +196,15 @@ export class DiscordChannel implements ChannelAdapter {
    */
   async start(sink: ChannelSink): Promise<void> {
     const { DISCORD_BOT_TOKEN: token } = readSecrets(this.#secrets, ["DISCORD_BOT_TOKEN"]);
+    // Where the backfill starts in each known place, read before the gateway connects: live messages logged after this
+    // must not move it past messages that came while the gateway was down. Overlap is harmless: the log keeps a message once.
+    this.#starts = new Map();
+    for (const place of await sink.places()) {
+      const newest = await sink.newestMessage(place);
+      const parsed = newest ? this.#tryParse(newest) : undefined;
+      if (parsed && "message" in parsed && parsed.message) this.#starts.set(parsed.channel, parsed.message);
+    }
+    this.#running = new AbortController();
     const client = new Client({
       intents: [
         GatewayIntentBits.Guilds,
@@ -209,13 +237,17 @@ export class DiscordChannel implements ChannelAdapter {
   async stop(): Promise<void> {
     const client = this.#client;
     this.#client = undefined;
+    this.#running.abort();
     await client?.destroy().catch(() => {});
   }
 
   /** One gateway dispatch: keep what translation needs to know, and store the events. Never throws into discord.js. */
   #receive(sink: ChannelSink, packet: { t: string | null; s: number | null; d: any }): void {
     const { t } = packet;
-    if (!t || !(STORED.has(t) || KEPT.has(t))) return;
+    if (!t) return;
+    const previous = this.#lastEventAt;
+    this.#lastEventAt = Date.now();
+    if (!(STORED.has(t) || KEPT.has(t))) return;
     try {
       // A copy, taken now: discord.js changes the packet's data when it handles it after this.
       const d = structuredClone(packet.d);
@@ -226,7 +258,10 @@ export class DiscordChannel implements ChannelAdapter {
           this.#servers.clear();
           for (const guild of d.guilds) this.#servers.add(guild.id);
           if (this.#readies++ > 0) {
-            this.#refilling = this.#refilling.then(() => this.backfill(sink)).catch((error) => sink.log("backfill failed", { error: String(error) }));
+            // A new session: what came after the old one's last event is lost. Fill it in every place, from a minute
+            // before that event, also on the first run, when there is no last time the gateway ran.
+            const since = snowflakeAt(previous - 60_000);
+            this.#refilling = this.#refilling.then(() => this.#backfill(sink, () => since)).catch((error) => sink.log("backfill failed", { error: String(error) }));
           }
           return;
         case "GUILD_CREATE":
@@ -259,16 +294,39 @@ export class DiscordChannel implements ChannelAdapter {
       if (!STORED.has(t)) return;
       // One event per edit: a later update of an edited message (a link preview, for example) has the same edit time.
       const eventId = t === "MESSAGE_UPDATE" && d.edited_timestamp ? `${t}:${d.id}:${d.edited_timestamp}` : `${t}:${this.#session}:${packet.s}`;
-      this.#store(sink, eventId, { source: "gateway", at: Date.now(), t, d }, t === "INTERACTION_CREATE" ? () => void this.#acknowledge(sink, d) : undefined);
+      const parent = this.#parentOf(d.channel_id);
+      const raw: Raw = { source: "gateway", at: Date.now(), t, d, ...(parent ? { parent } : {}) };
+      this.#store(sink, eventId, raw, t === "INTERACTION_CREATE" ? () => void this.#acknowledge(sink, d) : undefined);
     } catch (error) {
       sink.log("gateway event not handled", { type: t, error: String(error) });
     }
   }
 
+  /**
+   * Store an event after the ones before it. Discord does not send an event again, so one that fails is tried again,
+   * later each time, until it is stored or the channel stops. The events after it wait, so the order stays.
+   */
   #store(sink: ChannelSink, eventId: string, raw: Raw, then?: () => void): void {
-    this.#storing = this.#storing.then(
-      () => sink.receive(eventId, raw).then(then, (error) => sink.log("gateway event not stored", { event: eventId, error: String(error) })),
-    );
+    const { signal } = this.#running;
+    this.#storing = this.#storing.then(async () => {
+      for (let attempt = 1; !signal.aborted; attempt++) {
+        try {
+          await sink.receive(eventId, raw);
+          then?.();
+          return;
+        } catch (error) {
+          const wait = Math.min(1000 * 2 ** (attempt - 1), 30_000);
+          sink.log("gateway event not stored; trying again", { event: eventId, attempt, waitMs: wait, error: String(error) });
+          await sleep(wait, undefined, { signal }).catch(() => {});
+        }
+      }
+    });
+  }
+
+  /** The channel a thread is in, when the cache knows that this channel is a thread. */
+  #parentOf(channelId: string | undefined): string | undefined {
+    const channel = channelId ? this.#channels.get(channelId)?.channel : undefined;
+    return channel && THREADS.has(channel.type) ? (channel.parent_id ?? undefined) : undefined;
   }
 
   /**
@@ -314,7 +372,7 @@ export class DiscordChannel implements ChannelAdapter {
     return `${this.id}:#${where.place}/${where.thread}`;
   }
 
-  #parse(address: Address): { channel: string; thread?: string; message?: string } | { user: string } {
+  #parse(address: Address): Parsed {
     if (!this.owns(address)) throw new Error(`not a ${this.id} address: ${address}`);
     const rest = address.slice(this.id.length + 1);
     const place = /^#(\d+)(?:\/(\d+))?(?:\/(\d+))?$/.exec(rest);
@@ -327,25 +385,34 @@ export class DiscordChannel implements ChannelAdapter {
     throw new Error(`bad ${this.id} address: ${address}`);
   }
 
+  #tryParse(address: Address): Parsed | undefined {
+    try {
+      return this.#parse(address);
+    } catch {
+      return undefined;
+    }
+  }
+
   // ---- Translate ----
 
   async translate(value: unknown): Promise<Happening[]> {
     const raw = value as Raw;
-    if (raw.source === "history") return this.#message("message", raw.message, Date.now());
-    if (raw.source === "sent") return this.#message("message", raw.message, Date.now(), raw.sendId);
+    const parent = raw.parent;
+    if (raw.source === "history") return this.#message("message", raw.message, Date.now(), parent);
+    if (raw.source === "sent") return this.#message("message", raw.message, Date.now(), parent, raw.sendId);
     const { t, d, at } = raw;
     switch (t) {
       case "MESSAGE_CREATE":
-        return this.#message("message", d, at);
+        return this.#message("message", d, at, parent);
       case "MESSAGE_UPDATE":
-        return d.edited_timestamp ? this.#message("edit", d, at) : this.#update(d, at);
+        return d.edited_timestamp ? this.#message("edit", d, at, parent) : this.#update(d, at, parent);
       case "MESSAGE_DELETE":
-        return [await this.#deleted(d.id, d.channel_id, d.guild_id, at, d)];
+        return [await this.#deleted(d.id, d.channel_id, d.guild_id, at, d, parent)];
       case "MESSAGE_DELETE_BULK":
-        return Promise.all((d.ids as string[]).map((id) => this.#deleted(id, d.channel_id, d.guild_id, at, d)));
+        return Promise.all((d.ids as string[]).map((id) => this.#deleted(id, d.channel_id, d.guild_id, at, d, parent)));
       case "MESSAGE_REACTION_ADD":
       case "MESSAGE_REACTION_REMOVE": {
-        const where = await this.#locate(d.channel_id);
+        const where = await this.#locate(d.channel_id, undefined, parent);
         const emoji = d.emoji as { id?: string | null; name?: string | null; animated?: boolean };
         return [
           {
@@ -389,15 +456,16 @@ export class DiscordChannel implements ChannelAdapter {
         return [{ kind: "leave", at, ...this.#meAsPerson(), fromMe: false, text: `removed from the server ${name ? `"${name}" ` : ""}(ID ${d.id})`, raw: d }];
       }
       case "INTERACTION_CREATE":
-        return [await this.#interaction(d, at)];
+        // An interaction names its channel's parent itself.
+        return [await this.#interaction(d, at, parent ?? (THREADS.has(d.channel?.type) ? d.channel.parent_id : undefined))];
       default:
         return [];
     }
   }
 
-  async #message(kind: "message" | "edit", message: ApiMessage, at: number, sendId?: string): Promise<Happening[]> {
+  async #message(kind: "message" | "edit", message: ApiMessage, at: number, parent: string | undefined, sendId?: string): Promise<Happening[]> {
     if (message.type === THREAD_STARTER_MESSAGE) return [];
-    const where = await this.#locate(message.channel_id, message.channel_type);
+    const where = await this.#locate(message.channel_id, message.channel_type, parent);
     const guildId = message.guild_id ?? (await this.#channel(where.place).catch(() => undefined))?.guild_id;
     const guild = guildId ? await this.#guild(guildId).catch(() => undefined) : undefined;
     const author = message.author;
@@ -425,8 +493,8 @@ export class DiscordChannel implements ChannelAdapter {
   }
 
   /** A message changed but not edited: a link preview came, or it was pinned. Nobody did it, so no person. */
-  async #update(message: ApiMessage, at: number): Promise<Happening[]> {
-    const where = await this.#locate(message.channel_id, message.channel_type);
+  async #update(message: ApiMessage, at: number, parent: string | undefined): Promise<Happening[]> {
+    const where = await this.#locate(message.channel_id, message.channel_type, parent);
     return [
       {
         kind: "update",
@@ -442,8 +510,8 @@ export class DiscordChannel implements ChannelAdapter {
   }
 
   /** Discord does not say who deleted a message, or whose it was. */
-  async #deleted(message: string, channel: string, guildId: string | undefined, at: number, raw: unknown): Promise<Happening> {
-    const where = await this.#locate(channel);
+  async #deleted(message: string, channel: string, guildId: string | undefined, at: number, raw: unknown, parent: string | undefined): Promise<Happening> {
+    const where = await this.#locate(channel, undefined, parent);
     return {
       kind: "delete",
       at,
@@ -456,8 +524,8 @@ export class DiscordChannel implements ChannelAdapter {
   }
 
   /** Someone used a command, a button, a menu or a form of the app. */
-  async #interaction(d: any, at: number): Promise<Happening> {
-    const where = d.channel_id ? await this.#locate(d.channel_id, d.channel?.type) : undefined;
+  async #interaction(d: any, at: number, parent: string | undefined): Promise<Happening> {
+    const where = d.channel_id ? await this.#locate(d.channel_id, d.channel?.type, parent) : undefined;
     const user = d.member?.user ?? d.user;
     let text: string | undefined;
     if (d.type === 2) {
@@ -515,8 +583,12 @@ export class DiscordChannel implements ChannelAdapter {
     return text.replace(/<#(\d+)>/g, (token, id: string) => (channels.has(id) ? `#${channels.get(id)}` : token));
   }
 
-  /** Where a channel's messages are: in the channel itself, or in a thread, whose place is its parent channel. */
-  async #locate(channelId: string, type?: number): Promise<{ place: string; thread?: string }> {
+  /**
+   * Where a channel's messages are: in the channel itself, or in a thread, whose place is its parent channel. The
+   * parent stored with the event comes first, then the channel type the event gives, then the cache or Discord.
+   */
+  async #locate(channelId: string, type?: number, parent?: string): Promise<{ place: string; thread?: string }> {
+    if (parent) return { place: parent, thread: channelId };
     if (type !== undefined && !THREADS.has(type)) return { place: channelId };
     const channel = await this.#channel(channelId).catch(() => undefined);
     if (channel && THREADS.has(channel.type) && channel.parent_id) return { place: channel.parent_id, thread: channel.id };
@@ -595,15 +667,24 @@ export class DiscordChannel implements ChannelAdapter {
   // ---- Backfill ----
 
   /**
-   * Store the messages that came while the gateway was down: in every text channel and active thread of every server,
-   * and in every DM the log knows, messages after the newest logged one of the place. A place with nothing logged
-   * starts at the last time the gateway ran. On the first start there is nothing to fill. Oldest first in each channel.
+   * Store the messages that came while the gateway was down: in every text channel, active thread and recently archived
+   * thread of every server, and in every DM the log knows. Each place starts after its newest message that was logged
+   * when the channel started; a place with nothing logged starts at the last time the gateway ran. On the first start
+   * there is nothing to fill. Oldest first in each channel.
    */
   async backfill(sink: ChannelSink): Promise<void> {
     const lastAlive = sink.lastAlive();
     if (lastAlive === undefined) return;
+    const starts = this.#starts;
+    const since = snowflakeAt(lastAlive);
+    await this.#backfill(sink, (place) => starts.get(place) ?? since);
+  }
+
+  /** startOf: the message ID after which a place's missed messages begin, by the place's channel ID. */
+  async #backfill(sink: ChannelSink, startOf: (place: string) => string): Promise<void> {
     const rest = this.#rest;
     const channels: ApiChannel[] = [];
+    const parents: ApiChannel[] = [];
     for (const guild of await this.#myGuilds()) {
       try {
         const listed = (await rest.get(`/guilds/${guild}/channels`)) as ApiChannel[];
@@ -611,53 +692,72 @@ export class DiscordChannel implements ChannelAdapter {
         for (const channel of [...listed, ...(active.threads ?? [])]) {
           this.#remember({ ...channel, guild_id: guild });
           if (TEXT.has(channel.type) || THREADS.has(channel.type)) channels.push(channel);
+          if (THREAD_PARENTS.has(channel.type)) parents.push(channel);
         }
       } catch (error) {
         sink.log("backfill skipped a server", { server: guild, error: String(error) });
       }
     }
-    const listed = new Set(channels.map((channel) => channel.id));
+    const known = new Set(channels.map((channel) => channel.id));
+    // A thread that got messages while the gateway was down may be archived by now, and then it is not active.
+    for (const parent of parents) {
+      try {
+        for (const thread of await this.#archivedSince(parent.id, timeOf(startOf(parent.id)))) {
+          if (known.has(thread.id)) continue;
+          known.add(thread.id);
+          channels.push(this.#remember({ ...thread, guild_id: parent.guild_id ?? thread.guild_id }));
+        }
+      } catch (error) {
+        if (!noAccess(error)) sink.log("backfill skipped a place", { channel: parent.id, error: String(error) });
+      }
+    }
     for (const place of await sink.places()) {
-      const parsed = this.#parse(place);
-      if (!("channel" in parsed) || listed.has(parsed.channel)) continue;
+      const parsed = this.#tryParse(place);
+      if (!parsed || !("channel" in parsed) || known.has(parsed.channel)) continue;
       // A DM: read it again for its newest message ID. A channel of a server the bot left fails or is not a DM.
       const channel = await rest.get(`/channels/${parsed.channel}`).then((found) => this.#remember(found as ApiChannel)).catch(() => undefined);
       if (channel && (channel.type === DM || channel.type === GROUP_DM)) channels.push(channel);
     }
-    // Where each place starts, found before anything is stored, so that what this backfill stores does not move it.
-    const after = new Map<string, string>();
-    const placeOf = (channel: ApiChannel) => (THREADS.has(channel.type) && channel.parent_id ? channel.parent_id : channel.id);
-    for (const channel of channels) {
-      const place = placeOf(channel);
-      if (after.has(place)) continue;
-      const newest = await sink.newestMessage(this.place(place));
-      const parsed = newest ? this.#parse(newest) : undefined;
-      after.set(place, parsed && "message" in parsed && parsed.message ? parsed.message : snowflakeAt(lastAlive));
-    }
     let added = 0;
     for (const channel of channels) {
+      const parent = THREADS.has(channel.type) && channel.parent_id ? channel.parent_id : undefined;
       try {
-        added += await this.#backfillChannel(sink, channel, after.get(placeOf(channel))!);
+        added += await this.#backfillChannel(sink, channel, startOf(parent ?? channel.id), parent);
       } catch (error) {
-        // A channel the bot may not read is not a failure: the server decides who reads it.
-        if (!(error instanceof DiscordAPIError && error.status === 403)) sink.log("backfill skipped a place", { channel: channel.id, error: String(error) });
+        if (!noAccess(error)) sink.log("backfill skipped a place", { channel: channel.id, error: String(error) });
       }
     }
     sink.log("backfill done", { messages: added });
   }
 
-  async #backfillChannel(sink: ChannelSink, channel: ApiChannel, after: string): Promise<number> {
+  /** parent: the channel the thread is in, when this channel is a thread. */
+  async #backfillChannel(sink: ChannelSink, channel: ApiChannel, after: string, parent: string | undefined): Promise<number> {
     if (!channel.last_message_id || BigInt(channel.last_message_id) <= BigInt(after)) return 0;
     let added = 0;
     for (let cursor = after; ; ) {
       const page = (await this.#rest.get(`/channels/${channel.id}/messages`, { query: new URLSearchParams({ after: cursor, limit: "100" }) })) as ApiMessage[];
       page.sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
       for (const message of page) {
-        await sink.receive(`history:${message.id}:${message.edited_timestamp ?? ""}`, { source: "history", message } satisfies Raw);
+        await sink.receive(`history:${message.id}:${message.edited_timestamp ?? ""}`, { source: "history", message, ...(parent ? { parent } : {}) } satisfies Raw);
         added++;
       }
       if (page.length < 100) return added;
       cursor = page.at(-1)!.id;
+    }
+  }
+
+  /** The public threads of a channel archived at or after a time, in Unix ms. Discord lists the last archived first. */
+  async #archivedSince(channel: string, since: number): Promise<ApiChannel[]> {
+    const found: ApiChannel[] = [];
+    for (let before: string | undefined; ; ) {
+      const query = new URLSearchParams({ limit: "100", ...(before ? { before } : {}) });
+      const page = (await this.#rest.get(`/channels/${channel}/threads/archived/public`, { query })) as { threads?: ApiChannel[]; has_more?: boolean };
+      for (const thread of page.threads ?? []) {
+        before = thread.thread_metadata?.archive_timestamp;
+        if (!(Date.parse(before ?? "") >= since)) return found;
+        found.push(thread);
+      }
+      if (!page.has_more || !page.threads?.length) return found;
     }
   }
 
@@ -695,7 +795,8 @@ export class DiscordChannel implements ChannelAdapter {
         ...(target.reply ? { message_reference: { message_id: target.reply } } : {}),
       },
     })) as ApiMessage;
-    return { message: this.#messageAt(target, message.id), place: this.place(target.place), raw: { source: "sent", sendId, message } satisfies Raw };
+    const raw: Raw = { source: "sent", sendId, message, ...(target.thread ? { parent: target.place } : {}) };
+    return { message: this.#messageAt(target, message.id), place: this.place(target.place), raw };
   }
 
   /** Discord's API does not give nonces back when it lists messages, so a sent message cannot be found by its send ID. */
@@ -831,4 +932,14 @@ function files(message: ApiMessage): { files?: FileInfo[] } {
 /** The smallest Discord ID made at this time, for "messages after". */
 function snowflakeAt(ms: number): string {
   return String((BigInt(Math.floor(ms)) - DISCORD_EPOCH) << 22n);
+}
+
+/** When a Discord ID was made, in Unix ms. */
+function timeOf(id: string): number {
+  return Number((BigInt(id) >> 22n) + DISCORD_EPOCH);
+}
+
+/** Discord answered that the bot may not read this. The server decides who reads what, so this is not a failure. */
+function noAccess(error: unknown): boolean {
+  return error instanceof DiscordAPIError && error.status === 403;
 }

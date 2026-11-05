@@ -2,6 +2,7 @@ import { Cause, Clock, Context, Effect, Fiber, FiberMap, FiberSet, Layer, Option
 import type { PlaceInfo } from "../core/channel.ts";
 import type { Judge, JudgeItem } from "../core/judge.ts";
 import type { PlaceWake, PlaceWakeReason, ThreadStart, WakeEvent, WakeFile, WakeTarget } from "../core/wake.ts";
+import { Channels } from "./channels.ts";
 import { GatewayConfig } from "./config.ts";
 import { DeliverError, failureText, JudgeError, type LogError, message, NoWakeTarget } from "./errors.ts";
 import { Attachments } from "./files.ts";
@@ -23,6 +24,11 @@ export interface WakerSettings {
 /** When the judge fails, it is asked again after these waits. */
 const JUDGE_RETRY_MS = [2_000, 8_000] as const;
 
+/** An event that ends its group's wait: it mentions the bot, or it is in a one-to-one DM. */
+function atOnce(event: UndecidedEvent): boolean {
+  return event.mentions_me === 1 || event.place_kind === "dm";
+}
+
 /** How long a group of events waits: until debounceMs after the last event, but never past debounceMaxMs after the first. */
 function debounceWait(settings: Pick<WakerSettings, "debounceMs" | "debounceMaxMs">, first: number, now: number): number {
   return Math.max(0, Math.min(settings.debounceMs, first + settings.debounceMaxMs - now));
@@ -43,7 +49,8 @@ interface Batch {
 }
 
 /**
- * Decides when new events wake the bot. Per place, it waits until people stop (debounce), then:
+ * Decides when new events wake the bot. Per place, it waits until people stop (debounce); an event that mentions the
+ * bot, or one in a DM, ends the wait at once when its channel runs. Then:
  * 1. the bot works on this place now → steer;
  * 2. an event @-mentions the bot, or the place is a one-to-one DM → wake;
  * 3. otherwise the judge decides; with no judge, every event wakes the bot.
@@ -56,7 +63,7 @@ export class Waker extends Context.Service<
   {
     setTarget(target: WakeTarget): void;
     add(event: UndecidedEvent): Effect.Effect<void>;
-    /** Deliver again, with the same IDs, the wakes a crash left undelivered: after the debounce, like new events. */
+    /** Deliver again, with the same IDs, the wakes a crash left undelivered: debounceMs after the start. */
     readonly redeliver: Effect.Effect<void, LogError>;
     readonly hooks: WakerHooks;
     /** Stop the timers and wait for decisions in progress. Undecided events stay undecided in the log and come back on the next start. */
@@ -71,6 +78,7 @@ export class Waker extends Context.Service<
       const wakeSpans = yield* WakeSpans;
       const telemetry = yield* Telemetry;
       const attachments = yield* Attachments;
+      const channels = yield* Channels;
       const batches = new Map<string, Batch>();
       /** Per place, the decision of its last group. */
       const lastDecision = new Map<string, Fiber.Fiber<void>>();
@@ -280,6 +288,14 @@ export class Waker extends Context.Service<
             batch.events.push(event);
             batch.ids.add(event.id);
             if (Option.isSome(span)) batch.spans.push(span.value);
+            // A mention or a DM: someone waits for the bot, so the group is decided now, with this event in it. What
+            // comes after starts the next group, and reaches the bot while it works on the place (steer). Before the
+            // event's channel runs, as for events from before a start, the group waits as others do, so its files can be
+            // saved.
+            if (atOnce(event) && channels.running(event.channel)) {
+              yield* FiberMap.remove(timers, key);
+              return yield* flush(key);
+            }
             const wait = debounceWait(config.settings(), batch.first, now);
             yield* FiberMap.run(timers, key, Effect.andThen(Effect.sleep(wait), flush(key)));
           }),

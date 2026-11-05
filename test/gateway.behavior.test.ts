@@ -78,7 +78,7 @@ describe("receive, log, wake, send", { timeout: 60_000 }, () => {
   it("groups messages that come close together into one wake", async () => {
     await setUp({ settings: { debounceMs: 600, debounceMaxMs: 5_000 } });
     for (const text of ["first", "second", "third"]) {
-      gateway.say("general", "alice", `@${ME} ${text}`);
+      gateway.say("general", "alice", text);
       await pause(150);
     }
 
@@ -94,11 +94,20 @@ describe("receive, log, wake, send", { timeout: 60_000 }, () => {
     const start = Date.now();
     // A message every 400 ms never leaves an 800 ms pause, so only the 1.5 s limit can end the wait.
     while (Date.now() - start < 3_000 && wakes(model).length === 0) {
-      gateway.say("general", "alice", `@${ME} still talking`);
+      gateway.say("general", "alice", "still talking");
       await pause(400);
     }
     expect(wakes(model).length).toBeGreaterThan(0);
     expect(Date.now() - start).toBeLessThan(2_900);
+  });
+
+  it("wakes the bot at once for a DM or a mention, without the pause", async () => {
+    await setUp({ settings: { debounceMs: 20_000, debounceMaxMs: 30_000 } });
+    gateway.say("dm-alice", "alice", "ping");
+    gateway.say("general", "bob", `@${ME} ping`);
+    // The pause would hold them 20 seconds.
+    await waitFor(() => gateway.sent().length === 2, { what: "both replies", timeout: 15_000 });
+    expect(gateway.sent().map((record) => record.place).sort()).toEqual(["dm-alice", "general"]);
   });
 
   it("keeps places apart: messages in two places are two wakes", async () => {
@@ -267,7 +276,7 @@ describe("crashes and restarts", { timeout: 90_000 }, () => {
 
   it("keeps an event that was stored but not decided when the gateway is killed", async () => {
     await setUp({ settings: { debounceMs: 3_000, debounceMaxMs: 5_000 } });
-    const id = gateway.say("general", "alice", `@${ME} are you there?`);
+    const id = gateway.say("general", "alice", "are you there?");
     // Stored in the log, still waiting for the pause to end.
     await waitFor(() => event(`general/${id}`) !== undefined, { what: "the event in the log" });
     expect(event(`general/${id}`)?.wake).toBeNull();
@@ -276,7 +285,7 @@ describe("crashes and restarts", { timeout: 90_000 }, () => {
 
     await gateway.start();
     await waitFor(() => gateway.sent().length === 1, { what: "the reply after the restart" });
-    expect(event(`general/${id}`)?.wake).toBe("mention");
+    expect(event(`general/${id}`)?.wake).toBe("heard");
     await pause(1_000);
     expect(wakes(model)).toHaveLength(1);
   });

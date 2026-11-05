@@ -205,7 +205,7 @@ flowchart LR
   A --> N[Do nothing]
 ```
 
-- Messages that arrive close together are grouped: it waits 3 seconds after the last one (20 seconds at most) before it decides.
+- A mention or a DM wakes it at once, with the messages of that place that were waiting. Other messages that arrive close together are grouped: it waits 3 seconds after the last one (20 seconds at most) before it decides.
 - If it is already working in a place, itself or with a child, new messages there are handed to it as it works, so it can change course.
 - The wake message says where, who, why and when, and gives each new message's text, the start of its thread when it is a reply, and its files. The gateway downloads files as soon as a message comes, into the bot's `files/tmp/`, so the wake gives their paths on the machine; it deletes them 30 days later, and the log keeps each file's name, type, size and URL, so the bot can download it again. A file over 10 MB is not downloaded, and a download that passes 10 MB, when the channel gave no size, stops and is deleted; the wake waits for the other downloads at most 10 seconds past the moment it would go out without them; for a file that is not saved, it gives the URL, and the bot downloads it itself if it needs it. Earlier messages and other details are in the log.
 

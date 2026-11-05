@@ -49,7 +49,7 @@ After the restart the bot must send once, be woken once, and make the memory pas
 |---|---|
 | `Outbox.tla` | No send ID reaches the platform twice, however often the process dies; every send goes out in the end. It assumes the platform finds a sent message by its send ID. |
 | `Inbox.tla` | An event is on disk before the adapter acknowledges it; an event the platform delivers again is logged once; every acknowledged event is decided and reaches the agent; no event reaches the agent in two wakes. |
-| `Debounce.tla` | A group of events is decided 3 seconds after its last event or 20 seconds after its first, whichever comes first; groups of a place follow each other; every event is in exactly one group. `Debounce.places.cfg` checks two places at once with shorter waits. |
+| `Debounce.tla` | A group of events is decided 3 seconds after its last event or 20 seconds after its first, whichever comes first, or at once when a mention or a DM comes, with that event in it; groups of a place follow each other; every event is in exactly one group. `Debounce.places.cfg` checks two places at once with shorter waits. |
 
 To run TLC you need Java 11 or newer and `tla2tools.jar` from the [TLA+ releases](https://github.com/tlaplus/tlaplus/releases). Put the jar in `.tla/tla2tools.jar` (git ignores `.tla/`), or set `TLA2TOOLS` to its path:
 

@@ -31,25 +31,33 @@ interface Arrival {
   readonly place: number;
   /** Milliseconds after the previous arrival. */
   readonly gap: number;
+  /** It mentions the bot. */
+  readonly mention: boolean;
 }
 
 /**
  * The grouping rule, written plainly: per place, a group takes every event until it is due, at debounceMs after its
  * last event or debounceMaxMs after its first, whichever comes first. An event at the due time starts the next group.
+ * A mention ends its group when it comes, with itself in it.
  */
-function expectedGroups(arrivals: readonly { place: number; at: number; index: number }[]) {
+function expectedGroups(arrivals: readonly { place: number; at: number; index: number; mention: boolean }[]) {
   const groups: { place: number; events: number[]; at: number }[] = [];
   const open = new Map<number, { first: number; last: number; events: number[] }>();
   const due = (group: { first: number; last: number }) => Math.min(group.last + SETTINGS.debounceMs, group.first + SETTINGS.debounceMaxMs);
   for (const arrival of arrivals) {
-    const group = open.get(arrival.place);
-    if (group && arrival.at < due(group)) {
+    let group = open.get(arrival.place);
+    if (group && arrival.at >= due(group)) {
+      groups.push({ place: arrival.place, events: group.events, at: due(group) });
+      group = undefined;
+    }
+    if (group) {
       group.events.push(arrival.index);
       group.last = arrival.at;
-      continue;
+    } else open.set(arrival.place, (group = { first: arrival.at, last: arrival.at, events: [arrival.index] }));
+    if (arrival.mention) {
+      groups.push({ place: arrival.place, events: group.events, at: arrival.at });
+      open.delete(arrival.place);
     }
-    if (group) groups.push({ place: arrival.place, events: group.events, at: due(group) });
-    open.set(arrival.place, { first: arrival.at, last: arrival.at, events: [arrival.index] });
   }
   for (const [place, group] of open) groups.push({ place, events: group.events, at: due(group) });
   return groups.sort((a, b) => a.at - b.at || a.place - b.place);
@@ -74,26 +82,30 @@ const timeline = fc.array(burst, { minLength: 1, maxLength: 3 }).map((bursts) =>
   }
   return times;
 });
-const conversations = fc.tuple(timeline, fc.option(timeline, { nil: [] })).map(([first, second]) => {
+/** About one event in five mentions the bot. */
+const conversations = fc.tuple(timeline, fc.option(timeline, { nil: [] }), fc.array(fc.integer({ min: 0, max: 4 }), { maxLength: 90 })).map(([first, second, kinds]) => {
   const merged = [...first.map((at) => ({ place: 0, at })), ...second.map((at) => ({ place: 1, at }))].sort((a, b) => a.at - b.at || a.place - b.place);
-  return merged.map((arrival, index): Arrival => ({ place: arrival.place, gap: arrival.at - (merged[index - 1]?.at ?? 0) }));
+  return merged.map((arrival, index): Arrival => ({ place: arrival.place, gap: arrival.at - (merged[index - 1]?.at ?? 0), mention: kinds[index] === 0 }));
 });
 
 describe("debounce grouping", () => {
-  it("wakes each place once per group, at min(last + 3 s, first + 20 s), with every event in exactly one wake", async () => {
+  it("wakes each place once per group, at min(last + 3 s, first + 20 s) or at a mention, with every event in exactly one wake", async () => {
     await fc.assert(
       fc.asyncProperty(conversations, async (arrivals: Arrival[]) => {
         const actual = await run(
           withCore({}, (recorder) =>
             Effect.gen(function* () {
+              yield* (yield* Channels).connect([new MemoryChannel()], () => sink);
               const waker = yield* Waker;
               waker.setTarget(recorder.target());
               const ids: number[] = [];
-              for (const [index, { place, gap }] of arrivals.entries()) {
+              for (const [index, { place, gap, mention }] of arrivals.entries()) {
                 if (gap) yield* advance(gap);
-                const event = yield* logHappening(message(`place-${place}`, `@bot ${index}`));
+                const event = yield* logHappening(message(`place-${place}`, mention ? `@bot ${index}` : `${index}`));
                 ids[index] = event.id;
                 yield* waker.add(event);
+                // A mention is decided now, before the clock moves on.
+                yield* settle;
               }
               yield* advance(SETTINGS.debounceMaxMs);
               return recorder.wakes
@@ -103,7 +115,7 @@ describe("debounce grouping", () => {
           ),
         );
         let at = 0;
-        const timed = arrivals.map((item, index) => ({ place: item.place, at: (at += item.gap), index }));
+        const timed = arrivals.map((item, index) => ({ place: item.place, at: (at += item.gap), index, mention: item.mention }));
         expect(actual).toEqual(expectedGroups(timed));
       }),
       RUNS,

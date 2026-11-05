@@ -7,7 +7,8 @@ import { Channels } from "../src/gateway/channels.ts";
 import { FILE_WAIT_MS, MAX_FILE_BYTES } from "../src/gateway/files.ts";
 import { MessageLog } from "../src/gateway/log.ts";
 import { Waker } from "../src/gateway/waker.ts";
-import { advance, FILES_DIR, logHappening, MemoryChannel, message, settle, withCore } from "./support/core.ts";
+import type { PlaceWake } from "../src/core/wake.ts";
+import { advance, FILES_DIR, logHappening, MemoryChannel, message, type Recorder, settle, withCore } from "./support/core.ts";
 
 // The waker on Effect's TestClock: the debounce and the judge's retries happen at exact times, without waiting.
 
@@ -49,10 +50,10 @@ describe("files", () => {
         const waker = yield* Waker;
         waker.setTarget(recorder.target());
         const url = "https://files.example/report.pdf";
-        yield* waker.add(yield* logHappening({ ...message("general", "@bot the report"), files: [{ name: "report.pdf", url, size: 2_000 }] }));
+        yield* waker.add(yield* logHappening({ ...message("general", "the report"), files: [{ name: "report.pdf", url, size: 2_000 }] }));
         // Without the file, the wake would go out at 3 s.
         yield* advance(5_000, 1_000);
-        yield* arrive("general", "@bot did you see it?");
+        yield* arrive("general", "did you see it?");
 
         yield* advance(3_000 + FILE_WAIT_MS - 5_000 - 1, 1_000);
         assert.strictEqual(recorder.wakes.length, 0);
@@ -60,8 +61,8 @@ describe("files", () => {
         assert.deepStrictEqual(
           recorder.wakes.map(({ wake, at }) => ({ text: wake.events[0]!.text, at })),
           [
-            { text: "@bot the report", at: 3_000 + FILE_WAIT_MS },
-            { text: "@bot did you see it?", at: 3_000 + FILE_WAIT_MS },
+            { text: "the report", at: 3_000 + FILE_WAIT_MS },
+            { text: "did you see it?", at: 3_000 + FILE_WAIT_MS },
           ],
         );
         assert.deepStrictEqual(recorder.wakes[0]!.wake.events[0]!.files, [{ name: "report.pdf", size: 2_000, url, error: "it was not downloaded in time" }]);
@@ -82,7 +83,7 @@ describe("files", () => {
         const waker = yield* Waker;
         waker.setTarget(recorder.target());
         const file = { name: "talk.mov", type: "video/quicktime", url: "https://files.example/talk.mov", size: MAX_FILE_BYTES + 1 };
-        yield* waker.add(yield* logHappening({ ...message("general", "@bot the talk"), files: [file] }));
+        yield* waker.add(yield* logHappening({ ...message("general", "the talk"), files: [file] }));
         yield* advance(3_000);
 
         assert.deepStrictEqual(recorder.wakes[0]!.wake.events[0]!.files, [{ ...file, error: "it is larger than 10 MB" }]);
@@ -105,7 +106,7 @@ describe("files", () => {
         const waker = yield* Waker;
         waker.setTarget(recorder.target());
         const file = { name: "talk.mov", url: "https://files.example/talk.mov" };
-        yield* waker.add(yield* logHappening({ ...message("general", "@bot the talk"), files: [file] }));
+        yield* waker.add(yield* logHappening({ ...message("general", "the talk"), files: [file] }));
         yield* advance(3_000);
         yield* settleUntil(() => recorder.wakes.length > 0);
 
@@ -234,11 +235,11 @@ describe("debounce", () => {
     withCore({}, (recorder) =>
       Effect.gen(function* () {
         (yield* Waker).setTarget(recorder.target());
-        yield* arrive("general", "@bot one");
+        yield* arrive("general", "one");
         yield* advance(1_000);
-        yield* arrive("general", "@bot two");
+        yield* arrive("general", "two");
         yield* advance(1_000);
-        yield* arrive("general", "@bot three");
+        yield* arrive("general", "three");
 
         yield* advance(2_999);
         assert.strictEqual(recorder.wakes.length, 0);
@@ -246,7 +247,7 @@ describe("debounce", () => {
         assert.strictEqual(recorder.wakes.length, 1);
         assert.strictEqual(recorder.wakes[0]!.at, 5_000);
         assert.strictEqual(recorder.wakes[0]!.wake.events.length, 3);
-        assert.strictEqual(recorder.wakes[0]!.wake.reason, "mention");
+        assert.strictEqual(recorder.wakes[0]!.wake.reason, "heard");
       }),
     ));
 
@@ -255,7 +256,7 @@ describe("debounce", () => {
       Effect.gen(function* () {
         (yield* Waker).setTarget(recorder.target());
         for (let second = 0; second <= 24; second += 2) {
-          if (recorder.wakes.length === 0) yield* arrive("general", `@bot still talking at ${second}`);
+          if (recorder.wakes.length === 0) yield* arrive("general", `still talking at ${second}`);
           yield* advance(2_000);
         }
         assert.strictEqual(recorder.wakes[0]!.at, 20_000);
@@ -268,13 +269,97 @@ describe("debounce", () => {
     withCore({}, (recorder) =>
       Effect.gen(function* () {
         (yield* Waker).setTarget(recorder.target());
-        yield* arrive("general", "@bot here");
+        yield* arrive("general", "here");
         yield* advance(2_000);
-        yield* arrive("random", "@bot there");
+        yield* arrive("random", "there");
         yield* advance(1_000);
         assert.deepStrictEqual(recorder.wakes.map((entry) => [entry.wake.place.name, entry.at]), [["general", 3_000]]);
         yield* advance(2_000);
         assert.deepStrictEqual(recorder.wakes.map((entry) => [entry.wake.place.name, entry.at]), [["general", 3_000], ["random", 5_000]]);
+      }),
+    ));
+});
+
+describe("at once", () => {
+  const connect = Effect.gen(function* () {
+    yield* (yield* Channels).connect([new MemoryChannel()], () => ({}) as ChannelSink);
+  });
+  const seen = (recorder: Recorder) =>
+    recorder.wakes.map(({ wake, at }) => ({ reason: wake.reason, texts: wake.events.map((event) => event.text), at }));
+
+  it.effect("a mention wakes at once, with the events that waited before it; what comes after starts the next group", () =>
+    withCore({}, (recorder) =>
+      Effect.gen(function* () {
+        yield* connect;
+        (yield* Waker).setTarget(recorder.target());
+        yield* arrive("general", "lunch?");
+        yield* advance(1_000);
+        yield* arrive("general", "@bot are you there?");
+        yield* settleUntil(() => recorder.wakes.length === 1);
+        assert.deepStrictEqual(seen(recorder), [{ reason: "mention", texts: ["lunch?", "@bot are you there?"], at: 1_000 }]);
+
+        yield* arrive("general", "it is about the build");
+        yield* advance(2_999);
+        assert.strictEqual(recorder.wakes.length, 1);
+        yield* advance(1);
+        assert.deepStrictEqual(seen(recorder).at(-1), { reason: "heard", texts: ["it is about the build"], at: 4_000 });
+      }),
+    ));
+
+  it.effect("in a DM each message wakes at once; while the bot works there, the next one goes to it as it works", () =>
+    withCore({}, (recorder) =>
+      Effect.gen(function* () {
+        yield* connect;
+        (yield* Waker).setTarget(recorder.target());
+        yield* arrive("dm-alice", "ping");
+        yield* settleUntil(() => recorder.wakes.length === 1);
+        recorder.working.add("mem:#dm-alice");
+        yield* arrive("dm-alice", "and one more thing");
+        yield* settleUntil(() => recorder.wakes.length === 2);
+        assert.deepStrictEqual(seen(recorder), [
+          { reason: "dm", texts: ["ping"], at: 0 },
+          { reason: "steer", texts: ["and one more thing"], at: 0 },
+        ]);
+      }),
+    ));
+
+  it.effect("a mention after a start waits for the wake that a crash left undelivered in its place", () =>
+    withCore({}, (recorder) =>
+      Effect.gen(function* () {
+        // Recorded, but not handed to the bot, before the crash.
+        const before = yield* logHappening(message("general", "@bot the first request"));
+        const wake: PlaceWake = {
+          id: `mention:mem:#general:${before.id}`,
+          reason: "mention",
+          place: { address: "mem:#general", kind: "channel", name: "general" },
+          events: [{ id: before.id, kind: "message", at: 0, mentionsMe: true, text: "@bot the first request" }],
+        };
+        yield* (yield* MessageLog).recordWake(wake, [before.id], "mention");
+        const waker = yield* Waker;
+        waker.setTarget(recorder.target());
+        yield* waker.redeliver;
+        yield* connect;
+        yield* arrive("general", "@bot and a follow-up");
+        assert.strictEqual(recorder.wakes.length, 0);
+        yield* advance(3_000);
+        yield* settleUntil(() => recorder.wakes.length === 2);
+        assert.deepStrictEqual(seen(recorder), [
+          { reason: "mention", texts: ["@bot the first request"], at: 3_000 },
+          { reason: "mention", texts: ["@bot and a follow-up"], at: 3_000 },
+        ]);
+      }),
+    ));
+
+  it.effect("before its channel runs, as for events from before a start, a mention waits as other events do", () =>
+    withCore({}, (recorder) =>
+      Effect.gen(function* () {
+        (yield* Waker).setTarget(recorder.target());
+        yield* arrive("general", "@bot from before the start");
+        yield* connect;
+        yield* advance(2_999);
+        assert.strictEqual(recorder.wakes.length, 0);
+        yield* advance(1);
+        assert.deepStrictEqual(seen(recorder), [{ reason: "mention", texts: ["@bot from before the start"], at: 3_000 }]);
       }),
     ));
 });
@@ -384,7 +469,7 @@ describe("stop", () => {
       Effect.gen(function* () {
         const waker = yield* Waker;
         waker.setTarget(recorder.target());
-        const event = yield* arrive("general", "@bot wait");
+        const event = yield* arrive("general", "wait");
         yield* waker.stop;
         yield* advance(10_000);
         assert.strictEqual(recorder.wakes.length, 0);

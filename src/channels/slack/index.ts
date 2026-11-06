@@ -67,6 +67,8 @@ class SlackChannel implements ChannelAdapter {
   #botToken?: string;
   #botUserId?: string;
   readonly #places = new Map<string, { info: PlaceInfo; at: number }>();
+  /** The newest logged message of each known place, by channel ID, read when the channel started: where its backfill starts. */
+  #starts = new Map<string, string>();
 
   constructor(id: string, secrets: string, env: ChannelEnv) {
     this.id = id;
@@ -85,6 +87,14 @@ class SlackChannel implements ChannelAdapter {
 
   async start(sink: ChannelSink): Promise<void> {
     const tokens = readSecrets(this.#secrets, ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN"]);
+    // Read before the socket connects: a live message logged before the backfill runs must not move its start past
+    // messages that came while the gateway was down. Overlap is harmless: the log keeps a message once.
+    this.#starts = new Map();
+    for (const place of await sink.places()) {
+      const newest = await sink.newestMessage(place);
+      const parsed = newest ? this.#parse(newest) : undefined;
+      if (parsed && "channel" in parsed && parsed.ts) this.#starts.set(parsed.channel, parsed.ts);
+    }
     const sdk = new GatewaySlackAdapter({
       mode: "socket",
       appToken: tokens.SLACK_APP_TOKEN!,
@@ -398,9 +408,7 @@ class SlackChannel implements ChannelAdapter {
 
   async #backfillPlace(sink: ChannelSink, channel: string, lastAlive: number | undefined): Promise<number> {
     const client = this.#client;
-    const newest = await sink.newestMessage(this.place(channel));
-    const newestTs = newest ? (this.#parse(newest) as { ts?: string }).ts : undefined;
-    const since = newestTs ?? (lastAlive ? (lastAlive / 1000).toFixed(6) : undefined);
+    const since = this.#starts.get(channel) ?? (lastAlive ? (lastAlive / 1000).toFixed(6) : undefined);
     if (!since) return 0;
     let added = 0;
     const threads = new Set<string>();

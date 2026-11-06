@@ -59,8 +59,11 @@ interface Update {
   callback_query?: TelegramCallbackQuery & { message?: TgMessage };
 }
 
-/** What the inbox stores for this channel: an update as Telegram sent it, or a message this bot sent. */
-type Raw = Update | { sent: TgMessage; sendId: string };
+/**
+ * What the inbox stores for this channel: an update as Telegram sent it, or a message this bot sent, by send (with its
+ * send ID) or by call.
+ */
+type Raw = Update | { sent: TgMessage; sendId?: string };
 
 /** A file of a message, as Telegram describes it. */
 interface TgFile {
@@ -98,6 +101,8 @@ class TelegramChannel implements ChannelAdapter {
   #sdk?: GatewayTelegramAdapter;
   #stopping?: AbortController;
   #polling?: Promise<void>;
+  /** Where messages the bot sends with call are stored: Telegram does not send the bot its own messages. */
+  #sink?: ChannelSink;
   /** The forum topic of messages seen since the start, by "<chat ID>/<message ID>", so that a reply stays in its topic. */
   readonly #topics = new Map<string, number>();
   /** People and chats seen since the start, by ID, and people by lowercase username, for mentions. */
@@ -128,6 +133,7 @@ class TelegramChannel implements ChannelAdapter {
     if (!bot.username) throw new Error("Telegram did not say the bot's username");
     this.#sdk = new GatewayTelegramAdapter(this.#token, { id: bot.id, username: bot.username }, quietLogger(sink.log));
     this.#bot = bot;
+    this.#sink = sink;
     remember(this.#usernames, bot.username.toLowerCase(), String(bot.id));
     // getUpdates does not work while a webhook is set. The updates that wait are kept.
     await this.#api("deleteWebhook", { drop_pending_updates: false });
@@ -222,7 +228,7 @@ class TelegramChannel implements ChannelAdapter {
   async translate(value: unknown): Promise<Happening[]> {
     if (!this.#sdk) throw new Error(`channel ${this.id} is not started`);
     const raw = value as Raw;
-    if ("sent" in raw) return [this.#message("message", raw.sent, raw.sendId)];
+    if ("sent" in raw) return [this.#message(raw.sent.edit_date ? "edit" : "message", raw.sent, raw.sendId)];
     const posted = raw.message ?? raw.channel_post;
     if (posted) return this.#posted(posted);
     const edited = raw.edited_message ?? raw.edited_channel_post;
@@ -562,8 +568,21 @@ class TelegramChannel implements ChannelAdapter {
    * (photo, document, …, or the media of an InputMedia) given as a local path ("/…" or "~/…") is uploaded; a file ID or
    * a URL is passed on as it is.
    */
+  /**
+   * Call a Bot API method. A message it sends or edits (sendPhoto, sendMediaGroup, editMessageText…) is stored as the
+   * bot's own, as Discord and Slack send theirs back; a store that fails is logged, and the call still succeeds.
+   */
   async call(method: string, params: Record<string, unknown>): Promise<unknown> {
-    return this.#api(method, await withUploads(params));
+    const result = await this.#api(method, await withUploads(params));
+    const isOwn = (value: unknown): value is TgMessage => {
+      const m = value as TgMessage | undefined;
+      return typeof m?.message_id === "number" && m.chat !== undefined && m.from?.id === this.#bot?.id;
+    };
+    for (const m of (Array.isArray(result) ? result : [result]).filter(isOwn)) {
+      const eventId = `call:${m.chat.id}:${m.message_id}${m.edit_date ? `:${m.edit_date}` : ""}`;
+      await this.#sink?.receive(eventId, { sent: m } satisfies Raw).catch((error: unknown) => this.#sink?.log("sent message not stored", { method, event: eventId, error: String(error) }));
+    }
+    return result;
   }
 
   /**

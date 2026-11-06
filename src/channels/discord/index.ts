@@ -110,6 +110,8 @@ const THREAD_PARENTS = new Set([0, 5, 15, 16]);
 const FORUMS = new Set([15, 16]);
 /** The copy of a thread's first message that Discord shows in the thread; the message itself is in the channel. */
 const THREAD_STARTER_MESSAGE = 21;
+/** The system message a server posts when someone joins it, when the server has its welcome messages on. */
+const USER_JOIN = 7;
 
 /** Discord counts a message's length in Unicode code points. */
 const MAX_LENGTH = 2000;
@@ -472,6 +474,7 @@ export class DiscordChannel implements ChannelAdapter {
 
   async #message(kind: "message" | "edit", message: ApiMessage, at: number, parent: string | undefined, sendId?: string): Promise<Happening[]> {
     if (message.type === THREAD_STARTER_MESSAGE) return [];
+    if (message.type === USER_JOIN) return this.#joined(message, at, parent);
     const where = await this.#locate(message.channel_id, message.channel_type, parent);
     const guildId = message.guild_id ?? (await this.#channel(where.place).catch(() => undefined))?.guild_id;
     const guild = guildId ? await this.#guild(guildId).catch(() => undefined) : undefined;
@@ -494,6 +497,27 @@ export class DiscordChannel implements ChannelAdapter {
         mentions: (message.mentions ?? []).map((user) => this.person(user.id)),
         ...files(message),
         ...(sendId ? { sendId } : {}),
+        raw: message,
+      },
+    ];
+  }
+
+  /**
+   * Someone joined the server, from its welcome message: a join in the channel it was posted in. The bot's own is left
+   * out: GUILD_CREATE already says it was added.
+   */
+  async #joined(message: ApiMessage, at: number, parent: string | undefined): Promise<Happening[]> {
+    const author = message.author;
+    if (!author || author.id === this.#botUserId) return [];
+    const where = await this.#locate(message.channel_id, message.channel_type, parent);
+    const time = Date.parse(message.timestamp ?? "");
+    return [
+      {
+        kind: "join",
+        at: Number.isFinite(time) ? time : at,
+        place: await this.#placeInfo(where.place, message.guild_id),
+        person: await this.#personInfo(author),
+        fromMe: false,
         raw: message,
       },
     ];

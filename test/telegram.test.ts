@@ -33,6 +33,13 @@ function sink(receive: ChannelSink["receive"] = async () => {}, logs: string[] =
 const methods = (name: string) => telegram.calls.filter((call) => call.method === name);
 
 describe("receiving", () => {
+  it("says the token is wrong when Telegram does not know it", async () => {
+    telegram.script("getMe", { ok: false, error_code: 404, description: "Not Found" });
+    const failed = await channel.start(sink()).then(() => undefined, (error: Error) => error.message);
+    expect(failed).toBe(`Telegram does not know the token in ${join(dir, "telegram.env")} (Telegram getMe: Not Found); copy it again from @BotFather`);
+    expect(failed).not.toContain(TOKEN);
+  });
+
   it("stores each update before it asks Telegram for the ones after it, so one not stored comes again", { timeout: 10_000 }, async () => {
     const stored: string[] = [];
     let failed = false;

@@ -118,7 +118,13 @@ class TelegramChannel implements ChannelAdapter {
 
   async start(sink: ChannelSink): Promise<void> {
     this.#token = readSecrets(this.#secrets, ["TELEGRAM_BOT_TOKEN"]).TELEGRAM_BOT_TOKEN!;
-    const bot = await this.#api<TgBot>("getMe");
+    const bot = await this.#api<TgBot>("getMe").catch((error: unknown) => {
+      // Telegram answers a token it does not know with 401 or 404.
+      if (error instanceof TelegramError && (error.code === 401 || error.code === 404)) {
+        throw new Error(`Telegram does not know the token in ${this.#secrets} (${error.message}); copy it again from @BotFather`);
+      }
+      throw error;
+    });
     if (!bot.username) throw new Error("Telegram did not say the bot's username");
     this.#sdk = new GatewayTelegramAdapter(this.#token, { id: bot.id, username: bot.username }, quietLogger(sink.log));
     this.#bot = bot;
@@ -175,15 +181,7 @@ class TelegramChannel implements ChannelAdapter {
   }
 
   /** The Bot API cannot read history. What was missed comes with the first polls, from up to 24 hours back. */
-  async backfill(sink: ChannelSink): Promise<void> {
-    const lastAlive = sink.lastAlive();
-    if (lastAlive === undefined) return;
-    sink.log(
-      Date.now() - lastAlive > 24 * 3600_000
-        ? "the gateway was down for more than 24 hours; Telegram keeps missed updates only that long, so older ones are lost"
-        : "missed updates come with the first polls; Telegram keeps them for 24 hours",
-    );
-  }
+  async backfill(): Promise<void> {}
 
   owns(address: Address): boolean {
     return address.startsWith(`${this.id}:`);

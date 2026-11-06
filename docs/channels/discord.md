@@ -55,5 +55,5 @@ When someone uses a command or a button of yours, you get an `interaction` event
 
 - A message can have at most 2000 characters. A longer text is refused, not cut: send it in parts.
 - A send carries a nonce, so Discord does not post it twice when it is sent again after a crash. Discord checks this only for a few minutes; a resend after that posts a second copy.
-- You get no events when people join or leave a server: Discord sends them only with the Server Members intent, which this channel does not use.
+- You get no events when people leave a server, and a join only from the server's welcome message, when the server posts one: Discord sends these events only with the Server Members intent, which this channel does not use.
 - File URLs stop working after about a day. To download an old file again, get a new URL with `call`: method `POST /attachments/refresh-urls`, params `{"attachment_urls": ["<old URL>"]}`.

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createChannel } from "../src/channels/telegram/index.ts";
 import type { ChannelAdapter, ChannelSink, Happening } from "../src/core/channel.ts";
-import { TOKEN, fakeTelegram, updates } from "./support/telegram.ts";
+import { BOT, TOKEN, fakeTelegram, updates } from "./support/telegram.ts";
 
 // The Telegram channel against a small local Bot API server: what it stores and when, what it makes of updates, and
 // what it sends.
@@ -277,6 +277,38 @@ describe("sending", () => {
     await channel.react("telegram:#-100200/20", "👀", true);
     expect(methods("setMessageReaction").map((call) => call.params.reaction)).toEqual([[{ type: "emoji", emoji: "👍" }], [{ type: "emoji", emoji: "❤" }], []]);
     await expect(channel.react("telegram:#-100200/20", ":no_such_emoji:", false)).rejects.toThrow("no emoji is known by the name :no_such_emoji:");
+  });
+
+  it("stores a message the bot sends or edits with call as its own, as Telegram does not send it back", async () => {
+    const stored: { id: string; raw: unknown }[] = [];
+    await channel.start(sink(async (id, raw) => void stored.push({ id, raw: JSON.parse(JSON.stringify(raw)) })));
+    const chat = { id: 111, first_name: "Alice", type: "private" };
+    const sizes = [
+      { file_id: "AgAC-small", file_unique_id: "s", file_size: 300, width: 90, height: 56 },
+      { file_id: "AgAC-large", file_unique_id: "l", file_size: 700, width: 320, height: 200 },
+    ];
+    const photo = { message_id: 30, from: BOT, chat, date: 1_800_000_000, caption: "the chart", photo: sizes };
+    telegram.script("sendPhoto", { ok: true, result: photo });
+    telegram.script("sendMediaGroup", { ok: true, result: [31, 32].map((id) => ({ ...photo, message_id: id, caption: undefined })) });
+    telegram.script(
+      "editMessageCaption",
+      { ok: true, result: { ...photo, caption: "the new chart", edit_date: 1_800_000_100 } },
+      { ok: true, result: { ...photo, caption: "the newest chart", edit_date: 1_800_000_100 } },
+    );
+    await channel.call("sendPhoto", { chat_id: 111, photo: "AgAC-large", caption: "the chart" });
+    await channel.call("sendMediaGroup", { chat_id: 111, media: [{ type: "photo", media: "AgAC-large" }, { type: "photo", media: "AgAC-large" }] });
+    await channel.call("editMessageCaption", { chat_id: 111, message_id: 30, caption: "the new chart" });
+    // A second edit in the same second is another event.
+    await channel.call("editMessageCaption", { chat_id: 111, message_id: 30, caption: "the newest chart" });
+    await channel.call("pinChatMessage", { chat_id: 111, message_id: 30 });
+
+    const calls = stored.filter((event) => event.id.startsWith("call:"));
+    expect(calls.map((event) => event.id)).toEqual(["call:111:30", "call:111:31", "call:111:32", expect.stringMatching(/^call:111:30:1800000100:\w{16}$/), expect.stringMatching(/^call:111:30:1800000100:\w{16}$/)]);
+    expect(calls[3]!.id).not.toBe(calls[4]!.id);
+    expect(await channel.translate(calls[0]!.raw)).toEqual([
+      expect.objectContaining({ kind: "message", message: "telegram:#111/30", fromMe: true, text: "the chart", files: [expect.objectContaining({ url: "telegram-file:AgAC-large", size: 700 })] }),
+    ]);
+    expect(await channel.translate(calls[3]!.raw)).toEqual([expect.objectContaining({ kind: "edit", message: "telegram:#111/30", fromMe: true, text: "the new chart" })]);
   });
 
   it("calls any method, and uploads a file parameter given as a local path", async () => {

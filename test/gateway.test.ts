@@ -1,10 +1,12 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { setTimeout as sleep } from "node:timers/promises";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { openDatabase } from "../src/agent/agent.ts";
 import type { WakeTarget } from "../src/core/wake.ts";
+import { CONNECT_WAIT_MS } from "../src/gateway/channels.ts";
 import { Gateway } from "../src/gateway/gateway.ts";
+import type { ChannelSink } from "../src/core/channel.ts";
 import { FILES_DIR, MemoryChannel, SETTINGS } from "./support/core.ts";
 
 // The Gateway class as the bot uses it: promises in, promises out.
@@ -42,6 +44,93 @@ describe("Gateway", () => {
     const again = await gateway.send("id-1", "mem:#general", "hello");
     expect(again).toEqual({ ...first, repeated: true });
     expect(channel.platform).toHaveLength(1);
+    await gateway.stop();
+    await sql.close();
+  });
+
+  it("starts without a channel that is still connecting, and connects it in the background", async () => {
+    const { sql, gateway, prints } = await openGateway();
+    const channel = new MemoryChannel();
+    // A channel whose connect does not end, as when its connection is stuck, until the test lets it.
+    const stuck = new MemoryChannel();
+    let connect: (() => void) | undefined;
+    Object.assign(stuck, { id: "stuck", start: () => new Promise<void>((resolve) => (connect = resolve)), owns: (address: string) => address.startsWith("stuck:") });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const started = gateway.start(target, [channel, stuck]);
+      await until(() => connect !== undefined);
+      await vi.advanceTimersByTimeAsync(CONNECT_WAIT_MS);
+      await started;
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(prints).toContain("channel still connecting; the bot starts without it");
+    await gateway.send("id-1", "mem:#general", "hello");
+    expect(channel.platform).toHaveLength(1);
+    connect!();
+    await until(() => prints.filter((line) => line === "channel connected").length === 2);
+    await gateway.stop();
+    await sql.close();
+  });
+
+  it("stops a channel that connects after it was removed", async () => {
+    const { sql, gateway } = await openGateway();
+    const channel = new MemoryChannel();
+    let connect: (() => void) | undefined;
+    let stops = 0;
+    Object.assign(channel, { start: () => new Promise<void>((resolve) => (connect = resolve)), stop: async () => void stops++ });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const starting = gateway.start(target, [channel]);
+      await until(() => connect !== undefined);
+      await vi.advanceTimersByTimeAsync(CONNECT_WAIT_MS);
+      await starting;
+    } finally {
+      vi.useRealTimers();
+    }
+    await gateway.removeChannel("mem");
+    const before = stops;
+    // The start ends after the removal, as a slow Telegram start could: the adapter is stopped then.
+    connect!();
+    await until(() => stops > before);
+    await gateway.stop();
+    await sql.close();
+  });
+
+  it("keeps the events a channel left from before a restart until it connects, then applies them", async () => {
+    const { sql, gateway } = await openGateway();
+    await sql.run("INSERT INTO gw_inbox (channel, event_id, received_at, raw) VALUES (?, ?, ?, ?)", "mem", "e1", Date.now(), JSON.stringify({ id: "e1", place: "general", text: "from before", person: "alice" }));
+    // Like the real adapters, this one translates only once started, and its start takes longer than connect waits.
+    const channel = new MemoryChannel();
+    let connect: (() => void) | undefined;
+    let started = false;
+    const translate = channel.translate.bind(channel);
+    Object.assign(channel, {
+      start: (sink: ChannelSink) => new Promise<void>((resolve) => (connect = () => ((channel.sink = sink), (started = true), resolve()))),
+      translate: async (raw: unknown) => {
+        if (!started) throw new Error("channel mem is not started");
+        return translate(raw);
+      },
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const starting = gateway.start(target, [channel]);
+      await until(() => connect !== undefined);
+      await vi.advanceTimersByTimeAsync(CONNECT_WAIT_MS);
+      await starting;
+    } finally {
+      vi.useRealTimers();
+    }
+    const state = async () => (await sql.all<{ state: string }>("SELECT state FROM gw_inbox WHERE event_id = 'e1'"))[0]!.state;
+    // Before the fix it was applied while the channel could not translate it, and stayed an error.
+    expect(await state()).toBe("new");
+    connect!();
+    let applied = false;
+    await until(() => {
+      void state().then((now) => (applied = now === "done"));
+      return applied;
+    });
+    expect(await sql.all("SELECT address, text FROM gw_messages")).toEqual([{ address: "mem:#general/e1", text: "from before" }]);
     await gateway.stop();
     await sql.close();
   });

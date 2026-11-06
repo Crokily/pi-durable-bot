@@ -284,6 +284,20 @@ describe("Discord channel", () => {
     expect(post).toMatchObject({ place: { address: "discord:#21", name: "Lab #ideas" }, message: "discord:#21/800", thread: "discord:#21/800" });
   });
 
+  it("makes a server's welcome message a join, once, and leaves out the bot's own", async () => {
+    const { gateway, translate } = await connect();
+    const [mine, alice] = await gateway([
+      ["MESSAGE_CREATE", message({ id: "510", type: 7, author: BOT, content: "" })],
+      ["MESSAGE_CREATE", message({ id: "511", type: 7, author: ALICE, content: "" })],
+    ]);
+    expect(await translate(mine!.raw)).toEqual([]);
+    expect(await translate(alice!.raw)).toEqual([
+      expect.objectContaining({ kind: "join", place: expect.objectContaining({ address: "discord:#20" }), person: expect.objectContaining({ address: "discord:@200" }), fromMe: false }),
+    ]);
+    // The same welcome message read again by a backfill is no second join.
+    expect(await translate({ source: "history", message: alice!.raw.d })).toEqual([]);
+  });
+
   it("translates a DM, with the person as the place's name", async () => {
     const { fake, gateway, translate } = await connect();
     fake.route("GET", "/channels/700", () => ({ id: "700", type: 1, last_message_id: "701", recipients: [ALICE] }));

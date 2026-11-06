@@ -1,4 +1,4 @@
-import { Context, Effect, FiberMap, Layer } from "effect";
+import { Context, Effect, Fiber, FiberMap, Layer, Option } from "effect";
 import type { Address, ChannelAdapter, ChannelSink } from "../core/channel.ts";
 import { GatewayConfig } from "./config.ts";
 import { ChannelError, message, NoChannelForAddress, UnknownChannel } from "./errors.ts";
@@ -11,6 +11,12 @@ export const platform = <A>(channel: string, run: () => Promise<A>): Effect.Effe
 const reconnectDelay = (attempt: number) => Math.min(60_000, 5_000 * attempt);
 
 /**
+ * How long connect waits for a channel. A channel still connecting then goes on in the background, so one slow or
+ * stuck connection does not hold up its bot and the bots that start after it.
+ */
+export const CONNECT_WAIT_MS = 30_000;
+
+/**
  * The channel adapters of one bot and their life: connect, backfill what was missed, keep trying a channel that does
  * not connect, stop. Each adapter has one background task (backfill or reconnect), which ends when it is removed.
  */
@@ -21,12 +27,22 @@ export class Channels extends Context.Service<
     list(): ChannelAdapter[];
     /** The running adapter with this ID, if any. */
     running(id: string): ChannelAdapter | undefined;
+    /** Whether the running adapter with this ID connected. One still connecting, or trying again, has not. */
+    connected(id: string): boolean;
+    /** Run this each time an adapter connects. */
+    onConnected(listener: (id: string) => Effect.Effect<void>): void;
     adapterFor(address: Address): Effect.Effect<ChannelAdapter, NoChannelForAddress>;
     get(id: string): Effect.Effect<ChannelAdapter, UnknownChannel>;
-    /** Add adapters and try to connect each once, all at the same time. Resolves with which ones connected. */
-    connect(adapters: readonly ChannelAdapter[], sink: (adapter: ChannelAdapter) => ChannelSink): Effect.Effect<boolean[]>;
-    /** In the background: backfill a connected adapter, or keep trying to connect one that is not, then backfill. */
-    follow(adapter: ChannelAdapter, connected: boolean, sink: (adapter: ChannelAdapter) => ChannelSink): Effect.Effect<void>;
+    /**
+     * Add adapters and try to connect each once, all at the same time, waiting at most CONNECT_WAIT_MS. Resolves with,
+     * for each, whether it connected: at once for a connect that ended, later for one still going on.
+     */
+    connect(adapters: readonly ChannelAdapter[], sink: (adapter: ChannelAdapter) => ChannelSink): Effect.Effect<Effect.Effect<boolean>[]>;
+    /**
+     * In the background: wait for the adapter's connect, then backfill it, or keep trying to connect it when it did not
+     * connect, then backfill.
+     */
+    follow(adapter: ChannelAdapter, connected: Effect.Effect<boolean>, sink: (adapter: ChannelAdapter) => ChannelSink): Effect.Effect<void>;
     /** Add a channel account while running. */
     add(adapter: ChannelAdapter, sink: (adapter: ChannelAdapter) => ChannelSink): Effect.Effect<void, ChannelError>;
     remove(id: string): Effect.Effect<void, ChannelError>;
@@ -40,10 +56,17 @@ export class Channels extends Context.Service<
       const { print } = yield* GatewayConfig;
       const adapters = new Map<string, ChannelAdapter>();
       const tasks = yield* FiberMap.make<string>();
+      /** The first connect of each adapter, which may go on after connect stopped waiting for it. */
+      const connecting = yield* FiberMap.make<string, boolean>();
+      const connectedIds = new Set<string>();
+      const listeners: ((id: string) => Effect.Effect<void>)[] = [];
 
-      const connectOne = (adapter: ChannelAdapter, sink: ChannelSink) =>
-        platform(adapter.id, () => adapter.start(sink)).pipe(
+      const connectOne = (adapter: ChannelAdapter, sink: ChannelSink) => {
+        let starting: Promise<void> | undefined;
+        return platform(adapter.id, () => (starting = adapter.start(sink))).pipe(
           Effect.tap(() => Effect.sync(() => print("channel connected", { channel: adapter.id, me: adapter.me?.address }))),
+          Effect.tap(() => Effect.sync(() => connectedIds.add(adapter.id))),
+          Effect.tap(() => Effect.forEach(listeners, (listener) => listener(adapter.id), { discard: true })),
           Effect.as(true),
           Effect.catch((error) =>
             Effect.sync(() => print("channel connect failed", { channel: adapter.id, error: error.message })).pipe(
@@ -51,8 +74,12 @@ export class Channels extends Context.Service<
               Effect.as(false),
             ),
           ),
+          // Stopped waiting, because the channel was removed or the gateway stops: the start itself goes on, and an
+          // adapter that connects after that is stopped then.
+          Effect.onInterrupt(() => Effect.sync(() => void starting?.then(() => adapter.stop(), () => {}).catch(() => {}))),
           Effect.withSpan("channel.connect", { attributes: { channel: adapter.id } }),
         );
+      };
 
       const backfill = (adapter: ChannelAdapter, sink: ChannelSink) =>
         platform(adapter.id, () => adapter.backfill(sink)).pipe(
@@ -60,8 +87,9 @@ export class Channels extends Context.Service<
           Effect.withSpan("channel.backfill", { attributes: { channel: adapter.id } }),
         );
 
-      const follow = (adapter: ChannelAdapter, connected: boolean, sink: (adapter: ChannelAdapter) => ChannelSink) =>
+      const follow = (adapter: ChannelAdapter, connection: Effect.Effect<boolean>, sink: (adapter: ChannelAdapter) => ChannelSink) =>
         Effect.gen(function* () {
+          let connected = yield* connection;
           for (let attempt = 1; !connected; attempt++) {
             yield* Effect.sleep(reconnectDelay(attempt));
             connected = yield* connectOne(adapter, sink(adapter));
@@ -72,12 +100,26 @@ export class Channels extends Context.Service<
       const connect = (list: readonly ChannelAdapter[], sink: (adapter: ChannelAdapter) => ChannelSink) =>
         Effect.suspend(() => {
           for (const adapter of list) adapters.set(adapter.id, adapter);
-          return Effect.forEach(list, (adapter) => connectOne(adapter, sink(adapter)), { concurrency: "unbounded" });
+          return Effect.forEach(
+            list,
+            (adapter) =>
+              Effect.gen(function* () {
+                const fiber = yield* FiberMap.run(connecting, adapter.id, connectOne(adapter, sink(adapter)));
+                // A time limit on the waiting only: the connect itself goes on.
+                const ended = yield* Fiber.join(fiber).pipe(Effect.timeoutOption(CONNECT_WAIT_MS));
+                if (Option.isSome(ended)) return Effect.succeed(ended.value);
+                print("channel still connecting; the bot starts without it", { channel: adapter.id, waitedSeconds: CONNECT_WAIT_MS / 1000 });
+                return Fiber.join(fiber);
+              }),
+            { concurrency: "unbounded" },
+          );
         });
 
       return Channels.of({
         list: () => [...adapters.values()],
         running: (id) => adapters.get(id),
+        connected: (id) => adapters.has(id) && connectedIds.has(id),
+        onConnected: (listener) => void listeners.push(listener),
         adapterFor: (address) =>
           Effect.suspend(() => {
             for (const adapter of adapters.values()) if (adapter.owns(address)) return Effect.succeed(adapter);
@@ -105,11 +147,14 @@ export class Channels extends Context.Service<
             const adapter = adapters.get(id);
             if (!adapter) return;
             adapters.delete(id);
+            connectedIds.delete(id);
             yield* FiberMap.remove(tasks, id);
+            yield* FiberMap.remove(connecting, id);
             yield* platform(id, () => adapter.stop());
           }),
         stop: Effect.gen(function* () {
           yield* FiberMap.clear(tasks);
+          yield* FiberMap.clear(connecting);
           yield* Effect.forEach(
             [...adapters.values()],
             (adapter) => Effect.promise(() => adapter.stop().catch((error) => print("channel stop failed", { channel: adapter.id, error: message(error) }))),

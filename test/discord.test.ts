@@ -182,6 +182,27 @@ describe("Discord channel", () => {
     expect(logs.filter((line) => line.startsWith("gateway event not stored"))).toEqual([expect.stringContaining('"attempt":1')]);
   });
 
+  it("stores the events it already took before it stops, and gives up a failing one then", async () => {
+    const { fake, channel, sink, events, logs } = await connect();
+    const receive = sink.receive;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    sink.receive = async (id, raw) => {
+      if ((raw as any).d.id === "501") await held;
+      if ((raw as any).d.id === "503") throw new Error("database is locked");
+      return receive(id, raw);
+    };
+    for (const id of ["501", "502", "503"]) fake.dispatch("MESSAGE_CREATE", message({ id }));
+    await sleep(200); // the dispatches reach the adapter; 501 is being stored, 502 and 503 wait behind it
+    const stopping = channel.stop();
+    release();
+    await stopping;
+    // Discord does not send an event again, so the ones taken are stored before stop ends; 503 is given up after the
+    // stop, after one more try.
+    expect(events.map((event) => event.raw.d.id)).toEqual(["501", "502"]);
+    expect(logs.filter((line) => line.includes('"event":"MESSAGE_CREATE:session-1:5"')).at(-1)).toContain("gateway event not stored, and the channel stopped");
+  });
+
   it("keeps a thread message's addresses when the thread cannot be looked up later", async () => {
     const first = await connect();
     const [, inThread, reaction] = await first.gateway([

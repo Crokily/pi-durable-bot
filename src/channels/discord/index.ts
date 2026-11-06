@@ -156,7 +156,7 @@ export class DiscordChannel implements ChannelAdapter {
   #readies = 0;
   /** When the last gateway event came, in Unix ms: where a new session's backfill starts. */
   #lastEventAt = 0;
-  /** Stopped when the channel stops: a store that failed is not tried again after that. */
+  /** Stopped when the channel stops: after that, a store that fails is tried only once more. */
   #running = new AbortController();
   /** The newest logged message ID of each known place, by channel ID, read when the channel started. */
   #starts = new Map<string, string>();
@@ -234,11 +234,13 @@ export class DiscordChannel implements ChannelAdapter {
     if (!this.#botUserId) throw new Error("Discord did not say who the bot is");
   }
 
+  /** Take no more events, then store the ones already taken before stop ends: Discord does not send them again. */
   async stop(): Promise<void> {
     const client = this.#client;
     this.#client = undefined;
-    this.#running.abort();
     await client?.destroy().catch(() => {});
+    this.#running.abort();
+    await this.#storing;
   }
 
   /** One gateway dispatch: keep what translation needs to know, and store the events. Never throws into discord.js. */
@@ -304,17 +306,22 @@ export class DiscordChannel implements ChannelAdapter {
 
   /**
    * Store an event after the ones before it. Discord does not send an event again, so one that fails is tried again,
-   * later each time, until it is stored or the channel stops. The events after it wait, so the order stays.
+   * later each time, until it is stored; once the channel stops, only once more. The events after it wait, so the order
+   * stays.
    */
   #store(sink: ChannelSink, eventId: string, raw: Raw, then?: () => void): void {
     const { signal } = this.#running;
     this.#storing = this.#storing.then(async () => {
-      for (let attempt = 1; !signal.aborted; attempt++) {
+      for (let attempt = 1; ; attempt++) {
         try {
           await sink.receive(eventId, raw);
           then?.();
           return;
         } catch (error) {
+          if (signal.aborted) {
+            sink.log("gateway event not stored, and the channel stopped", { event: eventId, attempt, error: String(error) });
+            return;
+          }
           const wait = Math.min(1000 * 2 ** (attempt - 1), 30_000);
           sink.log("gateway event not stored; trying again", { event: eventId, attempt, waitMs: wait, error: String(error) });
           await sleep(wait, undefined, { signal }).catch(() => {});

@@ -1,9 +1,10 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { setTimeout as sleep } from "node:timers/promises";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { openDatabase } from "../src/agent/agent.ts";
 import type { WakeTarget } from "../src/core/wake.ts";
+import { CONNECT_WAIT_MS } from "../src/gateway/channels.ts";
 import { Gateway } from "../src/gateway/gateway.ts";
 import { FILES_DIR, MemoryChannel, SETTINGS } from "./support/core.ts";
 
@@ -42,6 +43,31 @@ describe("Gateway", () => {
     const again = await gateway.send("id-1", "mem:#general", "hello");
     expect(again).toEqual({ ...first, repeated: true });
     expect(channel.platform).toHaveLength(1);
+    await gateway.stop();
+    await sql.close();
+  });
+
+  it("starts without a channel that is still connecting, and connects it in the background", async () => {
+    const { sql, gateway, prints } = await openGateway();
+    const channel = new MemoryChannel();
+    // A channel whose connect does not end, as when its connection is stuck, until the test lets it.
+    const stuck = new MemoryChannel();
+    let connect: (() => void) | undefined;
+    Object.assign(stuck, { id: "stuck", start: () => new Promise<void>((resolve) => (connect = resolve)), owns: (address: string) => address.startsWith("stuck:") });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const started = gateway.start(target, [channel, stuck]);
+      await until(() => connect !== undefined);
+      await vi.advanceTimersByTimeAsync(CONNECT_WAIT_MS);
+      await started;
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(prints).toContain("channel still connecting; the bot starts without it");
+    await gateway.send("id-1", "mem:#general", "hello");
+    expect(channel.platform).toHaveLength(1);
+    connect!();
+    await until(() => prints.filter((line) => line === "channel connected").length === 2);
     await gateway.stop();
     await sql.close();
   });

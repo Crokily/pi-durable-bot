@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { SlackAdapter, type SlackEvent } from "@chat-adapter/slack";
-import type { Message } from "chat";
+import { convertEmojiPlaceholders, type Message } from "chat";
 
 /** Slack message metadata type on messages the bot sends. The payload holds the send ID. */
 export const SEND_EVENT_TYPE = "pi_durable_bot_send";
@@ -16,11 +16,19 @@ type Ack = (response?: Record<string, unknown>) => Promise<void>;
  *   acks first and routes through Chat handlers; this bot does neither.
  * - Posts made inside `postWithSendId` carry the send ID as message metadata, so a send can be found again.
  * - Link previews are not awaited: the SDK waits for unfurls that only its own handlers would store.
+ * - A bare @name stays as written. The SDK makes it a Slack mention, which Slack shows as the text "<@name>" when no
+ *   person has that ID. The bot mentions people by address, which the channel turns into Slack mentions itself.
  */
 export class GatewaySlackAdapter extends SlackAdapter {
   /** Every event, interaction and slash command, before the ack. */
   onSocketEvent?: (body: Record<string, unknown>, type: string) => Promise<void>;
   onSocketError?: (error: unknown) => void;
+
+  constructor(config: ConstructorParameters<typeof SlackAdapter>[0]) {
+    super(config);
+    // The SDK's last step before a post: bare @names to <@name>, then emoji placeholders. Only the emoji are kept.
+    (this.formatConverter as unknown as { finalize(text: string): string }).finalize = (text) => convertEmojiPlaceholders(text, "slack");
+  }
 
   protected override async routeSocketEvent(
     body: Record<string, unknown>,

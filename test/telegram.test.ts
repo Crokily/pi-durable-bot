@@ -197,6 +197,16 @@ describe("sending", () => {
     expect(methods("sendRichMessage")[1]!.params).toEqual({ chat_id: "-100300", message_thread_id: 7, rich_message: { markdown: "next" } });
   });
 
+  it("keeps each line break of the text: Telegram reads a single one in rich Markdown as a space", async () => {
+    await channel.start(sink());
+    const text = "Done:\n• one\n• two `a\nb` <b>x\ny</b>\n\n> quote\n> more\n\n- item\n  next\n\n```\ncode\nline\n```\n\nhard  \nalready\\\nhard\r\nwindows\\\\\nescaped";
+    await channel.send("telegram:#111", text, "s1");
+    expect(methods("sendRichMessage")[0]!.params.rich_message).toEqual({
+      markdown:
+        "Done:  \n• one  \n• two `a\nb` <b>x  \ny</b>\n\n> quote  \n> more\n\n- item  \n  next\n\n```\ncode\nline\n```\n\nhard  \nalready\\\nhard  \r\nwindows\\\\  \nescaped",
+    });
+  });
+
   it("sends MarkdownV2 where Telegram does not take a rich message, with the lower limit of a plain message", async () => {
     await channel.start(sink());
     await channel.translate(JSON.parse(JSON.stringify(updates.topicMessage)));

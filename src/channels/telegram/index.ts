@@ -4,7 +4,7 @@ import { Readable } from "node:stream";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { setTimeout as wait } from "node:timers/promises";
 import type { TelegramCallbackQuery, TelegramChat, TelegramMessage, TelegramMessageReactionUpdated, TelegramUser } from "@chat-adapter/telegram";
-import { defaultEmojiResolver, markdownToPlainText } from "chat";
+import { defaultEmojiResolver, markdownToPlainText, parseMarkdown } from "chat";
 import type {
   Address,
   ChannelAdapter,
@@ -509,16 +509,17 @@ class TelegramChannel implements ChannelAdapter {
 
   /**
    * Person and place addresses in angle brackets become Telegram mentions: @username, or for a person without one, a
-   * link that mentions them; a chat without a username becomes its title.
+   * link that mentions them; a chat without a username becomes its title. Each line break stays a line break.
    */
   #outgoing(text: string): string {
-    return text.replace(this.#named, (whole, sign: string, id: string) => {
+    const named = text.replace(this.#named, (whole, sign: string, id: string) => {
       const user = sign === "@" && !id.startsWith("-") ? this.#people.get(id) : undefined;
       if (user) return user.username ? `@${user.username}` : `[${escapeMarkdown(fullName(user) || id)}](tg://user?id=${id})`;
       if (sign === "@" && !id.startsWith("-")) return `[${id}](tg://user?id=${id})`;
       const chat = this.#chats.get(id);
       return chat?.username ? `@${chat.username}` : chat?.title ? escapeMarkdown(chat.title) : whole;
     });
+    return keepLineBreaks(named);
   }
 
   /** Look up the people and chats a text names that this adapter has not seen: a person as a member of the chat sent to. */
@@ -667,6 +668,48 @@ function files(m: TgMessage): { files?: FileInfo[] } {
     ];
   });
   return list.length ? { files: list } : {};
+}
+
+interface MarkdownNode {
+  type: string;
+  position?: { start: { offset?: number }; end: { offset?: number } };
+  children?: MarkdownNode[];
+}
+
+/**
+ * Markdown with each line break inside a paragraph made a hard break (two spaces before it). Telegram reads rich
+ * Markdown as GitHub does, where a single line break is a space, so a bot's lines, one per item as people write in a
+ * chat, would show as one line. Line breaks inside inline code or HTML stay as they are.
+ */
+function keepLineBreaks(markdown: string): string {
+  const at: number[] = [];
+  const range = (node: MarkdownNode) => [node.position?.start.offset ?? 0, node.position?.end.offset ?? 0] as const;
+  const visit = (node: MarkdownNode) => {
+    if (node.type !== "paragraph") {
+      node.children?.forEach(visit);
+      return;
+    }
+    const skip: (readonly [number, number])[] = [];
+    const inline = (child: MarkdownNode) => (child.type === "inlineCode" || child.type === "html" ? skip.push(range(child)) : child.children?.forEach(inline));
+    node.children?.forEach(inline);
+    const [start, end] = range(node);
+    for (let i = markdown.indexOf("\n", start); i !== -1 && i < end; i = markdown.indexOf("\n", i + 1)) {
+      if (skip.some(([from, to]) => i >= from && i < to)) continue;
+      const lineEnd = markdown[i - 1] === "\r" ? i - 1 : i;
+      let backslashes = 0;
+      while (markdown[lineEnd - 1 - backslashes] === "\\") backslashes++;
+      // Already a hard break: two spaces, or a backslash that is not itself escaped.
+      if (!markdown.endsWith("  ", lineEnd) && backslashes % 2 === 0) at.push(lineEnd);
+    }
+  };
+  visit(parseMarkdown(markdown) as MarkdownNode);
+  let out = "";
+  let from = 0;
+  for (const i of at) {
+    out += `${markdown.slice(from, i)}  `;
+    from = i;
+  }
+  return out + markdown.slice(from);
 }
 
 function tooLong(length: number, limit: number): string | undefined {

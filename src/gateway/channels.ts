@@ -27,6 +27,10 @@ export class Channels extends Context.Service<
     list(): ChannelAdapter[];
     /** The running adapter with this ID, if any. */
     running(id: string): ChannelAdapter | undefined;
+    /** Whether the running adapter with this ID connected. One still connecting, or trying again, has not. */
+    connected(id: string): boolean;
+    /** Run this each time an adapter connects. */
+    onConnected(listener: (id: string) => Effect.Effect<void>): void;
     adapterFor(address: Address): Effect.Effect<ChannelAdapter, NoChannelForAddress>;
     get(id: string): Effect.Effect<ChannelAdapter, UnknownChannel>;
     /**
@@ -54,10 +58,15 @@ export class Channels extends Context.Service<
       const tasks = yield* FiberMap.make<string>();
       /** The first connect of each adapter, which may go on after connect stopped waiting for it. */
       const connecting = yield* FiberMap.make<string, boolean>();
+      const connectedIds = new Set<string>();
+      const listeners: ((id: string) => Effect.Effect<void>)[] = [];
 
-      const connectOne = (adapter: ChannelAdapter, sink: ChannelSink) =>
-        platform(adapter.id, () => adapter.start(sink)).pipe(
+      const connectOne = (adapter: ChannelAdapter, sink: ChannelSink) => {
+        let starting: Promise<void> | undefined;
+        return platform(adapter.id, () => (starting = adapter.start(sink))).pipe(
           Effect.tap(() => Effect.sync(() => print("channel connected", { channel: adapter.id, me: adapter.me?.address }))),
+          Effect.tap(() => Effect.sync(() => connectedIds.add(adapter.id))),
+          Effect.tap(() => Effect.forEach(listeners, (listener) => listener(adapter.id), { discard: true })),
           Effect.as(true),
           Effect.catch((error) =>
             Effect.sync(() => print("channel connect failed", { channel: adapter.id, error: error.message })).pipe(
@@ -65,8 +74,12 @@ export class Channels extends Context.Service<
               Effect.as(false),
             ),
           ),
+          // Stopped waiting, because the channel was removed or the gateway stops: the start itself goes on, and an
+          // adapter that connects after that is stopped then.
+          Effect.onInterrupt(() => Effect.sync(() => void starting?.then(() => adapter.stop(), () => {}).catch(() => {}))),
           Effect.withSpan("channel.connect", { attributes: { channel: adapter.id } }),
         );
+      };
 
       const backfill = (adapter: ChannelAdapter, sink: ChannelSink) =>
         platform(adapter.id, () => adapter.backfill(sink)).pipe(
@@ -105,6 +118,8 @@ export class Channels extends Context.Service<
       return Channels.of({
         list: () => [...adapters.values()],
         running: (id) => adapters.get(id),
+        connected: (id) => adapters.has(id) && connectedIds.has(id),
+        onConnected: (listener) => void listeners.push(listener),
         adapterFor: (address) =>
           Effect.suspend(() => {
             for (const adapter of adapters.values()) if (adapter.owns(address)) return Effect.succeed(adapter);
@@ -132,6 +147,7 @@ export class Channels extends Context.Service<
             const adapter = adapters.get(id);
             if (!adapter) return;
             adapters.delete(id);
+            connectedIds.delete(id);
             yield* FiberMap.remove(tasks, id);
             yield* FiberMap.remove(connecting, id);
             yield* platform(id, () => adapter.stop());

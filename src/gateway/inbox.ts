@@ -10,7 +10,11 @@ type Item =
   /** span: the receive span, so the event's apply is in the same trace. */
   | { readonly _tag: "event"; readonly channel: string; readonly eventId: string; readonly raw: unknown; readonly span?: Tracer.AnySpan }
   /** Everything queued before it is applied. */
-  | { readonly _tag: "mark"; readonly done: Deferred.Deferred<void> };
+  | { readonly _tag: "mark"; readonly done: Deferred.Deferred<void> }
+  /** The channel connected: apply its events that waited. */
+  | { readonly _tag: "connected"; readonly channel: string };
+
+type EventItem = Extract<Item, { _tag: "event" }>;
 
 const decodeHappenings = Schema.decodeUnknownEffect(Schema.Array(Happening));
 
@@ -28,7 +32,9 @@ function withoutNulls(value: unknown): unknown {
 /**
  * Every event from every channel comes in here. It is stored before the adapter acknowledges it, then applied to the
  * log one at a time, in arrival order, so an edit never overtakes its message. A known event ID is a repeat and is
- * dropped. Events that a crash left unapplied are applied on the next start.
+ * dropped. Events that a crash left unapplied are applied on the next start. The events of a channel that has not
+ * connected yet (an adapter translates only once started) wait, in order, until it connects, and then go before its
+ * later ones; the other channels' events do not wait for them.
  */
 export class Inbox extends Context.Service<
   Inbox,
@@ -55,6 +61,9 @@ export class Inbox extends Context.Service<
       const queue = yield* Queue.unbounded<Item>();
       const worker = yield* FiberHandle.make();
       let opened = false;
+      /** Events of channels that have not connected yet, by channel, in arrival order. */
+      const waiting = new Map<string, EventItem[]>();
+      channels.onConnected((channel) => Queue.offer(queue, { _tag: "connected", channel }).pipe(Effect.asVoid));
 
       const apply = (channel: string, eventId: string, raw: unknown, received: Tracer.AnySpan | undefined) =>
         Effect.gen(function* () {
@@ -80,11 +89,30 @@ export class Inbox extends Context.Service<
           Effect.withSpan("inbox.apply", { attributes: { channel, event: eventId }, ...(received ? { parent: received } : { root: true }) }),
         );
 
+      const applyItem = (item: EventItem) => Effect.uninterruptible(apply(item.channel, item.eventId, item.raw, item.span));
+      /** Apply the events of a connected channel that waited for it. */
+      const applyWaiting = (channel: string) =>
+        Effect.suspend(() => {
+          const items = waiting.get(channel);
+          if (!items || !channels.connected(channel)) return Effect.void;
+          waiting.delete(channel);
+          return Effect.forEach(items, applyItem, { discard: true });
+        });
+
       // One item at a time. An item that has started is finished before the worker stops.
       const work = Effect.forever(
-        Effect.flatMap(Queue.take(queue), (item) =>
-          item._tag === "mark" ? Effect.asVoid(Deferred.succeed(item.done, undefined)) : Effect.uninterruptible(apply(item.channel, item.eventId, item.raw, item.span)),
-        ),
+        Effect.flatMap(Queue.take(queue), (item) => {
+          if (item._tag === "mark") return Effect.asVoid(Deferred.succeed(item.done, undefined));
+          if (item._tag === "connected") return applyWaiting(item.channel);
+          if (channels.running(item.channel) && !channels.connected(item.channel)) {
+            return Effect.sync(() => {
+              const items = waiting.get(item.channel);
+              if (items) items.push(item);
+              else waiting.set(item.channel, [item]);
+            });
+          }
+          return Effect.andThen(applyWaiting(item.channel), applyItem(item));
+        }),
       );
 
       const drain = Effect.gen(function* () {

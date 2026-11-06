@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { openAsBlob } from "node:fs";
 import { basename } from "node:path";
 import { Readable } from "node:stream";
@@ -579,7 +580,9 @@ class TelegramChannel implements ChannelAdapter {
       return typeof m?.message_id === "number" && m.chat !== undefined && m.from?.id === this.#bot?.id;
     };
     for (const m of (Array.isArray(result) ? result : [result]).filter(isOwn)) {
-      const eventId = `call:${m.chat.id}:${m.message_id}${m.edit_date ? `:${m.edit_date}` : ""}`;
+      // Two edits in one second have the same edit_date, so an edit is told apart by what it holds.
+      const edit = m.edit_date ? `:${m.edit_date}:${createHash("sha256").update(JSON.stringify(m)).digest("hex").slice(0, 16)}` : "";
+      const eventId = `call:${m.chat.id}:${m.message_id}${edit}`;
       await this.#sink?.receive(eventId, { sent: m } satisfies Raw).catch((error: unknown) => this.#sink?.log("sent message not stored", { method, event: eventId, error: String(error) }));
     }
     return result;

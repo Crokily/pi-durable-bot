@@ -290,14 +290,21 @@ describe("sending", () => {
     const photo = { message_id: 30, from: BOT, chat, date: 1_800_000_000, caption: "the chart", photo: sizes };
     telegram.script("sendPhoto", { ok: true, result: photo });
     telegram.script("sendMediaGroup", { ok: true, result: [31, 32].map((id) => ({ ...photo, message_id: id, caption: undefined })) });
-    telegram.script("editMessageCaption", { ok: true, result: { ...photo, caption: "the new chart", edit_date: 1_800_000_100 } });
+    telegram.script(
+      "editMessageCaption",
+      { ok: true, result: { ...photo, caption: "the new chart", edit_date: 1_800_000_100 } },
+      { ok: true, result: { ...photo, caption: "the newest chart", edit_date: 1_800_000_100 } },
+    );
     await channel.call("sendPhoto", { chat_id: 111, photo: "AgAC-large", caption: "the chart" });
     await channel.call("sendMediaGroup", { chat_id: 111, media: [{ type: "photo", media: "AgAC-large" }, { type: "photo", media: "AgAC-large" }] });
     await channel.call("editMessageCaption", { chat_id: 111, message_id: 30, caption: "the new chart" });
+    // A second edit in the same second is another event.
+    await channel.call("editMessageCaption", { chat_id: 111, message_id: 30, caption: "the newest chart" });
     await channel.call("pinChatMessage", { chat_id: 111, message_id: 30 });
 
     const calls = stored.filter((event) => event.id.startsWith("call:"));
-    expect(calls.map((event) => event.id)).toEqual(["call:111:30", "call:111:31", "call:111:32", "call:111:30:1800000100"]);
+    expect(calls.map((event) => event.id)).toEqual(["call:111:30", "call:111:31", "call:111:32", expect.stringMatching(/^call:111:30:1800000100:\w{16}$/), expect.stringMatching(/^call:111:30:1800000100:\w{16}$/)]);
+    expect(calls[3]!.id).not.toBe(calls[4]!.id);
     expect(await channel.translate(calls[0]!.raw)).toEqual([
       expect.objectContaining({ kind: "message", message: "telegram:#111/30", fromMe: true, text: "the chart", files: [expect.objectContaining({ url: "telegram-file:AgAC-large", size: 700 })] }),
     ]);

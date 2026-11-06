@@ -284,7 +284,7 @@ describe("Discord channel", () => {
     expect(post).toMatchObject({ place: { address: "discord:#21", name: "Lab #ideas" }, message: "discord:#21/800", thread: "discord:#21/800" });
   });
 
-  it("makes a server's welcome message a join, and leaves out the bot's own", async () => {
+  it("makes a server's welcome message a join, once, and leaves out the bot's own", async () => {
     const { gateway, translate } = await connect();
     const [mine, alice] = await gateway([
       ["MESSAGE_CREATE", message({ id: "510", type: 7, author: BOT, content: "" })],
@@ -294,6 +294,8 @@ describe("Discord channel", () => {
     expect(await translate(alice!.raw)).toEqual([
       expect.objectContaining({ kind: "join", place: expect.objectContaining({ address: "discord:#20" }), person: expect.objectContaining({ address: "discord:@200" }), fromMe: false }),
     ]);
+    // The same welcome message read again by a backfill is no second join.
+    expect(await translate({ source: "history", message: alice!.raw.d })).toEqual([]);
   });
 
   it("translates a DM, with the person as the place's name", async () => {

@@ -407,7 +407,9 @@ export class DiscordChannel implements ChannelAdapter {
   async translate(value: unknown): Promise<Happening[]> {
     const raw = value as Raw;
     const parent = raw.parent;
-    if (raw.source === "history") return this.#message("message", raw.message, Date.now(), parent);
+    // A welcome message gives a join only when it comes live: as a join is not a message, the log would not see that
+    // the backfill's copy is the same one.
+    if (raw.source === "history") return raw.message.type === USER_JOIN ? [] : this.#message("message", raw.message, Date.now(), parent);
     if (raw.source === "sent") return this.#message("message", raw.message, Date.now(), parent, raw.sendId);
     const { t, d, at } = raw;
     switch (t) {

@@ -79,6 +79,8 @@ export interface ChannelSink {
   newestMessage(place: Address): Promise<Address | undefined>;
   /** Threads the log knows in a place. */
   threads(place: Address): Promise<Address[]>;
+  /** The places of this channel account that the log knows, for backfill on platforms that cannot list them all (DMs). */
+  places(): Promise<Address[]>;
   /** When the gateway last ran, in Unix ms. Undefined on the first start. */
   lastAlive(): number | undefined;
   log(message: string, data?: Record<string, unknown>): void;
@@ -111,6 +113,11 @@ export interface ChannelAdapter {
   translate(raw: unknown): Promise<Happening[]>;
   /** Send text to a place, thread, message (reply in its thread) or person (DM), with the send ID attached. */
   send(to: Address, text: string, sendId: string): Promise<SentMessage>;
+  /**
+   * Why the platform would not take this text, such as a length over its limit, or undefined when it would. The outbox
+   * asks before it records a new send, so a text that cannot go out fails at once and the bot can change it.
+   */
+  checkText?(to: Address, text: string): string | undefined;
   /** Look for a message with this send ID, sent to `to` after `since`. */
   findSent(to: Address, sendId: string, since: number): Promise<SentMessage | undefined>;
   react(message: Address, emoji: string, remove: boolean): Promise<void>;

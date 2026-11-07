@@ -1,5 +1,5 @@
 import type { Context } from "@earendil-works/chord/context";
-import { type AssistantMessage, type ModelThinkingLevel, Type } from "@earendil-works/pi-ai";
+import { type AssistantMessage, type ModelThinkingLevel, StringEnum } from "@earendil-works/pi-ai";
 import {
   AssistantEntry,
   type ConversationId,
@@ -13,6 +13,7 @@ import {
   type ModelRef,
   type TaskId,
 } from "@earendil-works/pi-durable";
+import { obj, opt, str } from "@earendil-works/pi-schema";
 
 // Children: agents the main agent starts for longer work, so it stays free to talk. A child is a conversation of its
 // own that starts with only the brief, and has read, write, edit, bash and screen: not the channel actions send, react
@@ -262,15 +263,18 @@ export function childrenExtension(host: ChildrenHost): Extension {
       "by default childThinking in bot.json); it starts with an empty conversation and the brief, and keeps its thinking level. " +
       "list: your children. send: a message to a child (child: its ID), which joins its work or starts it again. " +
       "stop: stops a child and what it runs; nothing comes back from it then. A child's final message comes back to you as a wake.",
-    parameters: Type.Object({
-      action: Type.Union([Type.Literal("start"), Type.Literal("list"), Type.Literal("send"), Type.Literal("stop")]),
-      title: Type.Optional(Type.String()),
-      brief: Type.Optional(Type.String()),
-      place: Type.Optional(Type.String()),
-      thinking: Type.Optional(Type.Union([Type.Literal("high"), Type.Literal("xhigh"), Type.Literal("max")])),
-      child: Type.Optional(Type.String()),
-      message: Type.Optional(Type.String()),
-    }),
+    parameters: obj(
+      {
+        action: StringEnum(["start", "list", "send", "stop"] as const),
+        title: opt(str()),
+        brief: opt(str()),
+        place: opt(str()),
+        thinking: opt(StringEnum(["high", "xhigh", "max"] as const)),
+        child: opt(str()),
+        message: opt(str()),
+      },
+      { open: true },
+    ),
     // A call cut off by a crash is not run again: a repeated start would start a second child. The model sees that the
     // call was interrupted and can look with list.
     replay: "unsafe",

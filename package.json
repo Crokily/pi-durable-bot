@@ -48,11 +48,12 @@
     "@chat-adapter/slack": "4.44.0",
     "@chat-adapter/state-memory": "4.44.0",
     "@chat-adapter/telegram": "4.44.0",
-    "@earendil-works/chord": "1.4.0",
-    "@earendil-works/pi-ai": "1.4.0",
-    "@earendil-works/pi-coding-agent": "1.4.0",
-    "@earendil-works/pi-durable": "1.4.0",
-    "@earendil-works/pi-telemetry": "1.4.0",
+    "@earendil-works/chord": "1.5.0",
+    "@earendil-works/pi-ai": "1.5.0",
+    "@earendil-works/pi-coding-agent": "1.5.0",
+    "@earendil-works/pi-durable": "1.5.0",
+    "@earendil-works/pi-schema": "1.5.0",
+    "@earendil-works/pi-telemetry": "1.5.0",
     "@effect/platform-node": "4.1.2",
     "@effect/platform-node-shared": "4.1.2",
     "chat": "4.44.0",
@@ -67,5 +68,10 @@
     "typescript": "7.0.2",
     "vitest": "5.1.0",
     "ws": "8.22.1"
+  },
+  "overrides": {
+    "@earendil-works/chord": {
+      "ws": "$ws"
+    }
   }
 }

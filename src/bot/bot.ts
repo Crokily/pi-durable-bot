@@ -6,7 +6,7 @@ import { basename, delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Models } from "@earendil-works/pi-ai";
 import type { TelemetrySpan } from "@earendil-works/pi-telemetry";
-import { Agent, openDatabase } from "../agent/agent.ts";
+import { Agent, type Database, openDatabase } from "../agent/agent.ts";
 import { type ChildEnd, describeChild, reportRequestId } from "../agent/children.ts";
 import type { MemoryNote } from "../agent/memory.ts";
 import { SCREEN_VARIABLES, screenOf } from "../agent/screen.ts";
@@ -17,7 +17,6 @@ import type { Address, ChannelAdapter, ChannelConfig } from "../core/channel.ts"
 import { MEMORY_DIR, SECRETS_DIR } from "../core/home.ts";
 import { VERSION } from "../core/version.ts";
 import type { Judge } from "../core/judge.ts";
-import type { Sql } from "../core/sql.ts";
 import type { Delivered, PlaceWake, WakeTarget } from "../core/wake.ts";
 import type { Print } from "../gateway/config.ts";
 import { Gateway, type TimersHandle } from "../gateway/gateway.ts";
@@ -91,7 +90,7 @@ export class Bot implements WakeTarget {
   #definition: BotDefinition;
   readonly #env: BotEnvironment;
   readonly #print: Print;
-  readonly #sql: Sql & { close(): Promise<void> };
+  readonly #sql: Database;
   readonly #gateway: Gateway;
   readonly #timers: TimersHandle;
   readonly #agent: Agent;
@@ -119,7 +118,7 @@ export class Bot implements WakeTarget {
     definition: BotDefinition;
     env: BotEnvironment;
     print: Print;
-    sql: Sql & { close(): Promise<void> };
+    sql: Database;
     gateway: Gateway;
     timers: TimersHandle;
     agent: Agent;
@@ -186,7 +185,7 @@ export class Bot implements WakeTarget {
   static async #open(
     id: string,
     paths: BotPaths,
-    sql: Sql & { close(): Promise<void> },
+    sql: Database,
     definition: BotDefinition,
     env: BotEnvironment,
     print: Print,

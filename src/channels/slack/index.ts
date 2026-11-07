@@ -27,7 +27,7 @@ import { GatewaySlackAdapter, SEND_EVENT_TYPE } from "./sdk.ts";
 
 /** What the inbox stores for this channel. */
 type Raw =
-  | { source: "socket"; envelope: { event_id?: string; event?: SlackRawEvent } }
+  | { source: "socket"; envelope: { event_id?: string; event_time?: number; event?: SlackRawEvent } }
   | { source: "socket"; type: "interactive" | "slash_commands"; body: Record<string, any> }
   | { source: "history"; channel: string; message: SlackMessage }
   | { source: "sent"; channel: string; message: SlackMessage };
@@ -174,7 +174,8 @@ class SlackChannel implements ChannelAdapter {
     if ("body" in raw) return [await this.#interaction(raw.type, raw.body)];
     const event = raw.envelope.event;
     if (!event) return [];
-    const at = tsToMs(event.event_ts ?? event.ts);
+    // An event without a time of its own (member_joined_channel) has the time Slack sent it, on the envelope.
+    const at = tsToMs(event.event_ts ?? event.ts ?? raw.envelope.event_time?.toString());
     switch (event.type) {
       case "message":
       case "app_mention":

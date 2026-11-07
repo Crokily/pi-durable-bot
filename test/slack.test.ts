@@ -308,6 +308,13 @@ describe("translate", () => {
     expect(await receive(joined(BOB.id, "UBOT"))).toMatchObject([{ kind: "join", person: { address: "slack:@U0BOB" }, fromMe: true, text: "invited by Pots (slack:@UBOT)" }]);
   });
 
+  it("gives a join the time it happened, from the envelope, as the event has no time of its own", async () => {
+    const { fake, channel, events } = await connect();
+    fake.event({ type: "member_joined_channel", user: BOB.id, channel: GENERAL.id, channel_type: "C", team: "T0LAB" }, { event_time: 1793080700 });
+    await until(() => events.length === 1);
+    expect(await channel.translate(events[0]!.raw)).toMatchObject([{ kind: "join", at: 1793080700_000 }]);
+  });
+
   it("leaves out the message Slack posts when someone joins, which member_joined_channel already logs", async () => {
     const { channel, receive } = await connect();
     const posted = message({ subtype: "channel_join", user: BOB.id, inviter: ALICE.id, text: "<@U0BOB> has joined the channel", ts: "1793080600.000500", event_ts: "1793080600.000500" });

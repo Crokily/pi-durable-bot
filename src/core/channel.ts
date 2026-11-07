@@ -38,7 +38,8 @@ export type FileInfo = typeof FileInfo.Type;
 /**
  * One thing that happened in a channel, in common words. The adapter makes these from the raw events it stored, and
  * the gateway checks them against this schema before it logs them.
- * kind: "message", "edit", "delete", "reaction_added", "reaction_removed", "join", "leave", "update", or another plain word.
+ * kind: "message", "edit", "delete", "reaction_added", "reaction_removed", "join", "leave", "update" (a change to a message that
+ * is not its text), "system" (a notice from the platform, such as a pin; its text says what happened), or another plain word.
  */
 export const Happening = Schema.Struct({
   kind: Schema.NonEmptyString,

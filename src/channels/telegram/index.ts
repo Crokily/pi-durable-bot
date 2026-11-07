@@ -38,6 +38,24 @@ type TgMessage = TelegramMessage & {
   migrate_to_chat_id?: number;
   /** In a supergroup that was a group: the group's chat ID. */
   migrate_from_chat_id?: number;
+  pinned_message?: { message_id: number };
+  new_chat_title?: string;
+  new_chat_photo?: unknown[];
+  delete_chat_photo?: true;
+  group_chat_created?: true;
+  supergroup_chat_created?: true;
+  channel_chat_created?: true;
+  message_auto_delete_timer_changed?: { message_auto_delete_time: number };
+  forum_topic_edited?: { name?: string };
+  forum_topic_closed?: object;
+  forum_topic_reopened?: object;
+  general_forum_topic_hidden?: object;
+  general_forum_topic_unhidden?: object;
+  video_chat_scheduled?: object;
+  video_chat_started?: object;
+  video_chat_ended?: { duration: number };
+  boost_added?: { boost_count: number };
+  chat_background_set?: object;
 };
 
 /** A chat as this file reads it: the SDK's type, with whether a supergroup has topics. */
@@ -246,11 +264,13 @@ class TelegramChannel implements ChannelAdapter {
 
   /**
    * A new message. A service message about people who came or left is a join or a leave; the bot's own come as
-   * my_chat_member, with who did it. A group that became a supergroup is an update in both chats. Other service
-   * messages, such as a pin, have no text; their raw says what they are.
+   * my_chat_member, with who did it. Other service messages, such as a pin or a new group name, are system events: a
+   * notice from Telegram, not words someone wrote. A service message of a kind not known here is a message without
+   * text; its raw says what it is.
    */
   #posted(m: TgMessage): Happening[] {
-    if (m.migrate_to_chat_id !== undefined || m.migrate_from_chat_id !== undefined) return [this.#migrated(m)];
+    const notice = this.#notice(m);
+    if (notice !== undefined) return [this.#system(m, notice)];
     if (!m.new_chat_members && !m.left_chat_member) return [this.#message("message", m)];
     const others = (user: TelegramUser) => user.id !== this.#bot!.id;
     const joined = (m.new_chat_members ?? []).filter(others).map((user) => this.#member("join", m.chat, user, m.from, m.date * 1000, m));
@@ -259,18 +279,51 @@ class TelegramChannel implements ChannelAdapter {
   }
 
   /**
-   * A group becomes a supergroup when, for example, topics are turned on. The supergroup is a new chat with a new ID,
-   * so a new address, and the group takes no more messages. Telegram says so with a service message in each chat.
+   * What a service message says, in words, or undefined when it is not one of these. A group becomes a supergroup
+   * when, for example, topics are turned on: the supergroup is a new chat with a new ID, so a new address, and the group
+   * takes no more messages. Telegram says so with a service message in each chat.
    */
-  #migrated(m: TgMessage): Happening {
-    const to = m.migrate_to_chat_id;
+  #notice(m: TgMessage): string | undefined {
+    if (m.migrate_to_chat_id !== undefined) return `became a supergroup with a new address: ${this.place(String(m.migrate_to_chat_id))}`;
+    if (m.migrate_from_chat_id !== undefined) return `was the group ${this.place(String(m.migrate_from_chat_id))}`;
+    if (m.pinned_message) return "pinned a message";
+    if (m.new_chat_title !== undefined) return `changed the name to "${m.new_chat_title}"`;
+    if (m.new_chat_photo) return "changed the photo";
+    if (m.delete_chat_photo) return "deleted the photo";
+    if (m.group_chat_created || m.supergroup_chat_created) return "created the group";
+    if (m.channel_chat_created) return "created the channel";
+    if (m.message_auto_delete_timer_changed) {
+      const seconds = m.message_auto_delete_timer_changed.message_auto_delete_time;
+      return seconds ? `set new messages to be deleted after ${seconds} seconds` : "turned off deleting messages after a time";
+    }
+    if (m.forum_topic_edited) return m.forum_topic_edited.name ? `renamed the topic to "${m.forum_topic_edited.name}"` : "changed the topic's icon";
+    if (m.forum_topic_closed) return "closed the topic";
+    if (m.forum_topic_reopened) return "opened the topic again";
+    if (m.general_forum_topic_hidden) return "hid the General topic";
+    if (m.general_forum_topic_unhidden) return "showed the General topic again";
+    if (m.video_chat_scheduled) return "scheduled a video chat";
+    if (m.video_chat_started) return "started a video chat";
+    if (m.video_chat_ended) return `ended the video chat after ${m.video_chat_ended.duration} seconds`;
+    if (m.boost_added) return `boosted the group ${m.boost_added.boost_count === 1 ? "once" : `${m.boost_added.boost_count} times`}`;
+    if (m.chat_background_set) return "changed the chat's background";
+    return undefined;
+  }
+
+  /** A service message as a system event. A pin is about the message that was pinned. */
+  #system(m: TgMessage, text: string): Happening {
+    const chat = String(m.chat.id);
+    this.#learnTopics(m);
+    const thread = this.#threadOf(m);
     return {
-      kind: "update",
+      kind: "system",
       at: m.date * 1000,
       place: this.#place(m.chat),
+      message: this.message(chat, m.pinned_message?.message_id ?? m.message_id),
+      ...(thread ? { thread } : {}),
+      // A service message on behalf of a chat (a channel, an anonymous admin, an upgraded group) names no person.
       ...(m.from && !m.sender_chat ? { person: this.#person(m.from) } : {}),
-      fromMe: false,
-      text: to !== undefined ? `became a supergroup with a new address: ${this.place(String(to))}` : `was the group ${this.place(String(m.migrate_from_chat_id))}`,
+      fromMe: m.from?.id === this.#bot!.id && !m.sender_chat,
+      text,
       raw: m,
     };
   }

@@ -148,6 +148,20 @@ describe("what a wake gives", { timeout: 60_000 }, () => {
   });
 });
 
+describe("system messages", { timeout: 60_000 }, () => {
+  it("gives a system message's text in the wake, with the message it is about", async () => {
+    await setUp();
+    const lunch = gateway.say("dm-alice", "alice", "lunch at noon?");
+    await waitFor(() => gateway.sent().length === 1, { what: "the first reply" });
+    gateway.notice("dm-alice", "alice", "pinned a message", lunch);
+
+    await waitFor(() => gateway.sent().length === 2, { what: "the second reply" });
+    const wake = wakes(model)[1]!;
+    expect(wake).toContain(`system message, alice (${CHANNEL}:@alice), message ${CHANNEL}:#dm-alice/${lunch}`);
+    expect(wake).toContain("  Text: pinned a message");
+  });
+});
+
 describe("saved files", { timeout: 60_000 }, () => {
   it("deletes what is in files/tmp/ 30 days after it was saved, and nothing outside it", async () => {
     model = await startFakeModel();

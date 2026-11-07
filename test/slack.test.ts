@@ -178,10 +178,13 @@ describe("translate", () => {
       person: { address: "slack:@U0ALICE", name: "Alice", realName: "Alice Smith" },
       fromMe: false,
       mentionsMe: true,
-      text: "hi @Pots and @Bob Jones, today",
+      text: "hi @Pots and @Bob Jones, **today**",
       mentions: ["slack:@UBOT", "slack:@U0BOB"],
       raw: message({ text: "hi <@UBOT> and <@U0BOB|bob>, *today*" }),
     });
+    // The text is Markdown, as on the other channels: a link keeps its URL, and a numbered list and code stay.
+    const [formatted] = await receive(message({ ts: "1793080261.000100", text: "See <https://example.com/plan|the plan>\n1. first\n2. second\n```\nnpm test\n```" }));
+    expect(formatted!.text).toBe("See [the plan](https://example.com/plan)\n\n1. first\n2. second\n\n```\nnpm test\n```");
     // A mention in the message's blocks counts too, and a person Slack does not know keeps their ID as the name.
     const [blocks] = await receive(
       message({

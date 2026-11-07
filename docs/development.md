@@ -10,6 +10,8 @@ npm run tla     # the TLA+ models, about 2.5 minutes; needs Java and tla2tools.j
 
 Run `npm run check` and `npm test` before every commit. Run `npm run tla` too when you change the inbox, the waker, the outbox or the timers.
 
+Every pull request runs `npm run check` and `npm test` on Linux, macOS and Windows (`.github/workflows/ci.yml`). Dependencies are pinned to exact versions; Dependabot (`.github/dependabot.yml`) opens a pull request each week when a new version comes out, with the Chat SDK packages, the pi packages and the Effect packages each in one pull request, and CI tests it.
+
 ## Tests
 
 `npm test` runs [Vitest](https://vitest.dev) with [@effect/vitest](https://www.npmjs.com/package/@effect/vitest) on Node 24 or newer.

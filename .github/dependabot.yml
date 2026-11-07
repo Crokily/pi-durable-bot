@@ -1,0 +1,20 @@
+# Dependencies are pinned to exact versions, because Pots uses parts of the Chat SDK and pi that can change between
+# versions. Dependabot opens a pull request when a new version comes out, and CI tests it before a person merges it.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      chat-sdk:
+        patterns: ["chat", "@chat-adapter/*"]
+      pi:
+        patterns: ["@earendil-works/*"]
+      effect:
+        patterns: ["effect", "@effect/*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

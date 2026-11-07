@@ -187,6 +187,38 @@ describe.skipIf(!python)("pots in a terminal", { timeout: 90_000 }, () => {
     }
   });
 
+  it("login adds a local server, tries it, and names the model for pots init", async () => {
+    home = mkdtempSync(join(tmpdir(), "pots-terminal-"));
+    const server = spawn(process.execPath, ["--input-type=module", "-e", `const { startFakeModel } = await import(${JSON.stringify(FAKE_MODEL)}); console.log((await startFakeModel()).url);`], {
+      stdio: ["ignore", "pipe", "inherit"],
+    });
+    try {
+      const url = await new Promise<string>((resolve) => server.stdout.once("data", (data) => resolve(String(data).trim())));
+      const screen = inTerminal(
+        ["login"],
+        [
+          // Nothing is set up yet, so the first choice is a subscription.
+          ["How should your bot get its AI?", DOWN.repeat(2)],
+          ["How should your bot get its AI?", "\r"],
+          ["Which server?", DOWN.repeat(3)],
+          ["Which server?", "\r"],
+          ["base URL", "\x7f".repeat(40) + `${url}\r`],
+          ["API key", "\r"],
+          ["Model ID", "coworker\r"],
+          ["context window", "\r"],
+          ["<<the command ends>>", null],
+        ],
+      );
+      expect(screen).not.toContain("already set up in pi");
+      expect(screen).toContain("Ready: local/coworker. A new bot can think with it: pots init --model local/coworker");
+      expect(screen).toContain("<<exited>>");
+      const listed = spawnSync(process.execPath, [POTS, "login", "--list"], { env: env(), encoding: "utf8" });
+      expect(listed.stdout).toBe("Models (for --model):\n  local/coworker\n");
+    } finally {
+      server.kill();
+    }
+  });
+
   it("chat takes a secret apart from what the person was typing, and forgets it", () => {
     home = mkdtempSync(join(tmpdir(), "pots-terminal-"));
     execFileSync(process.execPath, [POTS, "bot", "new", "Tester", "--model", "fake/x"], { env: env() });

@@ -4,7 +4,7 @@ import { Readable } from "node:stream";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { createMemoryState } from "@chat-adapter/state-memory";
 import type { SlackEvent } from "@chat-adapter/slack";
-import { Chat } from "chat";
+import { Chat, convertEmojiPlaceholders, defaultEmojiResolver } from "chat";
 import type {
   Address,
   ChannelAdapter,
@@ -27,7 +27,7 @@ import { GatewaySlackAdapter, SEND_EVENT_TYPE } from "./sdk.ts";
 
 /** What the inbox stores for this channel. */
 type Raw =
-  | { source: "socket"; envelope: { event_id?: string; event?: SlackRawEvent } }
+  | { source: "socket"; envelope: { event_id?: string; event_time?: number; event?: SlackRawEvent } }
   | { source: "socket"; type: "interactive" | "slash_commands"; body: Record<string, any> }
   | { source: "history"; channel: string; message: SlackMessage }
   | { source: "sent"; channel: string; message: SlackMessage };
@@ -53,16 +53,20 @@ type SlackRawEvent = SlackMessage & {
 };
 
 const PLACE_TTL_MS = 60 * 60_000;
+/** Slack's limit for markdown_text, in which the channel posts: https://docs.slack.dev/reference/methods/chat.postMessage */
+const MAX_LENGTH = 12_000;
 
-export function createChannel(config: ChannelConfig, env: ChannelEnv): ChannelAdapter {
+/** apiUrl: Slack's Web API, by default https://slack.com/api/. Only tests give another one, a fake Slack. */
+export function createChannel(config: ChannelConfig, env: ChannelEnv, apiUrl?: string): ChannelAdapter {
   if (typeof config.secrets !== "string") throw new Error(`channel ${config.id}: "secrets" must name the env file with SLACK_APP_TOKEN and SLACK_BOT_TOKEN`);
-  return new SlackChannel(config.id, expandHome(config.secrets), env);
+  return new SlackChannel(config.id, expandHome(config.secrets), env, apiUrl);
 }
 
 class SlackChannel implements ChannelAdapter {
   readonly id: string;
   readonly #secrets: string;
   readonly #env: ChannelEnv;
+  readonly #apiUrl: string | undefined;
   #sdk?: GatewaySlackAdapter;
   #botToken?: string;
   #botUserId?: string;
@@ -70,10 +74,11 @@ class SlackChannel implements ChannelAdapter {
   /** The newest logged message of each known place, by channel ID, read when the channel started: where its backfill starts. */
   #starts = new Map<string, string>();
 
-  constructor(id: string, secrets: string, env: ChannelEnv) {
+  constructor(id: string, secrets: string, env: ChannelEnv, apiUrl: string | undefined) {
     this.id = id;
     this.#secrets = secrets;
     this.#env = env;
+    this.#apiUrl = apiUrl;
   }
 
   get me(): PersonInfo | undefined {
@@ -101,6 +106,7 @@ class SlackChannel implements ChannelAdapter {
       botToken: tokens.SLACK_BOT_TOKEN!,
       userName: this.#env.botName,
       logger: quietLogger(sink.log),
+      ...(this.#apiUrl ? { apiUrl: this.#apiUrl } : {}),
     });
     sdk.onSocketEvent = async (body, type) => {
       // Slack's legacy verification token rides along in every envelope. It is not stored.
@@ -170,7 +176,8 @@ class SlackChannel implements ChannelAdapter {
     if ("body" in raw) return [await this.#interaction(raw.type, raw.body)];
     const event = raw.envelope.event;
     if (!event) return [];
-    const at = tsToMs(event.event_ts ?? event.ts);
+    // An event without a time of its own (member_joined_channel) has the time Slack sent it, on the envelope.
+    const at = tsToMs(event.event_ts ?? event.ts ?? raw.envelope.event_time?.toString());
     switch (event.type) {
       case "message":
       case "app_mention":
@@ -287,6 +294,10 @@ class SlackChannel implements ChannelAdapter {
           },
         ];
       }
+      // The message Slack posts when someone joins. member_joined_channel comes too and gives the join. Read by a
+      // backfill, the message stays: it is the only trace of a join while the gateway was down.
+      case "channel_join":
+        return [];
       default:
         return [await this.#messageHappening(event)];
     }
@@ -416,16 +427,19 @@ class SlackChannel implements ChannelAdapter {
       const ts = (this.#parse(address) as { ts?: string }).ts;
       if (ts) threads.add(ts);
     }
+    // Slack gives the newest messages first, page by page. All pages are read first, and then stored oldest first: a
+    // stop in the middle then leaves no gap before the newest logged message, where the next backfill starts.
+    const pages: SlackMessage[][] = [];
     for await (const page of paginate((cursor) =>
       client.conversations.history({ channel, oldest: since, inclusive: false, limit: 200, include_all_metadata: true, ...(cursor ? { cursor } : {}) }),
     )) {
-      const messages = ((page as { messages?: SlackMessage[] }).messages ?? []).slice().reverse();
-      for (const message of messages) {
-        if (!message.ts) continue;
-        await sink.receive(`history:${channel}:${message.ts}:${message.edited?.ts ?? ""}`, { source: "history", channel, message } satisfies Raw);
-        added++;
-        if (message.latest_reply && message.latest_reply > since) threads.add(message.ts);
-      }
+      pages.push((page as { messages?: SlackMessage[] }).messages ?? []);
+    }
+    for (const message of pages.flat().reverse()) {
+      if (!message.ts) continue;
+      await sink.receive(`history:${channel}:${message.ts}:${message.edited?.ts ?? ""}`, { source: "history", channel, message } satisfies Raw);
+      added++;
+      if (message.latest_reply && message.latest_reply > since) threads.add(message.ts);
     }
     for (const thread of threads) {
       try {
@@ -448,9 +462,17 @@ class SlackChannel implements ChannelAdapter {
 
   // ---- Send ----
 
+  checkText(_to: Address, text: string): string | undefined {
+    return refusal(this.#outgoing(text));
+  }
+
+  /** Post the text as Markdown. A text over Slack's limit is refused, never cut. */
   async send(to: Address, text: string, sendId: string): Promise<SentMessage> {
+    const markdown = this.#outgoing(text);
+    const refused = refusal(markdown);
+    if (refused) throw new Error(refused);
     const { channel, threadTs } = await this.#target(to);
-    const posted = await this.#sdk!.postWithSendId(this.#sdk!.threadIdFor(channel, threadTs), this.#outgoing(text), sendId);
+    const posted = await this.#sdk!.postWithSendId(this.#sdk!.threadIdFor(channel, threadTs), markdown, sendId);
     const response = posted.raw as { channel?: string; message?: SlackMessage };
     const message: SlackMessage = {
       metadata: { event_type: SEND_EVENT_TYPE, event_payload: { send_id: sendId } },
@@ -502,7 +524,7 @@ class SlackChannel implements ChannelAdapter {
   async react(message: Address, emoji: string, remove: boolean): Promise<void> {
     const parsed = this.#parse(message);
     if (!("channel" in parsed) || !parsed.ts) throw new Error(`not a message address: ${message}`);
-    const name = emoji.trim().replace(/^:|:$/g, "");
+    const name = reactionName(emoji);
     try {
       if (remove) await this.#client.reactions.remove({ channel: parsed.channel, timestamp: parsed.ts, name });
       else await this.#client.reactions.add({ channel: parsed.channel, timestamp: parsed.ts, name });
@@ -514,12 +536,15 @@ class SlackChannel implements ChannelAdapter {
 
   /**
    * The content of a file of a message: its url_private, with the bot token (scope files:read). Only from Slack's own
-   * hosts, so the token goes nowhere else.
+   * hosts (in tests, the fake Slack's), so the token goes nowhere else. fetch drops the token when Slack redirects
+   * to another origin.
    */
   async fetchFile(file: FileInfo, signal: AbortSignal): Promise<AsyncIterable<Uint8Array>> {
     if (!this.#botToken) throw new Error(`channel ${this.id} is not started`);
     const url = new URL(file.url ?? "");
-    if (url.protocol !== "https:" || !/(^|\.)(slack|slack-files)\.com$/.test(url.hostname)) throw new Error(`not a Slack file URL: ${url.origin}`);
+    const slack = url.protocol === "https:" && /(^|\.)(slack|slack-files)\.com$/.test(url.hostname);
+    const fake = this.#apiUrl !== undefined && url.origin === new URL(this.#apiUrl).origin;
+    if (!slack && !fake) throw new Error(`not a Slack file URL: ${url.origin}`);
     const response = await fetch(url, { headers: { authorization: `Bearer ${this.#botToken}` }, signal });
     if (!response.ok || !response.body) throw new Error(`Slack answered ${response.status} ${response.statusText}`);
     // Without files:read, Slack answers with its sign-in page instead of the file.
@@ -566,6 +591,25 @@ function files(message: SlackMessage): { files?: FileInfo[] } {
       ...(typeof file.size === "number" ? { size: file.size } : {}),
     })),
   };
+}
+
+/**
+ * Slack reacts by name: a name with or without colons stays, also with a skin tone (thumbsup::skin-tone-6), and an
+ * emoji given as itself (👀) becomes its name.
+ */
+function reactionName(emoji: string): string {
+  const given = emoji.trim();
+  const named = /^:?([\w+-]+(?:::skin-tone-[2-6])?):?$/.exec(given)?.[1];
+  if (named) return named;
+  const name = defaultEmojiResolver.toSlack(defaultEmojiResolver.fromGChat(given));
+  if (!/^[\w+-]+$/.test(name)) throw new Error(`unknown emoji ${given}: give its Slack name, such as eyes or white_check_mark`);
+  return name;
+}
+
+/** Why Slack would not take this Markdown whole: its length as Slack gets it, with mentions and emoji in Slack's form. */
+function refusal(markdown: string): string | undefined {
+  const length = [...convertEmojiPlaceholders(markdown, "slack")].length;
+  return length > MAX_LENGTH ? `Slack allows at most ${MAX_LENGTH} characters in one message; this one has ${length}. Send it in parts.` : undefined;
 }
 
 function tsToMs(ts: string | undefined): number {

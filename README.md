@@ -21,7 +21,7 @@ does the work on its own computer, and speaks up when it should.
 </div>
 
 > [!TIP]
-> **Setting this up with an AI agent, such as Claude Code, Codex or Cursor?** Have it read [docs/for-agents.md](https://github.com/Crokily/pi-durable-bot/blob/main/docs/for-agents.md) first. That page explains Pots to your agent and how to set it up. In short: install it and run `pots init`, then the bot connects Slack and your other apps itself.
+> **Setting this up with an AI agent, such as Claude Code, Codex or Cursor?** Have it read [docs/for-agents.md](https://github.com/Crokily/pi-durable-bot/blob/main/docs/for-agents.md) first. That page explains Pots to your agent and how to set it up. In short: the agent installs it and makes the bot, you sign in to your model with `pots login`, and then the bot connects Slack and your other apps itself.
 
 <p align="center" id="see-it-work">
   <a href="docs/media/demo.mp4"><img src="docs/media/demo.gif" width="900" alt="Pots reads Slack, email, Discord, X and calendars on its own, decides what matters, speaks up in #pricing, and does real work on its own computer"></a>
@@ -141,6 +141,7 @@ It joins only the places it is invited to, like a new hire who is added to the r
 | Command | What it does |
 |---|---|
 | `pots init` | Set up your first bot, or another one |
+| `pots login` | Sign in to a model, or add an API key or a local server, for every bot on this computer; `--list` shows what can be used |
 | `pots chat` | Talk to a bot in this terminal |
 | `pots status` | The gateway, the service and each bot |
 | `pots service install \| uninstall \| restart \| logs` | The gateway as a background service: launchd on macOS, systemd on Linux (`--system` for a server), Task Scheduler on Windows |
@@ -153,7 +154,7 @@ To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service resta
 
 ### Choose the models
 
-`pots init` sets up the model. Each bot's `bot.json` names its model and, if you want one, a judge, and you can change them at any time; edits apply within seconds. Logins, API keys and local endpoints are stored in pi's files in `~/.pi/agent/`, so the [pi](https://github.com/earendil-works/pi) command line, if you use it, shares them.
+`pots init` sets up the model, and `pots login` signs in to another one or adds a key, for every bot on the computer. Each bot's `bot.json` names its model and, if you want one, a judge, and you can change them at any time; edits apply within seconds. Logins, API keys and local endpoints are stored in pi's files in `~/.pi/agent/`, so the [pi](https://github.com/earendil-works/pi) command line, if you use it, shares them.
 
 | Field | What it does | Values |
 |---|---|---|
@@ -165,7 +166,7 @@ To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service resta
 
 With `off`, each group of messages is a wake of the main model, which then decides. A fast classifier keeps the messages that are not for the bot away from it, and is cheaper and quicker than the main model: Jev answers in about 0.3 seconds. With `main`, each group of messages costs one short request to the main model before the bot hears of it.
 
-**OpenAI-compatible and local endpoints** (Ollama, LM Studio, vLLM, a proxy): `pots init` adds them for you. By hand, they go in pi's `~/.pi/agent/models.json` ([fields](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md)):
+**OpenAI-compatible and local endpoints** (Ollama, LM Studio, vLLM, a proxy): `pots init` and `pots login` add them for you. By hand, they go in pi's `~/.pi/agent/models.json` ([fields](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md)):
 
 ```json
 {

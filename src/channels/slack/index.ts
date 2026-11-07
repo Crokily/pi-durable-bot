@@ -54,15 +54,17 @@ type SlackRawEvent = SlackMessage & {
 
 const PLACE_TTL_MS = 60 * 60_000;
 
-export function createChannel(config: ChannelConfig, env: ChannelEnv): ChannelAdapter {
+/** apiUrl: Slack's Web API, by default https://slack.com/api/. Only tests give another one, a fake Slack. */
+export function createChannel(config: ChannelConfig, env: ChannelEnv, apiUrl?: string): ChannelAdapter {
   if (typeof config.secrets !== "string") throw new Error(`channel ${config.id}: "secrets" must name the env file with SLACK_APP_TOKEN and SLACK_BOT_TOKEN`);
-  return new SlackChannel(config.id, expandHome(config.secrets), env);
+  return new SlackChannel(config.id, expandHome(config.secrets), env, apiUrl);
 }
 
 class SlackChannel implements ChannelAdapter {
   readonly id: string;
   readonly #secrets: string;
   readonly #env: ChannelEnv;
+  readonly #apiUrl: string | undefined;
   #sdk?: GatewaySlackAdapter;
   #botToken?: string;
   #botUserId?: string;
@@ -70,10 +72,11 @@ class SlackChannel implements ChannelAdapter {
   /** The newest logged message of each known place, by channel ID, read when the channel started: where its backfill starts. */
   #starts = new Map<string, string>();
 
-  constructor(id: string, secrets: string, env: ChannelEnv) {
+  constructor(id: string, secrets: string, env: ChannelEnv, apiUrl: string | undefined) {
     this.id = id;
     this.#secrets = secrets;
     this.#env = env;
+    this.#apiUrl = apiUrl;
   }
 
   get me(): PersonInfo | undefined {
@@ -101,6 +104,7 @@ class SlackChannel implements ChannelAdapter {
       botToken: tokens.SLACK_BOT_TOKEN!,
       userName: this.#env.botName,
       logger: quietLogger(sink.log),
+      ...(this.#apiUrl ? { apiUrl: this.#apiUrl } : {}),
     });
     sdk.onSocketEvent = async (body, type) => {
       // Slack's legacy verification token rides along in every envelope. It is not stored.
@@ -514,12 +518,15 @@ class SlackChannel implements ChannelAdapter {
 
   /**
    * The content of a file of a message: its url_private, with the bot token (scope files:read). Only from Slack's own
-   * hosts, so the token goes nowhere else.
+   * hosts (in tests, the fake Slack's), so the token goes nowhere else. fetch drops the token when Slack redirects
+   * to another origin.
    */
   async fetchFile(file: FileInfo, signal: AbortSignal): Promise<AsyncIterable<Uint8Array>> {
     if (!this.#botToken) throw new Error(`channel ${this.id} is not started`);
     const url = new URL(file.url ?? "");
-    if (url.protocol !== "https:" || !/(^|\.)(slack|slack-files)\.com$/.test(url.hostname)) throw new Error(`not a Slack file URL: ${url.origin}`);
+    const slack = url.protocol === "https:" && /(^|\.)(slack|slack-files)\.com$/.test(url.hostname);
+    const fake = this.#apiUrl !== undefined && url.origin === new URL(this.#apiUrl).origin;
+    if (!slack && !fake) throw new Error(`not a Slack file URL: ${url.origin}`);
     const response = await fetch(url, { headers: { authorization: `Bearer ${this.#botToken}` }, signal });
     if (!response.ok || !response.body) throw new Error(`Slack answered ${response.status} ${response.statusText}`);
     // Without files:read, Slack answers with its sign-in page instead of the file.

@@ -44,10 +44,10 @@
     "prepare": "npm run build"
   },
   "dependencies": {
-    "@chat-adapter/discord": "4.43.0",
-    "@chat-adapter/slack": "4.43.0",
-    "@chat-adapter/state-memory": "4.43.0",
-    "@chat-adapter/telegram": "4.43.0",
+    "@chat-adapter/discord": "4.44.0",
+    "@chat-adapter/slack": "4.44.0",
+    "@chat-adapter/state-memory": "4.44.0",
+    "@chat-adapter/telegram": "4.44.0",
     "@earendil-works/chord": "1.4.0",
     "@earendil-works/pi-ai": "1.4.0",
     "@earendil-works/pi-coding-agent": "1.4.0",
@@ -55,7 +55,7 @@
     "@earendil-works/pi-telemetry": "1.4.0",
     "@effect/platform-node": "4.0.7",
     "@effect/platform-node-shared": "4.0.7",
-    "chat": "4.43.0",
+    "chat": "4.44.0",
     "discord.js": "14.28.1",
     "effect": "4.0.7"
   },

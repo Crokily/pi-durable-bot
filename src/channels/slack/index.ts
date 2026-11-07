@@ -4,7 +4,7 @@ import { Readable } from "node:stream";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { createMemoryState } from "@chat-adapter/state-memory";
 import type { SlackEvent } from "@chat-adapter/slack";
-import { Chat, convertEmojiPlaceholders, defaultEmojiResolver } from "chat";
+import { Chat, convertEmojiPlaceholders, defaultEmojiResolver, type Message, stringifyMarkdown } from "chat";
 import type {
   Address,
   ChannelAdapter,
@@ -258,7 +258,7 @@ class SlackChannel implements ChannelAdapter {
         // Not an edit: Slack changed the message (a link preview, the reply count). Nobody did it, so no person.
         if (!edited) return [{ kind: "update", ...common, ...files(inner) }];
         const translated = await this.#sdk!.translate(inner);
-        return [{ kind: "edit", ...common, ...person, text: translated.text, mentionsMe: translated.isMention === true, mentions: this.#mentions(inner), ...files(inner) }];
+        return [{ kind: "edit", ...common, ...person, text: markdownOf(translated), mentionsMe: translated.isMention === true, mentions: this.#mentions(inner), ...files(inner) }];
       }
       case "message_deleted": {
         const before = event.previous_message;
@@ -319,7 +319,7 @@ class SlackChannel implements ChannelAdapter {
       ...(author ? { person: await this.#personInfo(author, message) } : {}),
       fromMe: author === this.#botUserId,
       mentionsMe: translated.isMention === true,
-      text: translated.text,
+      text: markdownOf(translated),
       mentions: this.#mentions(message),
       ...files(message),
       ...(sendId ? { sendId } : {}),
@@ -604,6 +604,14 @@ function reactionName(emoji: string): string {
   const name = defaultEmojiResolver.toSlack(defaultEmojiResolver.fromGChat(given));
   if (!/^[\w+-]+$/.test(name)) throw new Error(`unknown emoji ${given}: give its Slack name, such as eyes or white_check_mark`);
   return name;
+}
+
+/**
+ * A Slack message's text as Markdown, as the other channels log theirs: a link keeps its URL, and lists, code blocks and
+ * emphasis stay. The SDK's plain text drops them.
+ */
+function markdownOf(message: Message<unknown>): string {
+  return stringifyMarkdown(message.formatted).trimEnd();
 }
 
 /** Why Slack would not take this Markdown whole: its length as Slack gets it, with mentions and emoji in Slack's form. */

@@ -62,6 +62,7 @@ To send a file, use `files.uploadV2` with `call` (above).
 
 ## Limits
 
+- Messages are in the log as Markdown: a link keeps its URL, and lists, code and emphasis stay.
 - A message can have at most 12,000 characters: your text goes as Slack's `markdown_text`, which has that limit. A longer text is refused, not cut: send it in parts.
 - Slack generally lets an app post 1 message per second in a channel.
 - React with the emoji's name, with or without colons (`eyes`, `:white_check_mark:`), or with the emoji itself (👀), which Pots turns into its name.

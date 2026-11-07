@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
-import { unlink, writeFile } from "node:fs/promises";
+import { rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openModels } from "./agent/models.ts";
@@ -71,7 +71,7 @@ export async function runGateway(): Promise<void> {
         if (invalid.get(id) !== message) {
           invalid.set(id, message);
           print(id)("bot.json is not valid; keeping the running definition", { error: message });
-          await writeFile(paths.definitionError, `${message}\n`).catch(() => {});
+          await writeWhole(paths.definitionError, `${message}\n`);
         }
         continue;
       }
@@ -99,7 +99,7 @@ export async function runGateway(): Promise<void> {
         const message = error instanceof Error ? error.message : String(error);
         failed.set(id, { text: read.text, at: Date.now() });
         print(id)(current ? "applying bot.json failed" : "bot start failed", { error: message });
-        await writeFile(paths.definitionError, `${message}\n`).catch(() => {});
+        await writeWhole(paths.definitionError, `${message}\n`);
       }
     }
   }
@@ -128,4 +128,12 @@ export async function runGateway(): Promise<void> {
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("unhandledRejection", (error) => log("unhandled rejection", { error: String(error) }));
+}
+
+/** Write a file whole: to a part file first, then renamed, so that no reader sees it half written. */
+async function writeWhole(path: string, text: string): Promise<void> {
+  const part = `${path}.part`;
+  await writeFile(part, text)
+    .then(() => rename(part, path))
+    .catch(() => {});
 }

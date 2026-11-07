@@ -31,7 +31,8 @@ function script(request: FakeRequest): FakeReply {
     if (last.content.includes("nap first")) return { call: { name: "bash", arguments: { command: "sleep 8" } } };
     if (last.content.includes("save a memory")) {
       const index = /Contents of (\S+\/MEMORY\.md) \(the auto-memory of/.exec(request.system)![1]!;
-      return { call: { name: "bash", arguments: { command: `echo '- [Bob](bob.md) — likes coffee' >> ${index}` } } };
+      // In quotes: bash takes the backslashes of a Windows path away.
+      return { call: { name: "bash", arguments: { command: `echo '- [Bob](bob.md) — likes coffee' >> '${index}'` } } };
     }
     return { text: "the answer is 42" };
   }
@@ -79,6 +80,9 @@ describe("children", { timeout: 90_000 }, () => {
     expect(child.system).not.toMatch(/pots send|pots react|pots call|ask-secret/);
     expect(gateway.pots("children")).toMatch(/^c1 "research": ended .* ago, waits for a message, for test:#general, thinking xhigh$/m);
 
+    // On Windows a stop ends the process at once, as a kill does, before the gateway writes the spans of its last second:
+    // there, wait until the last model request is written (with it, all that ended before it).
+    if (process.platform === "win32") await waitFor(() => /^Model requests: 5,/m.test(gateway.pots("trace")), { what: "the spans" });
     await gateway.stop();
     // The child's end is a wake of its own, and the child's model requests are in the trace with the others.
     expect(gateway.pots("trace")).toMatch(/child\s+test:#general\s+sent 1\s+model 2×/);
@@ -97,7 +101,7 @@ describe("children", { timeout: 90_000 }, () => {
     expect(readFileSync(index, "utf8")).toBe("- [Alice](alice.md) — likes tea\n- [Bob](bob.md) — likes coffee\n");
     // The line the child added itself does not change the start of its own requests; the child has no memory instructions.
     const [first, second] = model.requests.filter(isChild);
-    expect(first!.system).toMatch(/# Memory\n\nContents of \S+\/memory\/MEMORY\.md \(the auto-memory of Coworker, as it was when you started\):\n\n- \[Alice\]\(alice\.md\) — likes tea\n\n/);
+    expect(first!.system).toMatch(/# Memory\n\nContents of \S+[\\/]memory\/MEMORY\.md \(the auto-memory of Coworker, as it was when you started\):\n\n- \[Alice\]\(alice\.md\) — likes tea\n\n/);
     expect(first!.system).not.toContain("Each memory is one file holding one fact");
     expect(second!.system).toBe(first!.system);
     expect(gateway.pots("children")).toMatch(/^c1 "note": .*, thinking max$/m);

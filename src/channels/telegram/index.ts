@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { openAsBlob } from "node:fs";
-import { basename } from "node:path";
+import { basename, isAbsolute } from "node:path";
 import { Readable } from "node:stream";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { setTimeout as wait } from "node:timers/promises";
@@ -642,8 +642,8 @@ class TelegramChannel implements ChannelAdapter {
 
   /**
    * Any Bot API method, with the token kept here, for example sendPhoto, getFile or pinChatMessage. A file parameter
-   * (photo, document, …, or the media of an InputMedia) given as a local path ("/…" or "~/…") is uploaded; a file ID or
-   * a URL is passed on as it is.
+   * (photo, document, …, or the media of an InputMedia) given as a local path ("/…", "C:\…" on Windows, or "~/…") is
+   * uploaded; a file ID or a URL is passed on as it is.
    */
   /**
    * Call a Bot API method. A message it sends or edits (sendPhoto, sendMediaGroup, editMessageText…) is stored as the
@@ -897,7 +897,7 @@ function toEmoji(emoji: string): string {
  */
 async function withUploads(params: Record<string, unknown>): Promise<Record<string, unknown> | FormData> {
   const uploads: { field: string; path: string }[] = [];
-  const isPath = (value: unknown): value is string => typeof value === "string" && (value.startsWith("/") || value.startsWith("~/"));
+  const isPath = (value: unknown): value is string => typeof value === "string" && (isAbsolute(value) || value.startsWith("~/"));
   const inner = (value: unknown): unknown => {
     if (Array.isArray(value)) return value.map(inner);
     if (!value || typeof value !== "object") return value;

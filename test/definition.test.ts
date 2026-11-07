@@ -111,8 +111,11 @@ describe("bot.json while running", { timeout: 90_000 }, () => {
     await waitFor(() => gateway.output.some((line) => line.bot === "second" && line.message === "bot started"), { what: "the second bot" });
     expect(await status()).toEqual(["coworker: Coworker, fake/coworker, idle, channels test", "second: Second, fake/coworker, idle, channels test"]);
 
-    rmSync(second, { recursive: true, force: true });
+    // Windows does not delete a file that is open, and the running bot keeps its bot.sqlite open: there the bot stops
+    // when its bot.json goes, and then the rest of its folder can go.
+    rmSync(process.platform === "win32" ? join(second, "bot.json") : second, { recursive: true, force: true });
     await waitFor(() => gateway.output.some((line) => line.bot === "second" && line.message === "bot stopped"), { what: "the second bot to stop" });
+    rmSync(second, { recursive: true, force: true });
     expect(await status()).toEqual(["coworker: Coworker, fake/coworker, idle, channels test"]);
     // The first bot goes on as before.
     gateway.say("general", "alice", `@${ME} are you still here?`);

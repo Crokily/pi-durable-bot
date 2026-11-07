@@ -85,7 +85,7 @@ describe("memory", { timeout: 90_000 }, () => {
     gateway.say("general", "alice", `@${ME} anything else?`);
     await waitFor(() => passes().length === 2, { what: "the second pass" });
     const next = wakes(model).at(-1)!;
-    expect(next).toMatch(/\n\nBackground memory extraction updated your memory: saved 1 memory\nFiles changed: \S+\/alice-tea\.md, \S+\/MEMORY\.md\nYour loaded copy of \S+\/memory\/MEMORY\.md is now stale relative to disk — read it again if you need current contents\.\nThis is ambient context — do not narrate it to people unless they ask or it is directly relevant to their request\.$/);
+    expect(next).toMatch(/\n\nBackground memory extraction updated your memory: saved 1 memory\nFiles changed: \S+[\\/]alice-tea\.md, \S+[\\/]MEMORY\.md\nYour loaded copy of \S+[\\/]memory[\\/]MEMORY\.md is now stale relative to disk — read it again if you need current contents\.\nThis is ambient context — do not narrate it to people unless they ask or it is directly relevant to their request\.$/);
     const later = agentRequests(model).at(-1)!;
     expect(later.messages.some((message) => message.content.includes("memory extraction subagent"))).toBe(false);
     expect(later.system).toContain("Your MEMORY.md is currently empty.");
@@ -174,7 +174,8 @@ describe("memory", { timeout: 90_000 }, () => {
     const script = (request: FakeRequest): FakeReply => {
       const last = request.messages.at(-1)!;
       if (last.role === "user" && last.content.includes("I drink coffee now")) return write(drink(), "Coffee.\n");
-      if (last.role === "tool" && request.messages.at(-2)?.toolCalls?.[0] === "write") return { call: { name: "bash", arguments: { command: `rm ${old()}` } } };
+      // In quotes: bash takes the backslashes of a Windows path away.
+      if (last.role === "tool" && request.messages.at(-2)?.toolCalls?.[0] === "write") return { call: { name: "bash", arguments: { command: `rm '${old()}'` } } };
       return coworker(request);
     };
     await setUp(async (request) => {
@@ -222,7 +223,7 @@ describe("memory", { timeout: 90_000 }, () => {
     expect(forks()).toEqual([]);
     gateway.say("general", "alice", `@${ME} anything else?`);
     await waitFor(() => passes().length === 1, { what: "the next pass" });
-    expect(wakes(model).at(-1)!).toMatch(/Background memory extraction updated your memory: saved 1 memory\nFiles changed: \S+\/tea\.md\n/);
+    expect(wakes(model).at(-1)!).toMatch(/Background memory extraction updated your memory: saved 1 memory\nFiles changed: \S+[\\/]tea\.md\n/);
     // The same messages again, with the new ones.
     expect(passes()[0]!.messages).toBe(8);
     gateway.output.splice(gateway.output.findIndex((line) => line.message === "memory pass got no answer"), 1);
@@ -276,7 +277,7 @@ describe("memory", { timeout: 90_000 }, () => {
 
     gateway.say("general", "alice", `@${ME} note 6`);
     await waitFor(() => passes().length === 6, { what: "pass 6" });
-    expect(wakes(model).at(-1)!).toMatch(/Background memory consolidation updated your memory: consolidated 1 memory file\nFiles changed: \S+\/merged\.md\n/);
+    expect(wakes(model).at(-1)!).toMatch(/Background memory consolidation updated your memory: consolidated 1 memory file\nFiles changed: \S+[\\/]merged\.md\n/);
     await pause(1_000);
     expect(model.requests.filter(isDream)).toHaveLength(2);
     expect(state("memory_changes")).toBe("1");
@@ -316,68 +317,70 @@ describe("memory parts", () => {
     symlinkSync(join(dir, "outside", "missing.txt"), join(folders.own, "dangling.md"));
     const outside = join(dir, "outside");
     const refused = async (name: string, args: Record<string, unknown>) => (await forkRefusal(name, args, folders, cwd)) !== undefined;
+    // The paths in single quotes, as bash needs them on Windows: there they hold backslashes, and ~ in a short name.
+    const sh = { own: `'${folders.own}'`, shared: `'${folders.shared}'`, outside: `'${outside}'`, db: `'${join(dir, "bot.sqlite")}'` };
     for (const command of [
       "ls -la",
-      `cat ${folders.own}/MEMORY.md | grep tea | wc -l`,
-      `find ${folders.own} -name '*.md'`,
-      `grep -rn "tea" ${folders.shared} 2>/dev/null | head -5`,
-      `sqlite3 -readonly -safe ${dir}/bot.sqlite "SELECT text FROM gw_messages LIMIT 5"`,
-      `rm -f ${folders.own}/old.md ${folders.shared}/x.md`,
-      `rm -- ${folders.own}/new.md`,
-      `find ${folders.own} -maxdepth 2 -type f -name '*.md' -mtime -2 -print`,
-      `find ${folders.own} ! -name MEMORY.md -o -newer ${folders.own}/MEMORY.md`,
-      `grep -c 'a$' ${folders.own}/MEMORY.md 2>&1`,
-      `sqlite3 -readonly -safe -json -header ${dir}/bot.sqlite "SELECT 1"`,
+      `cat ${sh.own}/MEMORY.md | grep tea | wc -l`,
+      `find ${sh.own} -name '*.md'`,
+      `grep -rn "tea" ${sh.shared} 2>/dev/null | head -5`,
+      `sqlite3 -readonly -safe ${sh.db} "SELECT text FROM gw_messages LIMIT 5"`,
+      `rm -f ${sh.own}/old.md ${sh.shared}/x.md`,
+      `rm -- ${sh.own}/new.md`,
+      `find ${sh.own} -maxdepth 2 -type f -name '*.md' -mtime -2 -print`,
+      `find ${sh.own} ! -name MEMORY.md -o -newer ${sh.own}/MEMORY.md`,
+      `grep -c 'a$' ${sh.own}/MEMORY.md 2>&1`,
+      `sqlite3 -readonly -safe -json -header ${sh.db} "SELECT 1"`,
     ]) {
       expect(await refused("bash", { command }), command).toBe(false);
     }
     for (const command of [
-      `echo hi > ${folders.own}/a.md`,
-      `cat a >> ${folders.own}/MEMORY.md`,
+      `echo hi > ${sh.own}/a.md`,
+      `cat a >> ${sh.own}/MEMORY.md`,
       "touch x",
       "node -e 'require(\"fs\").writeFileSync(\"x\", \"\")'",
-      `ls; rm ${folders.own}/a.md`,
+      `ls; rm ${sh.own}/a.md`,
       "ls && touch x",
       "ls $(touch x)",
       "ls `touch x`",
       'ls "$(touch x)"',
       "FOO=1 ls",
-      `find ${folders.own} -delete`,
+      `find ${sh.own} -delete`,
       `find . -exec rm {} \\;`,
-      `sqlite3 ${dir}/bot.sqlite "DELETE FROM gw_messages"`,
-      `sqlite3 -readonly ${dir}/bot.sqlite "SELECT writefile('x', 'y')"`,
-      `rm -rf ${folders.own}`,
-      `rm ${folders.own}/*.md`,
-      `rm ${folders.own}/notes.txt`,
-      `rm ${join(dir, "outside")}/a.md`,
-      `rm ${folders.own}/../a.md`,
-      `rm ${folders.own}/link/a.md`,
+      `sqlite3 ${sh.db} "DELETE FROM gw_messages"`,
+      `sqlite3 -readonly ${sh.db} "SELECT writefile('x', 'y')"`,
+      `rm -rf ${sh.own}`,
+      `rm ${sh.own}/*.md`,
+      `rm ${sh.own}/notes.txt`,
+      `rm ${sh.outside}/a.md`,
+      `rm ${sh.own}/../a.md`,
+      `rm ${sh.own}/link/a.md`,
       "rm memory/a.md",
-      `/bin/rm ${folders.own}/a.md`,
-      `ls | rm ${folders.own}/a.md`,
+      `/bin/rm ${sh.own}/a.md`,
+      `ls | rm ${sh.own}/a.md`,
       "ls\ntouch x",
       // What a review found: a word before a redirect, braces, $'...', sqlite3's .nonce.
-      `find ${outside} -delete>/dev/null`,
-      `rm -f ${folders.own}/a.md ${outside}/b.md>/dev/null`,
-      `rm -f ${folders.own}/{keep,../outside}.md`,
-      `find ${outside} $'-delete'`,
+      `find ${sh.outside} -delete>/dev/null`,
+      `rm -f ${sh.own}/a.md ${sh.outside}/b.md>/dev/null`,
+      `rm -f ${sh.own}/{keep,../outside}.md`,
+      `find ${sh.outside} $'-delete'`,
       `sqlite3 -readonly -safe -nonce secret :memory: '.nonce secret' '.shell touch /tmp/escaped'`,
       // What bash would expand or interpret, and options that are not on the lists.
-      `find ${outside} $"-delete"`,
-      `find ${outside} \\-delete`,
-      `ls ${folders.own}/*.md`,
+      `find ${sh.outside} $"-delete"`,
+      `find ${sh.outside} \\-delete`,
+      `ls ${sh.own}/*.md`,
       "cat ~/.ssh/id_rsa",
       'grep -r "a$HOME" .',
       "ls >/dev/null",
       "ls 2> /dev/null",
-      `find ${outside} -fprint x`,
-      `find ${outside} -printf x`,
-      `sqlite3 -safe -readonly ${dir}/bot.sqlite "SELECT 1"`,
-      `sqlite3 -readonly -safe -cmd '.shell x' ${dir}/bot.sqlite`,
-      `sqlite3 -readonly -safe ${dir}/bot.sqlite " .shell touch x"`,
-      `sqlite3 -readonly -safe ${dir}/bot.sqlite -cmd x`,
-      `cat x.sql | sqlite3 -readonly -safe ${dir}/bot.sqlite`,
-      `rm ${folders.own}/dangling.md`,
+      `find ${sh.outside} -fprint x`,
+      `find ${sh.outside} -printf x`,
+      `sqlite3 -safe -readonly ${sh.db} "SELECT 1"`,
+      `sqlite3 -readonly -safe -cmd '.shell x' ${sh.db}`,
+      `sqlite3 -readonly -safe ${sh.db} " .shell touch x"`,
+      `sqlite3 -readonly -safe ${sh.db} -cmd x`,
+      `cat x.sql | sqlite3 -readonly -safe ${sh.db}`,
+      `rm ${sh.own}/dangling.md`,
     ]) {
       expect(await refused("bash", { command }), command).toBe(true);
     }
@@ -434,9 +437,9 @@ describe("memory parts", () => {
     utimesSync(join(folders.shared, "plain.md"), new Date(2026, 0, 1), new Date(2026, 0, 1));
     expect(await listMemoryFiles(folders)).toBe(
       [
-        `- [reference] ${folders.shared}/tz.md (${new Date(2026, 0, 3).toISOString()}): The user's time zone`,
+        `- [reference] ${join(folders.shared, "tz.md")} (${new Date(2026, 0, 3).toISOString()}): The user's time zone`,
         `- [user] alice.md (${new Date(2026, 0, 2).toISOString()}): Alice: likes tea`,
-        `- ${folders.shared}/plain.md (${new Date(2026, 0, 1).toISOString()})`,
+        `- ${join(folders.shared, "plain.md")} (${new Date(2026, 0, 1).toISOString()})`,
       ].join("\n"),
     );
   });

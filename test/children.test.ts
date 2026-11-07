@@ -80,6 +80,9 @@ describe("children", { timeout: 90_000 }, () => {
     expect(child.system).not.toMatch(/pots send|pots react|pots call|ask-secret/);
     expect(gateway.pots("children")).toMatch(/^c1 "research": ended .* ago, waits for a message, for test:#general, thinking xhigh$/m);
 
+    // On Windows a stop ends the process at once, as a kill does, before the gateway writes the spans of its last second:
+    // there, wait until the last model request is written (with it, all that ended before it).
+    if (process.platform === "win32") await waitFor(() => /^Model requests: 5,/m.test(gateway.pots("trace")), { what: "the spans" });
     await gateway.stop();
     // The child's end is a wake of its own, and the child's model requests are in the trace with the others.
     expect(gateway.pots("trace")).toMatch(/child\s+test:#general\s+sent 1\s+model 2×/);

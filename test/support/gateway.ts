@@ -128,7 +128,7 @@ export class TestGateway {
     );
   }
 
-  /** Stop the gateway the normal way (SIGTERM). */
+  /** Stop the gateway the normal way (SIGTERM). Windows has no SIGTERM: there Node ends the process at once, as kill does. */
   async stop(): Promise<void> {
     if (!this.#process) return;
     this.#process.kill("SIGTERM");

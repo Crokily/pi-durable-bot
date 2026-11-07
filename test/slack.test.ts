@@ -308,6 +308,16 @@ describe("translate", () => {
     expect(await receive(joined(BOB.id, "UBOT"))).toMatchObject([{ kind: "join", person: { address: "slack:@U0BOB" }, fromMe: true, text: "invited by Pots (slack:@UBOT)" }]);
   });
 
+  it("leaves out the message Slack posts when someone joins, which member_joined_channel already logs", async () => {
+    const { channel, receive } = await connect();
+    const posted = message({ subtype: "channel_join", user: BOB.id, inviter: ALICE.id, text: "<@U0BOB> has joined the channel", ts: "1793080600.000500", event_ts: "1793080600.000500" });
+    expect(await receive(posted)).toEqual([]);
+    // Read by a backfill, it is the only trace of a join while the gateway was down, so it stays.
+    expect(await channel.translate({ source: "history", channel: GENERAL.id, message: posted })).toMatchObject([
+      { kind: "message", person: { address: "slack:@U0BOB" }, text: "@Bob Jones has joined the channel" },
+    ]);
+  });
+
   it("translates the bot's own messages as its own, with the send ID from the metadata, and another app's message", async () => {
     const { receive } = await connect();
     const own = { user: "UBOT", bot_id: "BBOT", app_id: "A0TEST", bot_profile: { id: "BBOT", app_id: "A0TEST", user_id: "UBOT", name: "pots" } };

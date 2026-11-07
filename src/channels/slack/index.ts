@@ -291,6 +291,10 @@ class SlackChannel implements ChannelAdapter {
           },
         ];
       }
+      // The message Slack posts when someone joins. member_joined_channel comes too and gives the join. Read by a
+      // backfill, the message stays: it is the only trace of a join while the gateway was down.
+      case "channel_join":
+        return [];
       default:
         return [await this.#messageHappening(event)];
     }

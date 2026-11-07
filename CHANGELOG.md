@@ -2,6 +2,29 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
+## 0.5.0 (2026-11-07)
+
+Pots works in Discord and Telegram too, and an AI agent can set it up for you: you only sign in to your model.
+
+### Added
+- **Discord.** The bot connects a Discord app itself, by [docs/channels/discord.md](docs/channels/discord.md). It receives over Discord's Gateway, so the computer needs no public address, stores every event before it is acknowledged, and reads what came while it was down, also in threads. A reply quotes the message in its channel or thread. With `call` it opens threads, posts files and uses any other part of Discord's API, and it answers slash commands and buttons.
+- **Telegram.** The bot connects a Telegram bot itself, by [docs/channels/telegram.md](docs/channels/telegram.md), with long polling, so the computer needs no public address. It sends rich messages with headings, lists and tables, and plainer ones where a chat does not take those. A topic is a thread, and a reply to the bot counts as a mention. Telegram keeps what came while the bot was down for 24 hours; it cannot read older history.
+- **`pots login`** signs in with a subscription, or adds an API key (also TypeSafe's, for the Jev judge) or a local model server, for every bot on the computer. `pots login --list` shows the models and judges that can be used now, and never a secret.
+- **Text limits.** A text over a platform's limit fails at once with the limit and the length, and the bot sends it in parts: 12,000 characters on Slack, 2,000 on Discord and 32,768 on Telegram. Nothing is cut.
+- **System messages.** A platform's notices, such as a pin, a new channel name, a thread that started or a Telegram group that became a supergroup, are `system` events in the log, with what happened in words, and the wake shows them. They used to be logged as messages of the person who caused them.
+
+### Changed
+- **An AI agent sets Pots up itself.** By [docs/for-agents.md](docs/for-agents.md), the agent installs Pots, asks you what it needs in its chat, and makes the bot. You run `pots login` in your terminal only when your model is not set up yet, so your login and keys never pass through the agent. `pots init` alone works as before.
+- **A chat app that cannot connect no longer holds up the start.** The bot starts after at most 30 seconds; that app goes on connecting, and its events wait for it.
+- **Slack messages are in the log as Markdown,** as on Discord and Telegram: a link keeps its URL, and lists, code and emphasis stay. They were plain text. Messages already in the log stay as they are.
+- **Newer Chat SDK (4.44.0) and Effect (4.1.2).** A list written in Slack's composer is now read as a list.
+
+### Fixed
+- **Slack:** a bare @name stays as written; the reading after a downtime starts where it should and keeps the order of more than 200 new messages; a person who joins is one join, at the time they joined, not also a message; a reaction given as the emoji itself (👀) works.
+- **Discord:** a reaction by a name without colons (`eyes`) works; a person who joins is a join, not an empty message.
+- **Telegram:** photos and files the bot sends with `call` are in its log; a file given as a Windows path (`C:\…`) is uploaded; a send to a group that became a supergroup says the new address.
+- **`bot.json.error` is written whole,** so it is never read empty.
+
 ## 0.4.1 (2026-11-05)
 
 ### Added

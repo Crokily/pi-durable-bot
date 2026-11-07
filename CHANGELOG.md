@@ -2,6 +2,16 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
+## 0.5.1 (2026-11-07)
+
+Pots runs on pi 1.5.0.
+
+### Changed
+- **pi 1.5.0.** Pots uses pi 1.5.0: its model layer, tools and durable journal. **This upgrade is one way:** a bot that ran 0.5.1 cannot go back to 0.5.0, because pi writes its journal in a newer form. To be able to go back, copy each bot's `bot.sqlite` (in `~/.pots/bots/<id>/`) before you upgrade, while the gateway is stopped.
+- **A model request cut off by a crash is tried again after a pause,** as a failed attempt, up to 4 times, and is no longer sent again at once at every start.
+- **The first request after the upgrade is not served from the provider's prompt cache,** because the tools are described a little differently. Later requests are, as before.
+- **A crash can lose up to a second of an answer that was still being written.** What the bot sent, its wakes and its children's reports are not touched.
+
 ## 0.5.0 (2026-11-07)
 
 Pots works in Discord and Telegram too, and an AI agent can set it up for you: you only sign in to your model.

@@ -458,6 +458,8 @@ describe("sending", () => {
     // A person address becomes the shorter <@U0ALICE> before the count, and an emoji counts once.
     expect(channel.checkText!("slack:#C0GENERAL", `${"x".repeat(11990)}<slack:@U0ALICE>`)).toBeUndefined();
     expect(channel.checkText!("slack:#C0GENERAL", "😀".repeat(12000))).toBeUndefined();
+    // An emoji placeholder counts as what Slack gets: {{emoji:thumbs_up}} goes as :+1:.
+    expect(channel.checkText!("slack:#C0GENERAL", `${"x".repeat(11996)}{{emoji:thumbs_up}}`)).toBeUndefined();
     const refusal = "Slack allows at most 12000 characters in one message; this one has 12001. Send it in parts.";
     expect(channel.checkText!("slack:#C0GENERAL", "x".repeat(12001))).toBe(refusal);
     await expect(channel.send("slack:#C0GENERAL", "x".repeat(12001), "tool:1")).rejects.toThrow(refusal);
@@ -545,6 +547,9 @@ describe("sending", () => {
     expect(fake.called("reactions.add")[0]!.params).toEqual({ channel: GENERAL.id, timestamp: TS, name: "eyes" });
     expect([...fake.reactions]).toEqual([`C0GENERAL/${TS}/white_check_mark`, `C0GENERAL/${TS}/+1`]);
     await expect(channel.react(`slack:#C0GENERAL/${TS}`, "🫨🫨", false)).rejects.toThrow("unknown emoji 🫨🫨: give its Slack name");
+    // A name with a skin tone, as Slack takes it.
+    await channel.react(`slack:#C0GENERAL/${TS}`, ":thumbsup::skin-tone-6:", false);
+    expect(fake.called("reactions.add").at(-1)!.params.name).toBe("thumbsup::skin-tone-6");
     await expect(channel.react(`slack:#C0GENERAL/1793080999.000100`, "eyes", false)).rejects.toThrow("message_not_found");
     await expect(channel.react("slack:#C0GENERAL", "eyes", false)).rejects.toThrow("not a message address");
   });

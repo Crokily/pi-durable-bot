@@ -4,7 +4,7 @@ import { Readable } from "node:stream";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { createMemoryState } from "@chat-adapter/state-memory";
 import type { SlackEvent } from "@chat-adapter/slack";
-import { Chat, defaultEmojiResolver } from "chat";
+import { Chat, convertEmojiPlaceholders, defaultEmojiResolver } from "chat";
 import type {
   Address,
   ChannelAdapter,
@@ -593,19 +593,22 @@ function files(message: SlackMessage): { files?: FileInfo[] } {
   };
 }
 
-/** Slack reacts by name: a name with or without colons stays, and an emoji given as itself (👀) becomes its name. */
+/**
+ * Slack reacts by name: a name with or without colons stays, also with a skin tone (thumbsup::skin-tone-6), and an
+ * emoji given as itself (👀) becomes its name.
+ */
 function reactionName(emoji: string): string {
   const given = emoji.trim();
-  const named = /^:?([\w+-]+):?$/.exec(given)?.[1];
+  const named = /^:?([\w+-]+(?:::skin-tone-[2-6])?):?$/.exec(given)?.[1];
   if (named) return named;
   const name = defaultEmojiResolver.toSlack(defaultEmojiResolver.fromGChat(given));
   if (!/^[\w+-]+$/.test(name)) throw new Error(`unknown emoji ${given}: give its Slack name, such as eyes or white_check_mark`);
   return name;
 }
 
-/** Why Slack would not take this Markdown whole: its length, with mentions already in Slack's form. */
+/** Why Slack would not take this Markdown whole: its length as Slack gets it, with mentions and emoji in Slack's form. */
 function refusal(markdown: string): string | undefined {
-  const length = [...markdown].length;
+  const length = [...convertEmojiPlaceholders(markdown, "slack")].length;
   return length > MAX_LENGTH ? `Slack allows at most ${MAX_LENGTH} characters in one message; this one has ${length}. Send it in parts.` : undefined;
 }
 

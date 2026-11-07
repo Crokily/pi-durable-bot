@@ -21,6 +21,8 @@ Written for a bot that connects itself; a person can follow it too. The bot gets
 
 In a group with topics, each topic is a thread. A reply to a message in a topic stays in that topic. If that message was deleted, the reply can fail; then send to the topic or the group instead.
 
+Turning topics on makes a group a supergroup, which is a new chat with a new address. The log has an update in each of the two chats that gives the other's address, and a send to the old address fails with an error that gives the new one.
+
 A second Telegram bot is a second channel entry with its own `id` (for example `telegram-shop`) and its own env file.
 
 ## Files

@@ -139,6 +139,19 @@ describe("translate", () => {
         text: "added by alice (telegram:@111)",
       }),
     ]);
+    // A group that became a supergroup has a new address; each chat says where the other one is, and no one spoke.
+    expect(await translate(updates.upgradedGroup)).toEqual([
+      expect.objectContaining({
+        kind: "update",
+        place: expect.objectContaining({ address: "telegram:#-5500" }),
+        person: expect.objectContaining({ address: "telegram:@111" }),
+        fromMe: false,
+        text: "became a supergroup with a new address: telegram:#-100500",
+      }),
+    ]);
+    const [from] = await translate(updates.upgradedFrom);
+    expect(from).toMatchObject({ kind: "update", place: { address: "telegram:#-100500" }, fromMe: false, text: "was the group telegram:#-5500" });
+    expect(from).not.toHaveProperty("person");
   });
 
   it("gives the files of a message with URLs that hold no token, and fetchFile downloads them", async () => {
@@ -234,6 +247,16 @@ describe("sending", () => {
     // Another error is not a reason to send it differently.
     telegram.script("sendRichMessage", { ok: false, error_code: 400, description: "Bad Request: chat not found" });
     await expect(channel.send("telegram:#-100999", "hi", "s4")).rejects.toThrow("Telegram sendRichMessage: Bad Request: chat not found");
+    // Telegram gives the new chat ID of a group that became a supergroup only in the error's parameters.
+    telegram.script("sendRichMessage", {
+      ok: false,
+      error_code: 400,
+      description: "Bad Request: group chat was upgraded to a supergroup chat",
+      parameters: { migrate_to_chat_id: -100500 },
+    });
+    await expect(channel.send("telegram:#-5500", "hi", "s5")).rejects.toThrow(
+      "Telegram sendRichMessage: Bad Request: group chat was upgraded to a supergroup chat; its new address is telegram:#-100500",
+    );
     expect(methods("sendMessage")).toHaveLength(2);
   });
 

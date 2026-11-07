@@ -298,6 +298,13 @@ describe("Discord channel", () => {
     expect(await translate({ source: "history", message: alice!.raw.d })).toEqual([]);
   });
 
+  it("leaves out the system message of a thread start, which THREAD_CREATE logs", async () => {
+    const { gateway, translate } = await connect();
+    const [started] = await gateway([["MESSAGE_CREATE", message({ id: "512", type: 18, author: BOT, content: "Release plan" })]]);
+    expect(await translate(started!.raw)).toEqual([]);
+    expect(await translate({ source: "history", message: started!.raw.d })).toEqual([]);
+  });
+
   it("translates a DM, with the person as the place's name", async () => {
     const { fake, gateway, translate } = await connect();
     fake.route("GET", "/channels/700", () => ({ id: "700", type: 1, last_message_id: "701", recipients: [ALICE] }));
@@ -465,17 +472,20 @@ describe("Discord channel", () => {
     fake.route("DELETE", "/channels/\\d+/messages/\\d+/reactions/[^/]+/@me", () => undefined);
     await channel.react("discord:#20/501", "👍", false);
     await channel.react("discord:#20/501", ":thumbsup:", false);
+    await channel.react("discord:#20/501", "eyes", false);
     await channel.react("discord:#20/501", "blob:900", false);
     await channel.react("discord:#20/600/601", "<a:dance:901>", false);
     await channel.react("discord:#21/800", "✅", true);
     expect(fake.requests.filter((request) => request.path.includes("/reactions/")).map((request) => `${request.method} ${request.path}`)).toEqual([
       "PUT /channels/20/messages/501/reactions/%F0%9F%91%8D/@me",
       "PUT /channels/20/messages/501/reactions/%F0%9F%91%8D/@me",
+      "PUT /channels/20/messages/501/reactions/%F0%9F%91%80/@me",
       "PUT /channels/20/messages/501/reactions/blob%3A900/@me",
       "PUT /channels/600/messages/601/reactions/dance%3A901/@me",
       "DELETE /channels/800/messages/800/reactions/%E2%9C%85/@me",
     ]);
     await expect(channel.react("discord:#20/501", ":no_such_emoji:", false)).rejects.toThrow("unknown emoji :no_such_emoji:");
+    await expect(channel.react("discord:#20/501", "no_such_emoji", false)).rejects.toThrow("unknown emoji no_such_emoji");
     await expect(channel.react("discord:#20", "👍", false)).rejects.toThrow("not a message address");
   });
 

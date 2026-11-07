@@ -110,6 +110,11 @@ const THREAD_PARENTS = new Set([0, 5, 15, 16]);
 const FORUMS = new Set([15, 16]);
 /** The copy of a thread's first message that Discord shows in the thread; the message itself is in the channel. */
 const THREAD_STARTER_MESSAGE = 21;
+/**
+ * The system message in a channel when a thread starts from it, with the thread's name as its text. THREAD_CREATE
+ * already logs the thread start, so this one is left out; logged as a message, it read as words its author said.
+ */
+const THREAD_CREATED = 18;
 /** The system message a server posts when someone joins it, when the server has its welcome messages on. */
 const USER_JOIN = 7;
 
@@ -475,7 +480,7 @@ export class DiscordChannel implements ChannelAdapter {
   }
 
   async #message(kind: "message" | "edit", message: ApiMessage, at: number, parent: string | undefined, sendId?: string): Promise<Happening[]> {
-    if (message.type === THREAD_STARTER_MESSAGE) return [];
+    if (message.type === THREAD_STARTER_MESSAGE || message.type === THREAD_CREATED) return [];
     if (message.type === USER_JOIN) return this.#joined(message, at, parent);
     const where = await this.#locate(message.channel_id, message.channel_type, parent);
     const guildId = message.guild_id ?? (await this.#channel(where.place).catch(() => undefined))?.guild_id;
@@ -938,7 +943,8 @@ function reactionEmoji(emoji: string): string {
   const text = emoji.trim();
   const custom = /^<?a?:?(\w+):(\d+)>?$/.exec(text);
   if (custom) return `${custom[1]}:${custom[2]}`;
-  const named = /^:([\w+-]+):$/.exec(text);
+  // A name, with or without colons (eyes, :eyes:), as the react tool's examples give it.
+  const named = /^:?([\w+-]+):?$/.exec(text);
   if (!named) return text;
   const unicode = defaultEmojiResolver.toDiscord(defaultEmojiResolver.fromSlack(named[1]!));
   if (/^[\w+-]+$/.test(unicode)) throw new Error(`unknown emoji ${text}: give the emoji itself, or name:id for a custom emoji`);

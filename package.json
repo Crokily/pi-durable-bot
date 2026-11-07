@@ -53,14 +53,14 @@
     "@earendil-works/pi-coding-agent": "1.4.0",
     "@earendil-works/pi-durable": "1.4.0",
     "@earendil-works/pi-telemetry": "1.4.0",
-    "@effect/platform-node": "4.0.7",
-    "@effect/platform-node-shared": "4.0.7",
+    "@effect/platform-node": "4.1.2",
+    "@effect/platform-node-shared": "4.1.2",
     "chat": "4.44.0",
     "discord.js": "14.28.1",
-    "effect": "4.0.7"
+    "effect": "4.1.2"
   },
   "devDependencies": {
-    "@effect/vitest": "4.0.7",
+    "@effect/vitest": "4.1.2",
     "@types/node": "26.6.5",
     "@types/ws": "8.18.2",
     "fast-check": "4.10.2",

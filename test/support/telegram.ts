@@ -14,7 +14,7 @@ export interface Call {
   files: Record<string, { name: string; text: string }>;
 }
 
-type Answer = { ok: true; result: unknown } | { ok: false; error_code: number; description: string; parameters?: { retry_after?: number } };
+type Answer = { ok: true; result: unknown } | { ok: false; error_code: number; description: string; parameters?: { retry_after?: number; migrate_to_chat_id?: number } };
 
 /**
  * Answers as Telegram does for the methods the tests use. Updates stay until getUpdates asks from an offset past
@@ -163,6 +163,22 @@ export const updates = {
   reaction: {
     update_id: 1009,
     message_reaction: { chat: team, message_id: 20, user: alice, date: date + 70, old_reaction: [], new_reaction: [{ type: "emoji", emoji: "👍" }] },
+  },
+  // A group that became a supergroup: a service message in each chat. The new one comes on behalf of the supergroup.
+  upgradedGroup: {
+    update_id: 1020,
+    message: { message_id: 30, from: alice, chat: { id: -5500, title: "Old team", type: "group" }, date: date + 90, migrate_to_chat_id: -100500 },
+  },
+  upgradedFrom: {
+    update_id: 1021,
+    message: {
+      message_id: 1,
+      from: { id: 1087968824, is_bot: true, first_name: "Group", username: "GroupAnonymousBot" },
+      sender_chat: { id: -100500, title: "Old team", type: "supergroup" },
+      chat: { id: -100500, title: "Old team", type: "supergroup" },
+      date: date + 90,
+      migrate_from_chat_id: -5500,
+    },
   },
   botAdded: {
     update_id: 1010,

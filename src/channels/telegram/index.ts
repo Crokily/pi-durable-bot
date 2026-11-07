@@ -34,6 +34,10 @@ type TgMessage = TelegramMessage & {
   new_chat_members?: TelegramUser[];
   left_chat_member?: TelegramUser;
   forum_topic_created?: { name: string };
+  /** In a group that became a supergroup: the supergroup's chat ID. */
+  migrate_to_chat_id?: number;
+  /** In a supergroup that was a group: the group's chat ID. */
+  migrate_from_chat_id?: number;
 };
 
 /** A chat as this file reads it: the SDK's type, with whether a supergroup has topics. */
@@ -242,14 +246,33 @@ class TelegramChannel implements ChannelAdapter {
 
   /**
    * A new message. A service message about people who came or left is a join or a leave; the bot's own come as
-   * my_chat_member, with who did it. Other service messages, such as a pin, have no text; their raw says what they are.
+   * my_chat_member, with who did it. A group that became a supergroup is an update in both chats. Other service
+   * messages, such as a pin, have no text; their raw says what they are.
    */
   #posted(m: TgMessage): Happening[] {
+    if (m.migrate_to_chat_id !== undefined || m.migrate_from_chat_id !== undefined) return [this.#migrated(m)];
     if (!m.new_chat_members && !m.left_chat_member) return [this.#message("message", m)];
     const others = (user: TelegramUser) => user.id !== this.#bot!.id;
     const joined = (m.new_chat_members ?? []).filter(others).map((user) => this.#member("join", m.chat, user, m.from, m.date * 1000, m));
     const left = m.left_chat_member && others(m.left_chat_member) ? [this.#member("leave", m.chat, m.left_chat_member, m.from, m.date * 1000, m)] : [];
     return [...joined, ...left];
+  }
+
+  /**
+   * A group becomes a supergroup when, for example, topics are turned on. The supergroup is a new chat with a new ID,
+   * so a new address, and the group takes no more messages. Telegram says so with a service message in each chat.
+   */
+  #migrated(m: TgMessage): Happening {
+    const to = m.migrate_to_chat_id;
+    return {
+      kind: "update",
+      at: m.date * 1000,
+      place: this.#place(m.chat),
+      ...(m.from && !m.sender_chat ? { person: this.#person(m.from) } : {}),
+      fromMe: false,
+      text: to !== undefined ? `became a supergroup with a new address: ${this.place(String(to))}` : `was the group ${this.place(String(m.migrate_from_chat_id))}`,
+      raw: m,
+    };
   }
 
   #message(kind: "message" | "edit", m: TgMessage, sendId?: string): Happening {
@@ -625,10 +648,13 @@ class TelegramChannel implements ChannelAdapter {
         result?: T;
         description?: string;
         error_code?: number;
-        parameters?: { retry_after?: number };
+        parameters?: { retry_after?: number; migrate_to_chat_id?: number };
       };
       if (data.ok) return data.result as T;
-      const error = new TelegramError(method, data.error_code ?? response.status, data.description ?? `HTTP ${response.status}`, data.parameters?.retry_after);
+      // A group that became a supergroup: Telegram gives the new chat ID only here, not in the description.
+      const moved = data.parameters?.migrate_to_chat_id;
+      const description = (data.description ?? `HTTP ${response.status}`) + (moved !== undefined ? `; its new address is ${this.place(String(moved))}` : "");
+      const error = new TelegramError(method, data.error_code ?? response.status, description, data.parameters?.retry_after);
       if (error.code !== 429 || error.retryAfter === undefined || error.retryAfter > 60 || attempt === 3) throw error;
       await wait(error.retryAfter * 1000, undefined, signal ? { signal } : {});
     }

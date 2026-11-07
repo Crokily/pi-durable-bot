@@ -550,4 +550,12 @@ describe("sending", () => {
       markdown_text: "The Telegram bot is @colyclawbot, ask <@U0CC833JMQU> :+1:",
     });
   });
+
+  it("keeps a bare @name as text also when it is the name of a person the channel has seen", async () => {
+    const { fake, channel, receive } = await connect();
+    // Alice's message makes her name known to the Slack SDK.
+    await receive(message({ text: "hi" }));
+    await channel.send("slack:#C0GENERAL", "ask @alice or @Alice, or <slack:@U0ALICE>", "tool:1");
+    expect(fake.called("chat.postMessage")[0]!.params.markdown_text).toBe("ask @alice or @Alice, or <@U0ALICE>");
+  });
 });

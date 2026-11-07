@@ -16,8 +16,9 @@ type Ack = (response?: Record<string, unknown>) => Promise<void>;
  *   acks first and routes through Chat handlers; this bot does neither.
  * - Posts made inside `postWithSendId` carry the send ID as message metadata, so a send can be found again.
  * - Link previews are not awaited: the SDK waits for unfurls that only its own handlers would store.
- * - A bare @name stays as written. The SDK makes it a Slack mention, which Slack shows as the text "<@name>" when no
- *   person has that ID. The bot mentions people by address, which the channel turns into Slack mentions itself.
+ * - A bare @name stays as written. The SDK makes it a Slack mention: of a person whose name it has seen, or else
+ *   "<@name>", which Slack shows as that text when no person has that ID. The bot mentions people by address, which the
+ *   channel turns into Slack mentions itself.
  */
 export class GatewaySlackAdapter extends SlackAdapter {
   /** Every event, interaction and slash command, before the ack. */
@@ -57,6 +58,10 @@ export class GatewaySlackAdapter extends SlackAdapter {
       return { ...result, metadata };
     }
     return result;
+  }
+
+  protected override async resolveOutgoingMentions(text: string): Promise<string> {
+    return text;
   }
 
   protected override async enrichLinks(links: Parameters<SlackAdapter["enrichLinks"]>[0]): ReturnType<SlackAdapter["enrichLinks"]> {

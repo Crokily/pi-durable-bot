@@ -203,7 +203,7 @@ describe("pots without a running gateway", { timeout: 120_000 }, () => {
     };
     expect(await init("nope/x")).toEqual({
       status: 1,
-      error: 'ERROR\n  nope/x cannot be used: pi has no login or key for "nope" on this computer. Run pots init without --model to sign in, or set it up with the pi command line.',
+      error: 'ERROR\n  nope/x cannot be used: pi has no login or key for "nope" on this computer. Run pots login in a terminal to sign in or add a key.',
     });
     expect(await init("fake/nope")).toEqual({ status: 1, error: 'ERROR\n  fake/nope cannot be used: "fake" has no model "nope". It has: coworker' });
     expect(await init("coworker")).toEqual({ status: 1, error: 'ERROR\n  --model must be "provider/modelId", for example anthropic/claude-opus-5-5' });
@@ -218,6 +218,20 @@ describe("pots without a running gateway", { timeout: 120_000 }, () => {
     expect(existsSync(join(gateway.home, "bots", "third"))).toBe(false);
     expect(await init("fake/coworker")).toEqual({ status: 0, error: "" });
     expect(JSON.parse(readFileSync(join(gateway.home, "bots", "third", "bot.json"), "utf8"))).toMatchObject({ model: "fake/coworker", judge: "off" });
+  });
+
+  it("login lists the models pi can use, and needs a terminal to sign in", async () => {
+    const run = (args: string[], pi: string) => gateway.run(args, { env: { PI_CODING_AGENT_DIR: pi } });
+    const listed = await run(["login", "--list"], join(gateway.home, "pi"));
+    expect(listed).toMatchObject({ status: 0, stdout: "Models (for --model):\n  fake/coworker\n" });
+    const empty = join(gateway.home, "pi-empty");
+    mkdirSync(empty, { recursive: true });
+    expect((await run(["login", "--list"], empty)).stdout).toBe("pi can use no model on this computer yet. Run pots login in a terminal to sign in or add a key.\n");
+    const asked = await run(["login"], empty);
+    expect({ status: asked.status, error: asked.stderr.trim() }).toEqual({
+      status: 1,
+      error: "ERROR\n  pots login asks questions, so it needs a terminal: run it in your own terminal. pots login --list works anywhere.",
+    });
   });
 
   it("init checks that the judge given with --judge can answer before it makes a bot", async () => {

@@ -19,9 +19,9 @@ Slack, Discord and Telegram work today, and so does the person's own terminal (`
 
 ## The one thing to get right: the bot sets itself up
 
-Once `pots init` is done, **the bot connects its chat apps itself**. For each app, it creates what that platform needs (on Slack, a Slack app), gets the tokens, writes its own `bot.json` and asks the person only for what it cannot do, such as signing in or approving an install.
+Once the bot is made, **it connects its chat apps itself**. For each app, it creates what that platform needs (on Slack, a Slack app), gets the tokens, writes its own `bot.json` and asks the person only for what it cannot do, such as signing in or approving an install.
 
-So do not create the chat app (such as a Slack app), write a manifest, collect tokens or edit `~/.pots/` by hand for your person, and do not tell them to do any of that first. Your job is to get Pots installed and `pots init` done. After that, hand the person over to their bot: they say "join our Slack" in `pots chat`, and the bot does the rest.
+So do not create the chat app (such as a Slack app), write a manifest, collect tokens or edit `~/.pots/` by hand for your person, and do not tell them to do any of that first. Your job is to install Pots and make the bot, as below. After that, hand the person over to their bot: they say "join our Slack" in `pots chat`, and the bot does the rest.
 
 On a computer without a desktop, such as a cloud server reached over SSH, the bot still does this. It explains the choices and lets the person pick:
 
@@ -33,29 +33,30 @@ When it needs tokens the person copied, it asks for them in `pots chat` with hid
 
 ## Before you start
 
-- **The bot gets full control of the computer it runs on**, as the user who runs `pots init`. It runs commands, installs software and uses the screen, with no approval step. Tell your person this, and recommend a computer or VM of its own. `pots init` asks them to confirm it too.
+- **The bot gets full control of the computer it runs on**, as the user who runs `pots init`. It runs commands, installs software and uses the screen, with no approval step. Tell your person this, recommend a computer or VM of its own, and go on only when they agree: `pots init --yes` accepts it for them.
 - **Set it up on the computer where the bot will live.** If your person reaches a server over SSH, the commands run there, not on their laptop.
 - **Requirements:** Node.js 24 or newer, on macOS, Linux or Windows. Windows also needs [Git for Windows](https://git-scm.com/download/win).
 
 ## Set it up
 
-```sh
-npm install -g pi-durable-bot
-pots init
-```
+Do the setup yourself, in your own shell. Only one step is your person's: signing in to a model. A subscription sign-in opens their browser, and an API key must not pass through your conversation, so they do it in their own terminal with `pots login`.
 
-`pots init` asks four things: the bot's name, how it gets its AI, who decides on group messages that do not mention the bot (the bot itself by default, or a judge such as Jev, with a TypeSafe API key), and one optional sentence about what it is for. Then it starts the gateway as a background service (launchd on macOS, a systemd user service on Linux, Task Scheduler on Windows), and the person is talking to their bot in the terminal.
-
-`pots init` is interactive and needs a real terminal, and your own shell is probably not one. There are two ways to handle that:
-
-1. **Ask your person to run `pots init` in their own terminal. Prefer this.** Signing in with a subscription opens a browser, or on a server, prints a link and asks for a code (choose "Copy code login (headless)" when it is offered). Only the person can do that. The steps take about a minute.
-2. **Run it without questions** if pi already has a login or key for a model on this computer (in `~/.pi/agent/`; `pi --list-models` lists them when the pi command line is installed):
+1. **Install:** `npm install -g pi-durable-bot`.
+2. **Ask your person**, in your chat:
+   - the bot's name;
+   - in one sentence, what it is for (optional; the bot asks them later if they skip it);
+   - how it should get its AI: a subscription they already pay for (ChatGPT, Claude, GitHub Copilot, Grok, Kimi and more), an API key from a provider, or a local model server (Ollama, LM Studio, llama.cpp, vLLM);
+   - who decides whether a group message that does not mention the bot wakes it: the bot itself (the default: every such message wakes it), or Jev, a fast judge from TypeSafe that wakes it only for messages about its work, with their TypeSafe API key.
+3. **See what pi can use already:** `pots login --list`. It lists the models (for `--model`) and judges (for `--judge`) that have a login, a key or a local server on this computer, and never shows a secret.
+4. **If what they chose is not listed, ask them to run `pots login` in their own terminal.** It asks how to get the AI, signs in or takes the key with hidden input, tries a model, and ends with a line such as `Ready: openai/gpt-6.1-sol`. On a computer without a browser, such as a server over SSH, it prints a link and asks for the code the page shows (choose "Copy code login (headless)" when it is offered). For Jev, they run it once more and choose "Use an API key", then TypeSafe. Then run `pots login --list` again.
+5. **Make the bot:**
    ```sh
-   pots init --yes --name "Ada" --model anthropic/claude-opus-5-5 --about "our team's research and ops assistant" --no-chat
+   pots init --yes --name "Ada" --model openai/gpt-6.1-sol --about "our team's research and ops assistant" --no-chat
    ```
-   Without `--judge`, every group message that does not mention the bot wakes it; `--judge typesafe/jev-latest` uses Jev when pi has a TypeSafe API key. Then tell your person to run `pots chat` to meet the bot.
+   Add `--judge typesafe/jev-latest` for Jev. `pots init` tries the model and the judge before it makes the bot, then starts the gateway as a background service (launchd on macOS, a systemd user service on Linux, Task Scheduler on Windows). On Linux it turns on lingering for the user (with `sudo` when the system asks for it), so the bot keeps running after your person logs out of SSH; `pots init --system` installs a system service instead (it needs sudo).
+6. **Hand over:** tell your person to run `pots chat` to meet the bot. It says hello, checks the screen and asks which chat apps to join.
 
-On Linux, `pots init` turns on lingering for the user (with `sudo` when the system asks for it), so the bot keeps running after your person logs out of SSH; there is no need to run `loginctl enable-linger` yourself. `pots init --system` installs a system service instead (it needs sudo).
+A person without an AI agent runs `pots init` alone instead: it asks the same things in the terminal, signs in, and opens the chat at the end.
 
 ## After setup
 
@@ -67,6 +68,7 @@ Tell your person:
 
 | Command | What it does |
 |---|---|
+| `pots login` | Sign in to a model, or add an API key or a local server (in a terminal); `--list` shows what can be used |
 | `pots status` | The gateway, the service and each bot |
 | `pots service logs` | The gateway's output |
 | `pots trace` | What a bot did: its last wakes, or one wake from its events to the messages it sent |

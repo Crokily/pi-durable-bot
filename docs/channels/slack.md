@@ -64,6 +64,6 @@ To send a file, use `files.uploadV2` with `call` (above).
 
 - A message can have at most 12,000 characters: your text goes as Slack's `markdown_text`, which has that limit. A longer text is refused, not cut: send it in parts.
 - Slack generally lets an app post 1 message per second in a channel.
-- React with the emoji's name, with or without colons: `eyes`, `:white_check_mark:`.
+- React with the emoji's name, with or without colons (`eyes`, `:white_check_mark:`), or with the emoji itself (👀), which Pots turns into its name.
 - After a time when you were not running, you get the messages that came in each place you are in, and the new replies in the threads you know and in new threads. Edits, deletions and reactions from that time do not come; a message comes as it is now.
 - You get a `join` when someone joins a channel you are in, with who invited them when someone did. The app does not subscribe to `member_left_channel`, so a person who leaves gives no `leave`.

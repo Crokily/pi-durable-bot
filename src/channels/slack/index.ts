@@ -4,7 +4,7 @@ import { Readable } from "node:stream";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { createMemoryState } from "@chat-adapter/state-memory";
 import type { SlackEvent } from "@chat-adapter/slack";
-import { Chat } from "chat";
+import { Chat, defaultEmojiResolver } from "chat";
 import type {
   Address,
   ChannelAdapter,
@@ -524,7 +524,7 @@ class SlackChannel implements ChannelAdapter {
   async react(message: Address, emoji: string, remove: boolean): Promise<void> {
     const parsed = this.#parse(message);
     if (!("channel" in parsed) || !parsed.ts) throw new Error(`not a message address: ${message}`);
-    const name = emoji.trim().replace(/^:|:$/g, "");
+    const name = reactionName(emoji);
     try {
       if (remove) await this.#client.reactions.remove({ channel: parsed.channel, timestamp: parsed.ts, name });
       else await this.#client.reactions.add({ channel: parsed.channel, timestamp: parsed.ts, name });
@@ -591,6 +591,16 @@ function files(message: SlackMessage): { files?: FileInfo[] } {
       ...(typeof file.size === "number" ? { size: file.size } : {}),
     })),
   };
+}
+
+/** Slack reacts by name: a name with or without colons stays, and an emoji given as itself (👀) becomes its name. */
+function reactionName(emoji: string): string {
+  const given = emoji.trim();
+  const named = /^:?([\w+-]+):?$/.exec(given)?.[1];
+  if (named) return named;
+  const name = defaultEmojiResolver.toSlack(defaultEmojiResolver.fromGChat(given));
+  if (!/^[\w+-]+$/.test(name)) throw new Error(`unknown emoji ${given}: give its Slack name, such as eyes or white_check_mark`);
+  return name;
 }
 
 /** Why Slack would not take this Markdown whole: its length, with mentions already in Slack's form. */

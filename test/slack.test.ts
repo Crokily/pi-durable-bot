@@ -525,23 +525,26 @@ describe("sending", () => {
     expect(await channel.findSent("slack:#C0GENERAL", "tool:9", since)).toBeUndefined();
   });
 
-  it("reacts by name, with or without colons, and takes a reaction already there or already gone as done", async () => {
+  it("reacts by name, with or without colons, or by the emoji itself, and takes a reaction already there or already gone as done", async () => {
     const { fake, channel } = await connect();
     fake.post(GENERAL.id, { user: ALICE.id, text: "release plan?", ts: TS });
     await channel.react(`slack:#C0GENERAL/${TS}`, ":eyes:", false);
     await channel.react(`slack:#C0GENERAL/${TS}`, "eyes", false);
     await channel.react(`slack:#C0GENERAL/${TS}`, "white_check_mark", false);
+    await channel.react(`slack:#C0GENERAL/${TS}`, "👍", false);
     await channel.react(`slack:#C0GENERAL/${TS}`, ":eyes:", true);
     await channel.react(`slack:#C0GENERAL/${TS}`, "eyes", true);
     expect([...fake.called("reactions.add"), ...fake.called("reactions.remove")].map((call) => `${call.method} ${call.params.name}`)).toEqual([
       "reactions.add eyes",
       "reactions.add eyes",
       "reactions.add white_check_mark",
+      "reactions.add +1",
       "reactions.remove eyes",
       "reactions.remove eyes",
     ]);
     expect(fake.called("reactions.add")[0]!.params).toEqual({ channel: GENERAL.id, timestamp: TS, name: "eyes" });
-    expect([...fake.reactions]).toEqual([`C0GENERAL/${TS}/white_check_mark`]);
+    expect([...fake.reactions]).toEqual([`C0GENERAL/${TS}/white_check_mark`, `C0GENERAL/${TS}/+1`]);
+    await expect(channel.react(`slack:#C0GENERAL/${TS}`, "🫨🫨", false)).rejects.toThrow("unknown emoji 🫨🫨: give its Slack name");
     await expect(channel.react(`slack:#C0GENERAL/1793080999.000100`, "eyes", false)).rejects.toThrow("message_not_found");
     await expect(channel.react("slack:#C0GENERAL", "eyes", false)).rejects.toThrow("not a message address");
   });

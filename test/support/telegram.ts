@@ -180,6 +180,12 @@ export const updates = {
       migrate_from_chat_id: -5500,
     },
   },
+  pinned: { update_id: 1022, message: { message_id: 31, from: alice, chat: team, date: date + 95, pinned_message: { message_id: 20, chat: team, date, text: "lunch at noon?" } } },
+  renamed: { update_id: 1023, message: { message_id: 32, from: alice, chat: team, date: date + 96, new_chat_title: "Team 2" } },
+  topicClosed: {
+    update_id: 1024,
+    message: { message_id: 12, from: alice, chat: ops, date: date + 97, is_topic_message: true, message_thread_id: 7, forum_topic_closed: {} },
+  },
   botAdded: {
     update_id: 1010,
     my_chat_member: { chat: team, from: alice, date: date - 100, old_chat_member: { user: BOT, status: "left" }, new_chat_member: { user: BOT, status: "member" } },

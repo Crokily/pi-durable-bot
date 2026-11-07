@@ -142,7 +142,7 @@ describe("translate", () => {
     // A group that became a supergroup has a new address; each chat says where the other one is, and no one spoke.
     expect(await translate(updates.upgradedGroup)).toEqual([
       expect.objectContaining({
-        kind: "update",
+        kind: "system",
         place: expect.objectContaining({ address: "telegram:#-5500" }),
         person: expect.objectContaining({ address: "telegram:@111" }),
         fromMe: false,
@@ -150,8 +150,14 @@ describe("translate", () => {
       }),
     ]);
     const [from] = await translate(updates.upgradedFrom);
-    expect(from).toMatchObject({ kind: "update", place: { address: "telegram:#-100500" }, fromMe: false, text: "was the group telegram:#-5500" });
+    expect(from).toMatchObject({ kind: "system", place: { address: "telegram:#-100500" }, fromMe: false, text: "was the group telegram:#-5500" });
     expect(from).not.toHaveProperty("person");
+    // Other service messages are system events in words too; a pin is about the pinned message, a closed topic is in it.
+    expect(await translate(updates.pinned)).toEqual([
+      expect.objectContaining({ kind: "system", message: "telegram:#-100200/20", person: expect.objectContaining({ address: "telegram:@111" }), text: "pinned a message" }),
+    ]);
+    expect(await translate(updates.renamed)).toEqual([expect.objectContaining({ kind: "system", place: expect.objectContaining({ address: "telegram:#-100200" }), text: 'changed the name to "Team 2"' })]);
+    expect(await translate(updates.topicClosed)).toEqual([expect.objectContaining({ kind: "system", message: "telegram:#-100300/12", thread: "telegram:#-100300/7", text: "closed the topic" })]);
   });
 
   it("gives the files of a message with URLs that hold no token, and fetchFile downloads them", async () => {

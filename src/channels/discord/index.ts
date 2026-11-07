@@ -7,7 +7,7 @@ import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { setTimeout as sleep } from "node:timers/promises";
 import { DiscordFormatConverter } from "@chat-adapter/discord";
 import { convertEmojiPlaceholders, defaultEmojiResolver } from "chat";
-import { Client, DiscordAPIError, Events, GatewayIntentBits, type REST, type RequestMethod } from "discord.js";
+import { Client, DiscordAPIError, Events, GatewayIntentBits, MessageType, type REST, type RequestMethod } from "discord.js";
 import type {
   Address,
   ChannelAdapter,
@@ -75,6 +75,8 @@ interface ApiMessage {
   mention_roles?: string[];
   attachments?: ApiAttachment[];
   embeds?: { type?: string; title?: string; description?: string; fields?: { name: string; value: string }[] }[];
+  /** On a pin's system message: the message that was pinned. */
+  message_reference?: { message_id?: string };
   message_snapshots?: { message: { content?: string; attachments?: ApiAttachment[] } }[];
 }
 
@@ -87,7 +89,7 @@ interface ApiChannel {
   owner_id?: string;
   recipients?: ApiUser[];
   last_message_id?: string | null;
-  thread_metadata?: { archive_timestamp?: string };
+  thread_metadata?: { archive_timestamp?: string; archived?: boolean };
 }
 
 interface GuildInfo {
@@ -117,6 +119,21 @@ const THREAD_STARTER_MESSAGE = 21;
 const THREAD_CREATED = 18;
 /** The system message a server posts when someone joins it, when the server has its welcome messages on. */
 const USER_JOIN = 7;
+/** Messages that people and apps write. Every other type is a system message, such as a pin or a new channel name. */
+const WRITTEN = new Set<number>([MessageType.Default, MessageType.Reply, MessageType.ChatInputCommand, MessageType.ContextMenuCommand]);
+/** What a system message says, in words, for the types a server sees most; the others give their type's name. */
+const SYSTEM_TEXT: Partial<Record<number, (content: string) => string>> = {
+  [MessageType.ChannelPinnedMessage]: () => "pinned a message",
+  [MessageType.ChannelNameChange]: (content) => `changed the channel's name to "${content}"`,
+  [MessageType.ChannelIconChange]: () => "changed the channel's icon",
+  [MessageType.Call]: () => "started a call",
+  [MessageType.GuildBoost]: () => "boosted the server",
+  [MessageType.GuildBoostTier1]: () => "boosted the server to level 1",
+  [MessageType.GuildBoostTier2]: () => "boosted the server to level 2",
+  [MessageType.GuildBoostTier3]: () => "boosted the server to level 3",
+  [MessageType.ChannelFollowAdd]: (content) => `made this channel follow ${content}`,
+  [MessageType.PollResult]: () => "a poll ended",
+};
 
 /** Discord counts a message's length in Unicode code points. */
 const MAX_LENGTH = 2000;
@@ -414,7 +431,8 @@ export class DiscordChannel implements ChannelAdapter {
     const parent = raw.parent;
     // A welcome message gives a join only when it comes live: as a join is not a message, the log would not see that
     // the backfill's copy is the same one.
-    if (raw.source === "history") return raw.message.type === USER_JOIN ? [] : this.#message("message", raw.message, Date.now(), parent);
+    // A system message read again by a backfill would be a second event: system messages are not kept as messages.
+    if (raw.source === "history") return !WRITTEN.has(raw.message.type ?? MessageType.Default) ? [] : this.#message("message", raw.message, Date.now(), parent);
     if (raw.source === "sent") return this.#message("message", raw.message, Date.now(), parent, raw.sendId);
     const { t, d, at } = raw;
     switch (t) {
@@ -454,13 +472,13 @@ export class DiscordChannel implements ChannelAdapter {
         return [
           {
             // A deleted thread is only logged, as a deleted message is.
-            kind: t === "THREAD_DELETE" ? "delete" : "update",
+            kind: t === "THREAD_DELETE" ? "delete" : "system",
             at,
             place: await this.#placeInfo(thread.parent_id, thread.guild_id),
             thread: this.#threadAt(where),
             ...(owner ? { person: await this.#personInfo(owner) } : {}),
             fromMe: owner !== undefined && owner === this.#botUserId,
-            ...(thread.name ? { text: thread.name } : {}),
+            ...(t === "THREAD_DELETE" ? (thread.name ? { text: thread.name } : {}) : { text: threadText(t, thread) }),
             raw: d,
           },
         ];
@@ -482,6 +500,7 @@ export class DiscordChannel implements ChannelAdapter {
   async #message(kind: "message" | "edit", message: ApiMessage, at: number, parent: string | undefined, sendId?: string): Promise<Happening[]> {
     if (message.type === THREAD_STARTER_MESSAGE || message.type === THREAD_CREATED) return [];
     if (message.type === USER_JOIN) return this.#joined(message, at, parent);
+    if (!WRITTEN.has(message.type ?? MessageType.Default)) return this.#system(message, at, parent);
     const where = await this.#locate(message.channel_id, message.channel_type, parent);
     const guildId = message.guild_id ?? (await this.#channel(where.place).catch(() => undefined))?.guild_id;
     const guild = guildId ? await this.#guild(guildId).catch(() => undefined) : undefined;
@@ -513,6 +532,31 @@ export class DiscordChannel implements ChannelAdapter {
    * Someone joined the server, from its welcome message: a join in the channel it was posted in. The bot's own is left
    * out: GUILD_CREATE already says it was added.
    */
+  /**
+   * A system message, such as a pin or a new channel name: a notice from Discord, not words its author wrote, so it is
+   * logged as a system event and not as a message. A pin is about the message that was pinned.
+   */
+  async #system(message: ApiMessage, at: number, parent: string | undefined): Promise<Happening[]> {
+    const where = await this.#locate(message.channel_id, message.channel_type, parent);
+    const guildId = message.guild_id ?? (await this.#channel(where.place).catch(() => undefined))?.guild_id;
+    const time = Date.parse(message.timestamp ?? "");
+    const type = message.type ?? MessageType.Default;
+    const about = (type === MessageType.ChannelPinnedMessage ? message.message_reference?.message_id : undefined) ?? message.id;
+    return [
+      {
+        kind: "system",
+        at: Number.isFinite(time) ? time : at,
+        place: await this.#placeInfo(where.place, guildId),
+        message: this.#messageAt(where, about),
+        ...(where.thread ? { thread: this.#threadAt(where) } : {}),
+        ...(message.author ? { person: await this.#personInfo(message.author) } : {}),
+        fromMe: message.author !== undefined && message.author.id === this.#botUserId,
+        text: SYSTEM_TEXT[type]?.(message.content ?? "") ?? `Discord system message ${MessageType[type] ?? `of type ${type}`}${message.content ? `: ${message.content}` : ""}`,
+        raw: message,
+      },
+    ];
+  }
+
   async #joined(message: ApiMessage, at: number, parent: string | undefined): Promise<Happening[]> {
     const author = message.author;
     if (!author || author.id === this.#botUserId) return [];
@@ -937,6 +981,14 @@ function outgoing(id: string, text: string): string {
 function refusal(content: string): string | undefined {
   const length = [...content].length;
   return length > MAX_LENGTH ? `Discord allows at most ${MAX_LENGTH} characters in one message; this one has ${length}. Send it in parts.` : undefined;
+}
+
+/** A thread that started or changed, in words. Discord does not say who changed a thread. */
+function threadText(t: string, thread: ApiChannel): string {
+  const name = `"${thread.name ?? thread.id}"`;
+  if (t === "THREAD_CREATE") return `started the thread ${name}`;
+  if (thread.thread_metadata?.archived) return `the thread ${name} was archived`;
+  return `the thread ${name} changed`;
 }
 
 function reactionEmoji(emoji: string): string {

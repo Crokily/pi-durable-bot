@@ -37,6 +37,8 @@ export interface PlatformRecord {
   readonly person: string;
   readonly text?: string;
   readonly thread?: string;
+  /** For an event about a message, such as a pin: that message's ID. */
+  readonly message?: string;
   readonly send_id?: string;
   /** url: a path relative to the platform directory. */
   readonly files?: readonly { name?: string; type?: string; url?: string }[];
@@ -208,6 +210,11 @@ export class TestGateway {
   /** A person sends a message with files. Returns the new message's ID on the platform. */
   share(place: string, person: string, text: string, files: NonNullable<PlatformRecord["files"]>, thread?: string): string {
     return this.#append({ type: "message", place, person, text, files, ...(thread ? { thread } : {}) });
+  }
+
+  /** The platform posts a system message, such as a pin, about a message. Returns the event's ID on the platform. */
+  notice(place: string, person: string, text: string, message: string): string {
+    return this.#append({ type: "system", place, person, text, message });
   }
 
   #append(record: Omit<PlatformRecord, "id" | "at">): string {

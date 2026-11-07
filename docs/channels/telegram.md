@@ -21,7 +21,7 @@ Written for a bot that connects itself; a person can follow it too. The bot gets
 
 In a group with topics, each topic is a thread. A reply to a message in a topic stays in that topic. If that message was deleted, the reply can fail; then send to the topic or the group instead.
 
-Turning topics on makes a group a supergroup, which is a new chat with a new address. The log has an update in each of the two chats that gives the other's address, and a send to the old address fails with an error that gives the new one.
+Turning topics on makes a group a supergroup, which is a new chat with a new address. The log has a system event in each of the two chats that gives the other's address, and a send to the old address fails with an error that gives the new one.
 
 A second Telegram bot is a second channel entry with its own `id` (for example `telegram-shop`) and its own env file.
 
@@ -45,5 +45,6 @@ To send a file, give its local path to `call`: `call <channel id> sendDocument {
 - In a chat that does not take rich messages, the text goes as a plain message with simpler formatting, and then a message has at most 4096 characters. The send error says so; send the text in parts.
 - The Bot API cannot read history. Messages that came while you were not running arrive when you connect again, but only from the last 24 hours.
 - Telegram does not say when a message is deleted.
+- Service messages, such as a pin, a new group name or a closed topic, are `system` events in the log, not messages; their text says what happened, and a pin is about the pinned message.
 - If the computer stops between Telegram taking a message you sent and Pots recording it, the message can go out twice.
 - You have at most one reaction on a message. A new one takes the place of the old one.

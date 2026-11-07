@@ -272,7 +272,7 @@ describe("Discord channel", () => {
     const [root, created, reply, , post] = await Promise.all(events.map(async (event) => (await translate(event.raw))[0]!));
     expect(root).toMatchObject({ message: "discord:#20/600", place: { address: "discord:#20" } });
     expect(root!.thread).toBeUndefined();
-    expect(created).toMatchObject({ kind: "update", thread: "discord:#20/600", person: { address: "discord:@200" }, text: "Release plan", fromMe: false });
+    expect(created).toMatchObject({ kind: "system", thread: "discord:#20/600", person: { address: "discord:@200" }, text: 'started the thread "Release plan"', fromMe: false });
     expect(reply).toMatchObject({
       kind: "message",
       place: { address: "discord:#20", name: "Lab #general" },
@@ -296,6 +296,25 @@ describe("Discord channel", () => {
     ]);
     // The same welcome message read again by a backfill is no second join.
     expect(await translate({ source: "history", message: alice!.raw.d })).toEqual([]);
+  });
+
+  it("logs other system messages as system events in words, and a pin as about the pinned message", async () => {
+    const { gateway, translate } = await connect();
+    const events = await gateway([
+      ["MESSAGE_CREATE", message({ id: "520", type: 6, content: "", message_reference: { channel_id: "20", message_id: "501" } })],
+      ["MESSAGE_CREATE", message({ id: "521", type: 4, content: "launch-room" })],
+      ["MESSAGE_CREATE", message({ id: "522", type: 25, content: "joined Gold" })],
+      ["THREAD_UPDATE", { ...thread("600", "20", "Release plan"), thread_metadata: { archived: true } }],
+    ]);
+    const [pin, renamed, other, archived] = await Promise.all(events.map(async (event) => (await translate(event.raw))[0]!));
+    expect(pin).toEqual(
+      expect.objectContaining({ kind: "system", place: expect.objectContaining({ address: "discord:#20" }), message: "discord:#20/501", person: expect.objectContaining({ address: "discord:@200" }), fromMe: false, text: "pinned a message" }),
+    );
+    expect(renamed).toMatchObject({ kind: "system", message: "discord:#20/521", text: 'changed the channel\'s name to "launch-room"' });
+    expect(other).toMatchObject({ kind: "system", text: "Discord system message RoleSubscriptionPurchase: joined Gold" });
+    expect(archived).toMatchObject({ kind: "system", thread: "discord:#20/600", text: 'the thread "Release plan" was archived' });
+    // Read again by a backfill, a system message would be a second event.
+    expect(await translate({ source: "history", message: events[0]!.raw.d })).toEqual([]);
   });
 
   it("leaves out the system message of a thread start, which THREAD_CREATE logs", async () => {

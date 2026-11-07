@@ -360,6 +360,7 @@ const KINDS: Record<string, string> = {
   join: "joined",
   leave: "left",
   update: "message changed (not the text)",
+  system: "system message",
 };
 
 const PLACE_KINDS = { channel: "channel", dm: "DM", group: "group chat" } as const;

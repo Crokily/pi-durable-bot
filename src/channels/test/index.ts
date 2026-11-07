@@ -164,7 +164,7 @@ class TestChannel implements ChannelAdapter {
       case "reaction_removed":
         return [{ kind: record.type, ...common, ...message, text: `:${record.emoji ?? "?"}:` }];
       default:
-        return [{ kind: record.type, ...common, ...message }];
+        return [{ kind: record.type, ...common, ...message, ...(record.text !== undefined ? { text: record.text } : {}) }];
     }
   }
 

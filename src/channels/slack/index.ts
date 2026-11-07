@@ -420,16 +420,19 @@ class SlackChannel implements ChannelAdapter {
       const ts = (this.#parse(address) as { ts?: string }).ts;
       if (ts) threads.add(ts);
     }
+    // Slack gives the newest messages first, page by page. All pages are read first, and then stored oldest first: a
+    // stop in the middle then leaves no gap before the newest logged message, where the next backfill starts.
+    const pages: SlackMessage[][] = [];
     for await (const page of paginate((cursor) =>
       client.conversations.history({ channel, oldest: since, inclusive: false, limit: 200, include_all_metadata: true, ...(cursor ? { cursor } : {}) }),
     )) {
-      const messages = ((page as { messages?: SlackMessage[] }).messages ?? []).slice().reverse();
-      for (const message of messages) {
-        if (!message.ts) continue;
-        await sink.receive(`history:${channel}:${message.ts}:${message.edited?.ts ?? ""}`, { source: "history", channel, message } satisfies Raw);
-        added++;
-        if (message.latest_reply && message.latest_reply > since) threads.add(message.ts);
-      }
+      pages.push((page as { messages?: SlackMessage[] }).messages ?? []);
+    }
+    for (const message of pages.flat().reverse()) {
+      if (!message.ts) continue;
+      await sink.receive(`history:${channel}:${message.ts}:${message.edited?.ts ?? ""}`, { source: "history", channel, message } satisfies Raw);
+      added++;
+      if (message.latest_reply && message.latest_reply > since) threads.add(message.ts);
     }
     for (const thread of threads) {
       try {

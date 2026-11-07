@@ -371,9 +371,9 @@ describe("backfill", () => {
       threads: { "slack:#C0GENERAL": ["slack:#C0GENERAL/1793080000.000100", "slack:#C0GENERAL/1793079000.000100"] },
     });
     fake.conversations.set("C0SECRET", { id: "C0SECRET", name: "secret", is_channel: true, is_member: true });
-    // #general: the logged message, then new ones.
+    // #general: the logged message, then 250 new ones, which Slack gives in two pages, the newest first.
     fake.post(GENERAL.id, { user: ALICE.id, text: "logged", ts: TS });
-    const later = Array.from({ length: 5 }, (_, index) => `${1793080300 + index}.000100`);
+    const later = Array.from({ length: 250 }, (_, index) => `${1793080300 + index}.000100`);
     for (const ts of later) fake.post(GENERAL.id, { user: BOB.id, text: `new ${ts}`, ts });
     // A logged thread with a new reply and an old one, a new thread found from history, and a thread whose first
     // message is gone.
@@ -388,11 +388,14 @@ describe("backfill", () => {
 
     await channel.backfill(sink);
     const ids = events.map((event) => event.id);
-    expect(ids.slice(0, 5)).toEqual(later.map((ts) => `history:C0GENERAL:${ts}:`));
-    expect(ids.slice(5)).toEqual(["history:C0GENERAL:1793090000.000100:", "history:C0GENERAL:1793090001.000100:", `history:D0ALICE:${(lastAlive / 1000 + 60).toFixed(6)}:`]);
+    expect(ids.slice(0, 250)).toEqual(later.map((ts) => `history:C0GENERAL:${ts}:`));
+    expect(ids.slice(250)).toEqual(["history:C0GENERAL:1793090000.000100:", "history:C0GENERAL:1793090001.000100:", `history:D0ALICE:${(lastAlive / 1000 + 60).toFixed(6)}:`]);
     // History is read after the place's start, with the metadata that holds send IDs.
     const histories = fake.called("conversations.history");
-    expect(histories.filter((call) => call.params.channel === GENERAL.id).map((call) => [call.params.oldest, call.params.inclusive])).toEqual([[TS, "false"]]);
+    expect(histories.filter((call) => call.params.channel === GENERAL.id).map((call) => [call.params.oldest, call.params.inclusive, call.params.cursor])).toEqual([
+      [TS, "false", undefined],
+      [TS, "false", "200"],
+    ]);
     expect(histories.every((call) => call.params.include_all_metadata === "true")).toBe(true);
     expect(histories.find((call) => call.params.channel === DM.id)!.params.oldest).toBe(since);
     // Each thread is read from the place's start: the logged ones, and the one history showed with a new reply.
@@ -403,9 +406,9 @@ describe("backfill", () => {
     ]);
     // A place that cannot be read is logged and skipped; a thread that is gone is skipped quietly.
     expect(logs.filter((line) => line.startsWith("backfill skipped a place"))).toEqual([expect.stringContaining('"channel":"C0SECRET"')]);
-    expect(logs.at(-1)).toBe('backfill done {"messages":8}');
+    expect(logs.at(-1)).toBe('backfill done {"messages":253}');
 
-    expect(await channel.translate(events[5]!.raw)).toMatchObject([
+    expect(await channel.translate(events[250]!.raw)).toMatchObject([
       { kind: "message", message: "slack:#C0GENERAL/1793090000.000100", thread: "slack:#C0GENERAL/1793080000.000100", person: { address: "slack:@U0BOB" }, text: "new reply" },
     ]);
   });

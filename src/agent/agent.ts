@@ -2,11 +2,12 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT, type Context, withTelemetry } from "@earendil-works/chord/context";
-import { type Message, type Models, Type } from "@earendil-works/pi-ai";
+import type { Message, Models } from "@earendil-works/pi-ai";
 import { calculateContextTokens, estimateMessageTokens } from "@earendil-works/pi-ai/utils/estimate";
 import {
   configure,
   type Conversation,
+  type ConversationDocToken,
   type ConversationId,
   createRegistry,
   DEFAULT_COMPACTION_POLICY,
@@ -15,7 +16,11 @@ import {
   GenerationTask,
   Harness,
   hook,
+  type JsonObject,
+  LiveDoc,
+  type LiveState,
   type ModelRef,
+  type Observer,
   type PromptInput,
   ROOT_CONVERSATION_ID,
   type SubmissionId,
@@ -25,11 +30,11 @@ import {
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
-import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
+import { type SqliteDatabase, SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { type BashExecution, createBashTool, createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
+import { bool, map, obj, opt, str, unknown } from "@earendil-works/pi-schema";
 import type { TelemetryCarrier, TelemetryContext, TelemetrySpan } from "@earendil-works/pi-telemetry";
-import type { Sql } from "../core/sql.ts";
 import { type ChildEnd, type ChildInfo, type ChildRecord, type ChildrenState, Children, childInfo, childrenExtension, reportRequestId } from "./children.ts";
 import { deleteLeftForks, lastAnswer, type MemoryHost, MemoryPasses, readPaths, withAgeNote } from "./memory.ts";
 import { modelRef, requireModel } from "./models.ts";
@@ -67,13 +72,16 @@ export interface Compaction {
   backgroundTokens?: number;
 }
 
+/** The bot's SQLite connection, pi-durable's. The gateway and the bot use it as `Sql`. */
+export type Database = SqliteDatabase;
+
 /** Open the bot's SQLite file. The one connection is shared: the agent's tables start with pi_, the others use it too. */
-export function openDatabase(path: string): Promise<Sql & { close(): Promise<void> }> {
+export function openDatabase(path: string): Promise<Database> {
   return openNodeSqliteDatabase(path);
 }
 
 export interface AgentOptions {
-  database: Sql & { close(): Promise<void> };
+  database: Database;
   /** pi's model layer, from openModels(). */
   models: Models;
   /** "provider/modelId". */
@@ -258,7 +266,7 @@ export class Agent {
           "Say something in a channel. to: a place, thread, message or person address, copied from a wake message or the log. " +
           "A place gets a new message; a thread or message gets a reply in that thread; a person gets a DM. text: Markdown; " +
           "write <person address> to mention someone. Sent exactly once, also across restarts. Returns the new message's address.",
-        parameters: Type.Object({ to: Type.String(), text: Type.String() }),
+        parameters: obj({ to: str(), text: str() }, { open: true }),
         // A rerun after a crash keeps the task ID, so the outbox finds the first attempt instead of sending again.
         replay: "safe",
         execute: async (args, api, call) => {
@@ -269,7 +277,7 @@ export class Agent {
       defineTool({
         name: "react",
         description: "Add an emoji reaction to a message (message address), for example eyes or white_check_mark. remove: true takes it away.",
-        parameters: Type.Object({ message: Type.String(), emoji: Type.String(), remove: Type.Optional(Type.Boolean()) }),
+        parameters: obj({ message: str(), emoji: str(), remove: opt(bool()) }, { open: true }),
         replay: "safe",
         execute: async (args, _api, call) => {
           await actions.react(args.message, args.emoji, args.remove ?? false, call.telemetry);
@@ -282,7 +290,7 @@ export class Agent {
           "Call a platform API method directly, for what send and react do not cover, for example editing your own message or uploading a file. " +
           "channel: the channel account (the part of an address before the first colon). method and params: as the platform's API documents them; " +
           "take platform IDs from the raw column of the log. Returns the platform's answer as JSON.",
-        parameters: Type.Object({ channel: Type.String(), method: Type.String(), params: Type.Optional(Type.Record(Type.String(), Type.Any())) }),
+        parameters: obj({ channel: str(), method: str(), params: opt(map(unknown())) }, { open: true }),
         execute: async (args, api, call) => {
           const result = JSON.stringify(await actions.call(args.channel, args.method, args.params ?? {}, call.telemetry), null, 1) ?? "null";
           if (result.length <= CALL_OUTPUT_CHARS) return { output: text(result) };
@@ -450,7 +458,7 @@ export class Agent {
         },
         env: () => new NodeExecutionEnv({ cwd: options.workspace, shellEnv: options.shellEnv }),
         ...(options.telemetry ? { telemetry: options.telemetry } : {}),
-        onReport: (error, info) => options.log("pi report", { type: info.type, error: String(error) }),
+        onReport: (report) => options.log("pi report", { type: report.kind, error: String(report.error) }),
       },
       context,
     );
@@ -508,26 +516,49 @@ export class Agent {
   }
 
   async #watchRun(): Promise<void> {
-    const view = await this.#root.viewState(context);
-    const update = (value: { docs: Readonly<Record<string, unknown>> }) => {
-      const live = value.docs["pi.live"] as { run?: { inputs?: unknown[] } } | undefined;
-      const inputs = live?.run ? (live.run.inputs ?? []).map(String) : undefined;
+    const update = (live: Readonly<LiveState>) => {
+      const inputs = live.run?.inputs.map(String);
       const changed = (inputs === undefined) !== (this.#runInputs === undefined) || inputs?.join() !== this.#runInputs?.join();
       // A run ended (pi-durable can end one and start the next in one commit): the main agent's screen lease ends with
       // it, and a memory pass looks at it.
-      if (this.#runInputs !== undefined && inputs?.[0] !== this.#runInputs[0]) {
-        this.#releaseScreen(String(ROOT_CONVERSATION_ID));
-        void this.#remember(this.#runInputs);
-      }
+      const ended = this.#runInputs !== undefined && inputs?.[0] !== this.#runInputs[0] ? this.#runInputs : undefined;
       this.#runInputs = inputs;
-      if (changed) for (const listener of this.#runListeners) listener(inputs);
+      if (!ended && !changed) return;
+      // pi-durable calls an observer inside its commit, where it may not call pi-durable: the rest comes after it.
+      queueMicrotask(() => {
+        try {
+          if (ended) {
+            this.#releaseScreen(String(ROOT_CONVERSATION_ID));
+            void this.#remember(ended);
+          }
+          if (changed) for (const listener of this.#runListeners) listener(inputs);
+        } catch (error) {
+          this.#options.log("a run change failed", { error: String(error) });
+        }
+      });
     };
-    update(view.value);
-    const unsubscribe = view.subscribe(update);
-    this.#disposeView = () => {
-      unsubscribe();
-      view.dispose();
+    this.#disposeView = await this.#observe(LiveDoc, update);
+  }
+
+  /**
+   * Follow a document of the main conversation: `update` gets its value now, then the value of every commit that changes
+   * it, one call each, not folded. It runs inside pi-durable's commit, so it only records. Returns how to stop.
+   */
+  async #observe<T extends JsonObject>(token: ConversationDocToken<T>, update: (value: Readonly<T>) => void): Promise<() => void> {
+    let changed = false;
+    const observer: Observer<Readonly<T>> = {
+      advance: (call) => {
+        if (call.kind !== "value") return;
+        changed = true;
+        update(call.value);
+      },
+      end: () => {},
     };
+    const observation = await this.#harness.observeDoc(token, ROOT_CONVERSATION_ID, observer, context);
+    if (!observation) throw new Error("the main conversation has no such document");
+    // A change can come before the attachment resolves, and is newer than the attachment's value.
+    if (!changed) update(observation.value);
+    return () => observation.detach();
   }
 
   /** A memory pass for a run that ended with an answer. */
@@ -556,21 +587,13 @@ export class Agent {
     await this.#root.commit(async (tx) => {
       await tx.doc(Children, ROOT_CONVERSATION_ID);
     }, context);
-    const state = await this.#harness.documentState(Children, ROOT_CONVERSATION_ID, context);
-    if (!state) return;
-    const update = (value: Readonly<{ children: Readonly<Record<string, Parameters<typeof childInfo>[0]>> }> | null) => {
-      const list = Object.values(value?.children ?? {})
+    this.#disposeChildren = await this.#observe(Children, (value) => {
+      const list = Object.values(value.children)
         .map(childInfo)
         .sort((a, b) => a.startedAt - b.startedAt);
       this.#children = list;
       changed(list);
-    };
-    update(state.value);
-    const unsubscribe = state.subscribe(update);
-    this.#disposeChildren = () => {
-      unsubscribe();
-      state.dispose();
-    };
+    });
   }
 
   /** The main agent's children, oldest first. */

@@ -98,6 +98,8 @@ const DREAM_CHANGES = 5;
 const DAY = 86_400_000;
 /** A fork's shell command without a timeout of its own ends after this long, as Claude Code's Bash does by default. */
 const SHELL_TIMEOUT_SECONDS = 120;
+/** The codes of the error results pi-durable writes itself for a call that did not run, or did not run to its end. */
+const NOT_RUN = new Set(["tool_unavailable", "invalid_arguments", "blocked", "interrupted", "restart_limit", "aborted", "abandoned"]);
 
 /** Whether a dream is due after a pass. */
 export function dreamDue(progress: MemoryProgress, now = Date.now()): boolean {
@@ -415,9 +417,11 @@ export class MemoryPasses {
             if (call.name === "bash" && call.arguments.timeout === undefined) return { arguments: { ...call.arguments, timeout: SHELL_TIMEOUT_SECONDS } };
             return undefined;
           },
-          afterTool: async (call, _result, api) => {
+          afterTool: async (call, result, api) => {
             const state = fork(api.conversationId);
-            if (!state) return undefined;
+            // pi-durable also gives the results it writes itself, for a call that did not run, such as one refused above:
+            // a change on the disk then is another writer's.
+            if (!state || result.diagnostics?.some((each) => each.code !== undefined && NOT_RUN.has(each.code))) return undefined;
             // By what is on the disk: an rm that failed for one file may have deleted another.
             for (const path of targets(call.name, call.arguments, this.#cwd)) {
               const now = await stateOf(path);

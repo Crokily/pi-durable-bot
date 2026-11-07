@@ -452,6 +452,21 @@ describe("backfill", () => {
 });
 
 describe("sending", () => {
+  it("refuses a text over 12000 characters as Slack gets it, and never cuts one", async () => {
+    const { fake, channel } = await connect();
+    expect(channel.checkText!("slack:#C0GENERAL", "x".repeat(12000))).toBeUndefined();
+    // A person address becomes the shorter <@U0ALICE> before the count, and an emoji counts once.
+    expect(channel.checkText!("slack:#C0GENERAL", `${"x".repeat(11990)}<slack:@U0ALICE>`)).toBeUndefined();
+    expect(channel.checkText!("slack:#C0GENERAL", "😀".repeat(12000))).toBeUndefined();
+    const refusal = "Slack allows at most 12000 characters in one message; this one has 12001. Send it in parts.";
+    expect(channel.checkText!("slack:#C0GENERAL", "x".repeat(12001))).toBe(refusal);
+    await expect(channel.send("slack:#C0GENERAL", "x".repeat(12001), "tool:1")).rejects.toThrow(refusal);
+    expect(fake.called("chat.postMessage")).toEqual([]);
+    // At the limit, the text goes out whole.
+    await channel.send("slack:#C0GENERAL", "x".repeat(12000), "tool:2");
+    expect(fake.called("chat.postMessage")[0]!.params.markdown_text).toBe("x".repeat(12000));
+  });
+
   it("posts Markdown with mentions by address; a reply goes in the message's thread, with the send ID in the metadata", async () => {
     const { fake, channel } = await connect();
     fake.post(GENERAL.id, { user: ALICE.id, text: "release plan?", ts: TS });

@@ -53,6 +53,8 @@ type SlackRawEvent = SlackMessage & {
 };
 
 const PLACE_TTL_MS = 60 * 60_000;
+/** Slack's limit for markdown_text, in which the channel posts: https://docs.slack.dev/reference/methods/chat.postMessage */
+const MAX_LENGTH = 12_000;
 
 /** apiUrl: Slack's Web API, by default https://slack.com/api/. Only tests give another one, a fake Slack. */
 export function createChannel(config: ChannelConfig, env: ChannelEnv, apiUrl?: string): ChannelAdapter {
@@ -460,9 +462,17 @@ class SlackChannel implements ChannelAdapter {
 
   // ---- Send ----
 
+  checkText(_to: Address, text: string): string | undefined {
+    return refusal(this.#outgoing(text));
+  }
+
+  /** Post the text as Markdown. A text over Slack's limit is refused, never cut. */
   async send(to: Address, text: string, sendId: string): Promise<SentMessage> {
+    const markdown = this.#outgoing(text);
+    const refused = refusal(markdown);
+    if (refused) throw new Error(refused);
     const { channel, threadTs } = await this.#target(to);
-    const posted = await this.#sdk!.postWithSendId(this.#sdk!.threadIdFor(channel, threadTs), this.#outgoing(text), sendId);
+    const posted = await this.#sdk!.postWithSendId(this.#sdk!.threadIdFor(channel, threadTs), markdown, sendId);
     const response = posted.raw as { channel?: string; message?: SlackMessage };
     const message: SlackMessage = {
       metadata: { event_type: SEND_EVENT_TYPE, event_payload: { send_id: sendId } },
@@ -581,6 +591,12 @@ function files(message: SlackMessage): { files?: FileInfo[] } {
       ...(typeof file.size === "number" ? { size: file.size } : {}),
     })),
   };
+}
+
+/** Why Slack would not take this Markdown whole: its length, with mentions already in Slack's form. */
+function refusal(markdown: string): string | undefined {
+  const length = [...markdown].length;
+  return length > MAX_LENGTH ? `Slack allows at most ${MAX_LENGTH} characters in one message; this one has ${length}. Send it in parts.` : undefined;
 }
 
 function tsToMs(ts: string | undefined): number {

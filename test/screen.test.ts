@@ -73,9 +73,10 @@ describe("the screen tool in a codemode script", { timeout: 60_000 }, () => {
   // An agent of its own, with a lease file of its own: a real gateway would share the machine's lease file, and on macOS
   // and Windows its one screen, with any Pots that runs on this computer.
   const SCREEN = "test-screen";
-  /** The script calls the screen tool. Its command says it started, then runs until the test removes the hold file. */
+  /** The script calls the screen tool. Its command says it started (the file appears only with its text in it), then runs
+   * until the test removes the hold file. */
   const SCRIPT = `try {
-  const result = await tools.screen({ command: 'echo "$POTS_TEST_SCREEN" > started; while [ -e hold ]; do sleep 0.1; done; echo on the screen' });
+  const result = await tools.screen({ command: 'echo "$POTS_TEST_SCREEN" > starting && mv starting started; while [ -e hold ]; do sleep 0.1; done; echo on the screen' });
   return "ran: " + result.output;
 } catch (error) {
   return "refused: " + error.message;

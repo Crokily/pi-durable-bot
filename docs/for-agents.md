@@ -69,6 +69,8 @@ Tell your person:
 | Command | What it does |
 |---|---|
 | `pots login` | Sign in to a model, or add an API key or a local server (in a terminal); `--list` shows what can be used |
+| `pots mcp add` / `list` / `remove` | MCP servers for every bot and pi on this computer, in pi's `~/.pi/agent/mcp.json`, with the options of `pi mcp` (`pots mcp --help`); the bot calls their tools from its code mode scripts |
+| `pots mcp login <server>` | Sign in to an MCP server in the browser (in a terminal) |
 | `pots status` | The gateway, the service and each bot |
 | `pots service logs` | The gateway's output |
 | `pots trace` | What a bot did: its last wakes, or one wake from its events to the messages it sent |

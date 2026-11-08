@@ -64,7 +64,7 @@ Being woken is not the same as speaking. Each time, the agent reads the log and 
 
 It has a real machine with a shell, files, the internet, and a screen it uses like a person: the browser and the apps on it, with the mouse and keyboard. It does not wait for a plugin. It writes the script it needs, runs it, fixes it, and keeps the useful ones. That covers research, spreadsheets, reports, monitoring a web page, filling a form, or booking a flight, and also code.
 
-This is **code mode**: the agent gets a few general tools (`read`, `write`, `edit`, `bash`, `screen`) plus three channel actions (`send`, `react`, `call`), and builds the rest itself. One more tool, `task`, hands work to its helpers (below).
+This is **code mode**: the agent gets a few general tools (`read`, `write`, `edit`, `bash`, `screen`) plus three channel actions (`send`, `react`, `call`), and builds the rest itself. One more tool, `task`, hands work to its helpers (below). With `codemode`, pi's code mode, it writes a JavaScript script that calls these tools and the tools of [MCP servers](#mcp-servers) in a sandbox; only what the script returns comes back to it.
 
 `screen` is `bash` with the screen's environment, such as `DISPLAY`; `bash` does not have it. A screen runs one task at a time, as a person's desktop does: the first `screen` command of an agent takes the screen until its work ends, also across bots and the Pots processes of the same user on the machine. Another agent that tries then learns who has it, since when, and when it frees, and decides itself what to do. A bot that sets up its own desktop, such as an Xvfb display, writes its environment into `screen` in its `bot.json`.
 
@@ -72,7 +72,7 @@ One agent at a time per screen is enforced only on Linux, where plain `bash` has
 
 ### 👥 Its own helpers
 
-Longer work does not keep it from talking. With its `task` tool the bot starts **children**: agents that work in the background with `read`, `write`, `edit`, `bash` and `screen`, without the channel actions and `task`, on a brief it writes for them. It answers the person first, hands the work to a child, and stays free for the next message. A child starts from an empty conversation and its brief, so the bot's own context stays small; it sees the bot's memory index as it was when it started. When a child ends, done, failed or with a question for a person, its final message comes back to the bot as a wake, exactly once, also across crashes and restarts; the bot passes on what matters, and sends the child the answer to its question. While a child works for a place, new messages there go to the bot, so it can pass them on. Its timed and fallback wakes list the children that work and how long each has run. A stopped child reports nothing and does nothing more, also when the process dies in the middle of the stop.
+Longer work does not keep it from talking. With its `task` tool the bot starts **children**: agents that work in the background with `read`, `write`, `edit`, `bash`, `screen` and `codemode`, without the channel actions and `task`, on a brief it writes for them. It answers the person first, hands the work to a child, and stays free for the next message. A child starts from an empty conversation and its brief, so the bot's own context stays small; it sees the bot's memory index as it was when it started. When a child ends, done, failed or with a question for a person, its final message comes back to the bot as a wake, exactly once, also across crashes and restarts; the bot passes on what matters, and sends the child the answer to its question. While a child works for a place, new messages there go to the bot, so it can pass them on. Its timed and fallback wakes list the children that work and how long each has run. A stopped child reports nothing and does nothing more, also when the process dies in the middle of the stop.
 
 Children use the bot's model, or the `childModel` of `bot.json`; a change counts for new children and those that exist, also when `childModel` is taken out. The bot chooses each child's thinking level when it starts it: `high`, `xhigh` or `max`, and without a choice the `childThinking` of `bot.json` (`xhigh` by default). A child keeps its level for its whole life, so a new `childThinking` counts for new children only; a level the model does not have becomes the nearest one it has, as in pi. `settings.maxChildren` (50 by default) caps how many work at once. `pots children` lists them, and `pots children --stop <id>` or `--stop-all` stops them.
 
@@ -155,6 +155,7 @@ It joins only the places it is invited to, like a new hire who is added to the r
 |---|---|
 | `pots init` | Set up your first bot, or another one |
 | `pots login` | Sign in to a model, or add an API key or a local server, for every bot on this computer; `--list` shows what can be used |
+| `pots mcp add \| remove \| list \| login \| logout` | The [MCP servers](#mcp-servers) of every bot on this computer, and sign-ins to them |
 | `pots chat` | Talk to a bot in this terminal |
 | `pots status` | The gateway, the service and each bot |
 | `pots service install \| uninstall \| restart \| logs` | The gateway as a background service: launchd on macOS, systemd on Linux (`--system` for a server), Task Scheduler on Windows |
@@ -203,6 +204,21 @@ Then set `"model": "ollama/qwen3:8b"`. The agent needs a model that calls tools 
 { "model": "llama.cpp/<your chat model>", "judge": "llama.cpp/Kev-4B-Q4_K_M" }
 ```
 
+### MCP servers
+
+The bot uses [MCP](https://modelcontextprotocol.io) servers through pi's own MCP support. They are set in pi's files: `~/.pi/agent/mcp.json` for every bot on the computer and the [pi](https://github.com/earendil-works/pi) command line, and `.pi/mcp.json` in a bot's `workspace/` for that bot alone. The bot's `codemode` scripts call their tools, as with pi's default exposure, so the tools the model is told about never change and the provider's prompt cache keeps serving; a section of the prompt lists the servers. A server added, removed or changed applies from the bot's next wake, with no restart.
+
+| Command | What it does |
+|---|---|
+| `pots mcp add <server> -- <command> [args...]` | Add a server that runs on this computer; `--url <url>` adds a remote one |
+| `pots mcp list` | Each server, whether it connects, and its tools |
+| `pots mcp login <server>` | Sign in to a server in your browser; `logout` signs out |
+| `pots mcp remove <server>` | Remove a server |
+
+`pots mcp` is pi's `pi mcp`, with the same options (`pots mcp --help`); npm links only `pots`, so `pi` may not be on your PATH. Sign-ins are stored in pi's `~/.pi/agent/mcp-auth.json`, and the bot uses a new one from its next request. When the browser is on another computer, as over SSH, paste the address the browser was sent to into the terminal.
+
+The bot also looks for a command line tool, an API or an MCP server before it uses the screen. When it finds a command line tool that has no skill yet, it offers to write one in `~/.agents/skills/`, so every bot and pi know when and how to use it.
+
 ## How it decides to act
 
 ```mermaid
@@ -240,8 +256,8 @@ flowchart LR
   end
   subgraph Bot[Bot]
     P[Persona, responsibilities, notes, timers]
-    A[pi-durable agent<br/>read write edit bash screen<br/>send react call task]
-    C[Children<br/>read write edit bash screen]
+    A[pi-durable agent<br/>read write edit bash screen<br/>send react call task codemode]
+    C[Children<br/>read write edit bash screen codemode]
     A --> C
   end
   S --> I
@@ -301,7 +317,7 @@ pi-durable-bot runs every day as a teammate in a real workspace. What works toda
 - [x] Any model pi can use: subscription logins, API keys, OpenAI-compatible endpoints, local models
 - [x] A judge you choose: the bot's own model, Jev or another classifier, a local llama.cpp model, or none
 - [x] `AGENTS.md`, Agent Skills and images as in a pi session
-- [ ] MCP servers
+- [x] MCP servers and code mode, through pi's own MCP support
 - [ ] More adapters: Teams, email
 - [ ] `pots init` in a web page, for people who do not use a terminal
 

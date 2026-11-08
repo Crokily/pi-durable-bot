@@ -20,16 +20,19 @@ export interface PiResources {
   projectContext(): string | undefined;
   /** pi's <skills> section, or undefined without skills. */
   skills(): string | undefined;
+  /** Whether pi trusts the working directory's own resources, such as .pi/skills and .pi/mcp.json, as a pi session does. */
+  projectTrusted(): boolean;
 }
 
 export async function openResources(cwd: string, log: (message: string, data?: Record<string, unknown>) => void): Promise<PiResources> {
   // The loader from pi's public entry; pi does not export how it writes the two sections.
-  const [{ DefaultResourceLoader: Loader, getAgentDir }, { buildSystemPromptSections }] = await Promise.all([
+  const [{ DefaultResourceLoader: Loader, getAgentDir, SettingsManager }, { buildSystemPromptSections }] = await Promise.all([
     import("@earendil-works/pi-coding-agent"),
     import(piModule("./core/system-prompt.js")) as Promise<{ buildSystemPromptSections: BuildSections }>,
   ]);
   // Only what a pi session puts in its system prompt; pi's extensions, prompt templates and themes are for its terminal.
-  const loader = new Loader({ cwd, agentDir: getAgentDir(), noExtensions: true, noPromptTemplates: true, noThemes: true });
+  const settingsManager = SettingsManager.create(cwd, getAgentDir());
+  const loader = new Loader({ cwd, agentDir: getAgentDir(), settingsManager, noExtensions: true, noPromptTemplates: true, noThemes: true });
   let sections: Record<string, string> = {};
   let warnings = "";
   const load = async () => {
@@ -47,6 +50,7 @@ export async function openResources(cwd: string, log: (message: string, data?: R
     reload: () => (loading ??= load().finally(() => (loading = undefined))),
     projectContext: () => sections.project_context,
     skills: () => sections.skills,
+    projectTrusted: () => settingsManager.isProjectTrusted(),
   };
   await resources.reload();
   return resources;

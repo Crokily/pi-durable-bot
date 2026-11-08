@@ -36,6 +36,8 @@ import { type BashExecution, createBashTool, createEditTool, createReadTool, cre
 import { bool, map, obj, opt, str, unknown } from "@earendil-works/pi-schema";
 import type { TelemetryCarrier, TelemetryContext, TelemetrySpan } from "@earendil-works/pi-telemetry";
 import { type ChildEnd, type ChildInfo, type ChildRecord, type ChildrenState, Children, childInfo, childrenExtension, reportRequestId } from "./children.ts";
+import type { Codemode } from "./codemode.ts";
+import type { Mcp } from "./mcp.ts";
 import { deleteLeftForks, lastAnswer, type MemoryHost, MemoryPasses, readPaths, withAgeNote } from "./memory.ts";
 import { modelRef, requireModel } from "./models.ts";
 import { NO_SCREEN, renderBusy, type Screen, ScreenLeases } from "./screen.ts";
@@ -132,6 +134,13 @@ export interface AgentOptions {
   refreshPinned?: () => Promise<void>;
   /** The memory passes after each run of the main conversation, the dream and the age note; without it, there are none. */
   memory?: MemoryHost;
+  /** pi's code mode: the codemode tool of the main agent and of every child, also without an MCP server. */
+  codemode: Codemode;
+  /**
+   * The bot's MCP servers, whose tools codemode scripts call: one set of connections for the main agent and its
+   * children. Closed with the agent.
+   */
+  mcp?: Mcp;
   actions: AgentActions;
   /** Where pi-durable's and pi-ai's spans go: submissions, task phases, tool calls, model requests. */
   telemetry?: TelemetryContext;
@@ -140,7 +149,8 @@ export interface AgentOptions {
 
 export interface AgentSection {
   name: string;
-  render: () => Promise<string | undefined> | string | undefined;
+  /** input: the request's, with the tools of its agent; absent when the context use is estimated before an answer. */
+  render: (input?: PromptInput, context?: Context) => Promise<string | undefined> | string | undefined;
   /**
    * Keep the text it had when the page began: a new text shows after the page turns or pi compacts. A change in the
    * middle of a page is sent again at the end of the conversation; on a model that takes system text only at the start,
@@ -187,8 +197,9 @@ let images: ReturnType<typeof createNodePhotonImages> | undefined;
 
 /**
  * The bot's agent: one long-lived pi-durable conversation (the root). Tools: read, write, edit, bash, screen (bash with
- * the screen's environment and a lease on the screen), the channel actions send, react and call, and task. Its children
- * have read, write, edit, bash and screen. Everything else the agents do with code.
+ * the screen's environment and a lease on the screen), the channel actions send, react and call, task, and codemode
+ * (scripts that call the other tools and the MCP servers' tools). Its children have read, write, edit, bash, screen and
+ * codemode. Everything else the agents do with code.
  */
 export class Agent {
   readonly #options: AgentOptions;
@@ -359,7 +370,7 @@ export class Agent {
       return answer;
     };
     const render = (part: AgentSection) => async (input: PromptInput, context: Context) => {
-      const text = await part.render();
+      const text = await part.render(input, context);
       // A section without a text leaves at once, also a pinned one, as the memory section when the memory is turned off.
       if (!part.pin || text === undefined) return text;
       const shown = input.shown[part.name];
@@ -384,7 +395,7 @@ export class Agent {
     // A child is a conversation of its own, not a fork: a pinned section shows the text of its first request, also after
     // pi compacts the child, when the conversation no longer shows it.
     const childRender = (part: AgentSection) => async (input: PromptInput, context: Context) => {
-      const text = await part.render();
+      const text = await part.render(input, context);
       if (!part.pin || text === undefined) return text;
       return input.shown[part.name] ?? (await firstText(input.conversationId, part.name, context)) ?? text;
     };
@@ -406,6 +417,23 @@ export class Agent {
         createBashTool({ prepare: environment() }),
       ],
     });
+    // pi's code mode, for the main agent and its children. As in pi, a script waits for the MCP servers it names, or for
+    // all of them when it looks tools up, so it sees their tools. A server that connected meanwhile came after this
+    // call's phase resolved the agent: then the script gets the agent as it is now, with that server's tools.
+    const [script, ...scriptModels] = options.codemode.tools;
+    const codemodeTool = defineTool({
+      ...script!,
+      execute: async (args, api, call) => {
+        const code = (args as { code?: unknown }).code;
+        if (!(await options.mcp?.ready(typeof code === "string" ? code : "", call.abortSignal))) return script!.execute(args, api, call);
+        const now = await (await harness!.conversation(api.conversationId, call))!.agent(call);
+        const current = new Proxy(api, { get: (target, property) => (property === "agent" ? async () => now : Reflect.get(target, property, target)) });
+        return script!.execute(args, current, call);
+      },
+    });
+    const codemode = defineExtension({ name: "codemode", tools: [codemodeTool, ...scriptModels] });
+    // The servers' tools, which only scripts call: a new extension of the same name each time servers connect or go.
+    const mcp = () => options.mcp?.extension() ?? defineExtension({ name: "mcp" });
     let agent: Agent | undefined;
     const self = () => {
       if (!agent) throw new Error("the agent is still starting");
@@ -415,7 +443,7 @@ export class Agent {
       agent: () => ({ model: self().#childModel(), thinkingLevel: options.children.thinking() }),
       max: () => options.children.max(),
       place: () => options.children.place(),
-      extensions: () => ({ child: [coding, child] }),
+      extensions: () => ({ child: [coding, child, codemode, mcp()] }),
       ended: (end, context) => options.children.ended(end, context),
       withdraw: async (submission) => {
         await self().#harness.abortSubmission(Number(submission) as SubmissionId, context, ROOT_CONVERSATION_ID);
@@ -431,6 +459,9 @@ export class Agent {
     registry.install(bot);
     registry.install(tasks);
     registry.install(child);
+    registry.install(codemode);
+    registry.install(mcp());
+    options.mcp?.onChange(() => registry.install(mcp()));
     if (memory) registry.install(memory.extension);
 
     harness = await Harness.open(
@@ -440,7 +471,7 @@ export class Agent {
         registry,
         settings: {
           // The main agent's; a child selects its own.
-          extensions: [coding, bot, tasks],
+          extensions: [coding, bot, tasks, codemode, mcp()],
           // Several queued wakes go into one run.
           steeringMode: "all",
           followUpMode: "all",
@@ -695,6 +726,8 @@ export class Agent {
       await passes;
     } finally {
       this.#releaseScreen();
+      // After the harness, so no script calls a server that stops.
+      await this.#options.mcp?.close();
     }
   }
 

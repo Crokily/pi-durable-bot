@@ -15,4 +15,6 @@ process.emitWarning = ((warning: string | Error, ...rest: unknown[]) => {
   return (emitWarning as (...args: unknown[]) => void).call(process, warning, ...rest);
 }) as typeof process.emitWarning;
 
-await import("./commands.ts");
+// pots mcp is pi's own command, with pi's options, so it does not go through the parser of the other commands.
+if (process.argv[2] === "mcp") await (await import("./mcp.ts")).runMcp(process.argv.slice(3));
+else await import("./commands.ts");

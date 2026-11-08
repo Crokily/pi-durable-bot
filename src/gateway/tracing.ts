@@ -30,7 +30,7 @@ CREATE INDEX IF NOT EXISTS gw_spans_name ON gw_spans (name, start_at);
 `;
 
 /** Spans older than this are deleted. */
-const SPAN_RETENTION_DAYS = 7;
+export const SPAN_RETENTION_DAYS = 7;
 /** Ended spans are written in batches this often. */
 const FLUSH_MS = 1_000;
 const PRUNE_MS = 3_600_000;

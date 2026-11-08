@@ -125,6 +125,23 @@ describe("memory", { timeout: 90_000 }, () => {
     expect(agentRequests(model).at(-1)!.system).toMatch(/shares, as it was when this page began\):\n\n- \[Time zone\]\(tz\.md\) — Australia\/Sydney$/);
   });
 
+  it("refuses a fork's codemode call, so a script cannot get around the fork's limits", async () => {
+    const outside = join(tmpdir(), `pots-codemode-${process.pid}-${Date.now()}.txt`);
+    await setUp((request) => {
+      if (turn(request) > 0) return { text: "Nothing to save." };
+      // A script whose calls the fork may not make itself: a write outside the memory folders, and a send.
+      const code = `await tools.write({ path: ${JSON.stringify(outside)}, content: "hi" });\nawait tools.send({ to: "test:#general", text: "from a script" });`;
+      return { call: { name: "codemode", arguments: { code } } };
+    });
+    gateway.say("general", "alice", `@${ME} hello`);
+    await waitFor(() => passes().length === 1, { what: "the memory pass" });
+    const result = model.requests.filter(isMemoryPass).at(-1)!.messages.at(-1)!;
+    expect(result.role).toBe("tool");
+    expect(result.content).toMatch(/only read, read-only bash, and write\/edit of \.md files within .* are allowed in this context/);
+    expect(existsSync(outside)).toBe(false);
+    expect(gateway.sent().map((record) => record.text)).toEqual(["ack: [wake] someone mentioned you"]);
+  });
+
   it("ends a pass after 5 turns", async () => {
     await setUp(() => ({ call: { name: "read", arguments: { path: join(own(), "MEMORY.md") } } }));
     gateway.say("general", "alice", `@${ME} hello`);

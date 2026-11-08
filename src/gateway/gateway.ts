@@ -10,7 +10,8 @@ import { Attachments } from "./files.ts";
 import { Inbox } from "./inbox.ts";
 import { MessageLog } from "./log.ts";
 import { Outbox, type OutboxHooks, type SendResult } from "./outbox.ts";
-import { type Timer, Timers } from "./timers.ts";
+import type { Routine, RoutineInput, RoutineListing } from "./routines.ts";
+import { type AddedTimer, type Timer, Timers, type WakeOptions } from "./timers.ts";
 import { type PiTelemetry, Telemetry } from "./telemetry.ts";
 import { tracingLayer, WakeSpans } from "./tracing.ts";
 import { Waker, type WakerHooks } from "./waker.ts";
@@ -291,7 +292,7 @@ export class Gateway {
 
 const stopped = () => new Error("the gateway is stopped");
 
-/** The bot's timers, in promises. */
+/** The bot's timers and routines, in promises. */
 export class TimersHandle {
   readonly #run: <A, E>(effect: Effect.Effect<A, E, Services>) => Promise<A>;
 
@@ -307,8 +308,8 @@ export class TimersHandle {
     return this.#run(Timers.use((timers) => timers.stop));
   }
 
-  add(dueAt: number, note: string): Promise<Timer> {
-    return this.#run(Timers.use((timers) => timers.add(dueAt, note)));
+  add(dueAt: number, note: string, options?: WakeOptions): Promise<AddedTimer> {
+    return this.#run(Timers.use((timers) => timers.add(dueAt, note, options)));
   }
 
   cancel(id: number): Promise<boolean> {
@@ -321,5 +322,17 @@ export class TimersHandle {
 
   pending(): Promise<Timer[]> {
     return this.#run(Timers.use((timers) => timers.pending));
+  }
+
+  addRoutine(input: RoutineInput): Promise<{ routine: Routine; replaced: boolean }> {
+    return this.#run(Timers.use((timers) => timers.addRoutine(input)));
+  }
+
+  removeRoutine(name: string): Promise<boolean> {
+    return this.#run(Timers.use((timers) => timers.removeRoutine(name)));
+  }
+
+  routines(): Promise<RoutineListing> {
+    return this.#run(Timers.use((timers) => timers.routines));
   }
 }

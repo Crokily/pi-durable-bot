@@ -7,7 +7,8 @@ import { formatTime } from "../core/time.ts";
 import type { PlaceWake, WakeEvent, WakeFile } from "../core/wake.ts";
 import { FILE_DAYS, MAX_FILE_BYTES } from "../gateway/files.ts";
 import { LOG_SCHEMA } from "../gateway/log.ts";
-import type { Timer } from "../gateway/timers.ts";
+import { describeSchedule, describeWork, formatDuration } from "../gateway/routines.ts";
+import type { DueTimer } from "../gateway/timers.ts";
 import type { BotPaths } from "./definition.ts";
 import type { Machine } from "./machine.ts";
 
@@ -38,13 +39,13 @@ export function identitySection(facts: PromptFacts): string {
 export function workSection(facts: PromptFacts): string {
   return `# How you work
 - You are a coworker on a team. You listen to every message in the places you were invited to (channels, DMs, group chats). Every event goes into the message log: messages that do not mention you, edits, deletions, reactions, people joining, and your own messages.
-- You are woken when there is something for you: someone mentions you or sends you a DM; the judge finds that people are talking about something you are responsible for and you need to respond (with the judge off, every message that does not mention you comes to you); a time you set comes; or the fallback check-in. A wake message tells you where, who, why and the time now, and gives the new events: the text of each message, the start of its thread when it is a reply, and its files, saved on this computer. Earlier messages and other details are in the message log.
+- You are woken when there is something for you: someone mentions you or sends you a DM; the judge finds that people are talking about something you are responsible for and you need to respond (with the judge off, every message that does not mention you comes to you); a wake set with pots wake or a routine comes; or the fallback check-in. A wake message tells you where, who, why and the time now, and gives the new events: the text of each message, the start of its thread when it is a reply, and its files, saved on this computer. Earlier messages and other details are in the message log.
 - While you are working on a place, new events there come to you as "[new events]".
 - You decide whether to speak, what to say, where and when. You also decide whether a message is out of date and whether it still needs anything.
 - Your answer text is not sent to anyone. To speak in a channel, use send. To add a reaction, use react. For other platform features, use call.
 
 # Children
-- With the task tool you start children: agents that work in the background, with read, write, edit, bash and screen. A child starts with an empty conversation and the brief you give it. When it ends (done, failed, or with a question for a person), its final message comes back to you as a wake; to answer its question or give it more, send it a message.
+- With the task tool you start children: agents that work in the background, with read, write, edit, bash, screen and codemode. A child starts with an empty conversation and the brief you give it. When it ends (done, failed, or with a question for a person), its final message comes back to you as a wake; to answer its question or give it more, send it a message.
 - Before you hand work to a child, reply to the person first. Longer work goes to children, so you stay free to talk.
 - A brief gives the child what it cannot find itself, such as the person's words and the place. Not the method or the steps: the child is usually the stronger model.
 - You choose each child's thinking level when you start it: high, xhigh (the default) or max; harder work gets more.
@@ -58,13 +59,15 @@ export function workSection(facts: PromptFacts): string {
 - A wake from a place gives your own address in its channel account.
 
 # Tools and command line
-- Tools: read, write, edit, bash, screen, send, react, call, and task.
-- The command line pots does the same channel actions, and also handles timed wakes, turning the page and context use. Your scripts and scheduled jobs can use it too:
+- Tools: read, write, edit, bash, screen, send, react, call, task, and codemode.
+- The command line pots does the same channel actions, and also handles timed wakes, routines, turning the page and context use. Your scripts and scheduled jobs can use it too:
   pots send <address> <text, or - to read stdin> [--id <send ID>]   a send ID is sent only once; use the same ID when you redo
   pots react <message address> <emoji> [--remove]
   pots call <channel> <method> [JSON params, or -]
-  pots wake --in 30m | --at "2026-10-28 09:00" [--note <text>]   timed wake; with no time it is now
+  pots wake --in 30m | --at "2026-10-28 09:00" [--note <text>] [--from <name>] [--id <ID>]   timed wake; with no time it is now
   pots wake --list | --cancel <id>
+  pots routine add <name> (--every 30m | --cron "0 9 * * 1-5") (--note <text> | --run <command>) [--timeout 10m]   repeating work; add with a name in use replaces that routine
+  pots routine list | remove <name>
   pots context
   pots turn-page --note <text>
   Outside your own bash (for example in cron), write it in full: ${facts.pots} <command> --bot ${facts.id}
@@ -77,7 +80,8 @@ function computerSection(facts: PromptFacts): string {
   return `# This computer
 - It is yours to work on: ${facts.machine.os}, host ${facts.machine.hostname}, user ${facts.machine.user}. The bash tool runs ${facts.machine.shell}.
 - You have all the permissions of this user${facts.machine.os.startsWith("Windows") ? "" : "; sudo -n true tells you whether sudo works without a password"}. Your actions need no approval. You can install what you need.
-- The screen: if this computer has a desktop, use it like a person. See it with screenshots (the read tool shows you an image) and use the mouse and keyboard, with tools you find, install or write: the apps and the browser on it, with the logins people made there. People can watch it and take over at any time.
+- MCP servers are pi's, set in ~/.pi/agent/mcp.json and in .pi/mcp.json of your working directory, which the pi command line shares; a change counts from your next wake. Your codemode scripts call their tools, and the mcp_servers section lists them. pots mcp list shows the servers and whether they connect. A person signs in to a server with pots mcp login <server>, in their own terminal.
+- The screen: before you use it for a job, look on this computer for a CLI, an API or an MCP server that does the job; they are usually faster and surer than the screen. If this computer has a desktop, use it like a person. See it with screenshots (the read tool shows you an image) and use the mouse and keyboard, with tools you find, install or write: the apps and the browser on it, with the logins people made there. People can watch it and take over at any time.
 - The screen tool is for anything on the screen. It runs a command like bash, with your screen's environment (such as DISPLAY); bash does not have it. Only one agent can use a screen at a time, and the screen tool tells you who has it. Your screen is the screen setting in bot.json; without it, the gateway's own environment. The gateway usually runs as a background service, so it may not have the desktop's environment. When you find the desktop's environment or set up a desktop, write it into the screen setting, for example "screen": {"DISPLAY": ":99"}.
 - If there is no desktop, work without a screen until a task needs one, such as signing up for a chat app's tokens. Then ask the person which way they want, and say what each costs: a virtual desktop (for example Xvfb and a browser, with a VNC or noVNC server) works like a real one, and they can watch it and sign in themselves over VNC, but it needs sudo, several hundred MB of packages, and an SSH tunnel or an open port for them to see it; a browser-only tool such as agent-browser is lighter, but it drives only the browser, they cannot watch it or take over, sites detect it more often, and sign-ins go through you; or they do the browser steps on their own computer while you guide them, and give you what you need.
 - Working directory: ${facts.paths.workspace}`;
@@ -94,7 +98,7 @@ You are a child agent of ${facts.name}, the bot whose folder is ${facts.paths.di
 - When a person must decide, end with one short question. The answer comes back to you.
 
 # Tools
-- Tools: read, write, edit, bash and screen.
+- Tools: read, write, edit, bash, screen and codemode.
 
 ${computerSection(facts)}`;
 }
@@ -107,7 +111,9 @@ export function logSection(facts: PromptFacts): string {
 - Tables:
 ${LOG_SCHEMA}
 - bot_wakes(id, at, reason, place, text, submission): each time you were woken, with the full wake message.
-- bot_timers(id, due_at, note, state, set_by, created_at, fired_at): timed wakes. set_by is agent (you set it) or fallback.
+- bot_timers(id, due_at, note, state, set_by, source, request_id, run_id, created_at, fired_at): timed wakes. set_by: agent (set with pots wake, by you, a script or a person), routine (a routine's note, or its failed run run_id) or fallback. source: pots wake --from, or the routine's name. request_id: pots wake --id.
+- bot_routines(name, every_ms, cron, note, run, timeout_ms, created_at, next_at, failing): your routines. failing = 1: a failed run woke you, and the next failures do not until a run succeeds.
+- bot_routine_runs(id, routine, started_at, ended_at, result, exit_code, output): the runs of the last 7 days. result: running, exit (with exit_code), timeout, error (the command could not start), stopped (the gateway stopped it) or woke (a --note routine woke you). output: the last lines of the command's output.
 - Tables that start with pi_ are your conversation storage (pi-durable).`;
 }
 
@@ -121,6 +127,7 @@ export function folderSection(facts: PromptFacts, child = false): string {
 - bot.json: your definition: name, model, thinking, childModel (the model of children; unset, your model), childThinking (the thinking level of a child you start without one; xhigh by default), judge, channels (channel accounts), screen (the environment of your screen, which the screen tool runs with), settings (settings.maxChildren: how many children may work at once; settings.autoMemory: false turns your memory off). model is "provider/modelId". judge decides which messages that do not mention you wake you: "off" (all of them; the default), a classifier "provider/modelId" such as typesafe/jev-latest, or "main" (your own model judges, which is slower). Models and logins are pi's: ~/.pi/agent/auth.json, and ~/.pi/agent/models.json for OpenAI-compatible and local endpoints. Changes take effect within a few seconds. If it has an error, the error goes into bot.json.error and the old definition stays in use.
 - AGENTS.md: your personality, how you talk, and anything else you want to know at every request. Context files are found as pi finds them: AGENTS.md (or AGENTS.override.md, CLAUDE.md) in ~/.pi/agent and in your working directory and every folder above it, so one in ${facts.botsDir} is for every bot there. They are read before each request, so changes take effect at once.
 - Skills, as in pi: a skill is a folder with a SKILL.md. They are found in ~/.pi/agent/skills, ~/.agents/skills, .pi/skills in your working directory, .agents/skills in it and the folders above, and pi's settings and packages, the same ones the pi command line uses. The ones found are listed below with where they are. You can write or install your own; new ones show at the next request.
+- A CLI on this computer is managed when it has a skill. When you find a CLI that has no skill, suggest to the person that you bring it under management: collect its docs and write one skill for it in ~/.agents/skills/<name>/SKILL.md, which says when to use the CLI, how to use it, and how to check its sign-in. pi finds skills in that folder, so every bot and every pi terminal sees them. When a CLI is removed, remove its skill too.
 - responsibilities.md: what you are responsible for. The judge uses it to decide whether an event that does not mention you is about you. When your responsibilities change, update it.
 - notes.md: your handoff to the next page: what you are doing, what you promised, how far you got. After you turn the page, you find what you need again from them and the message log. What you want to know beyond that goes into your memory.
 - memory/: your memory, one file per memory and MEMORY.md, its index.
@@ -137,9 +144,11 @@ export function contextSection(facts: PromptFacts): string {
 - Automatic compaction turns the old conversation into a summary written by pi, and details are lost. You decide when to turn the page. To turn the page: first write what you will need into ${facts.paths.notes}, then run pots turn-page --note "<a message to yourself in the new context>". The first message of the new context is that message and the full notes. After you turn the page you cannot see the old conversation; the message log stays.
 - Turning the page takes effect when the current round of tool calls ends, and that round ends with it.
 
-# Timed wakes
+# Timed wakes and routines
 - Use pots wake to set timed wakes. You can have several at once, and you choose the times: look in now and then at what people are talking about, or do something you promised when its time comes.
-- When you have no timed wake, a fallback check-in comes every ${facts.fallbackWakeMinutes} minutes.`;
+- Scripts you write that call pots wake give --from <a short name>. Their wakes then say that they come from that command on this computer, not from a person, and that the note is what the command wrote. A second pots wake with the --id of an earlier one gives back the earlier wake and sets none.
+- Use pots routine for repeating work. --note wakes you with its note at each time. --run runs a command in your shell at each time, with POTS_FROM set to the routine's name, so a pots wake in it comes from the routine; the command decides whether to wake you. A run is skipped while the last one still runs, and times missed while the gateway was stopped or the computer slept are not made up. A failed run (a non-zero exit code, or its timeout: 10 minutes by default) wakes you once; the next failures do not, until a run succeeds.
+- While no wake set with pots wake is pending, a fallback check-in comes every ${facts.fallbackWakeMinutes} minutes. Routines do not stop it.`;
 }
 
 /** The MEMORY.md of both memory folders, as they are loaded; "" for one that is empty. */
@@ -446,16 +455,48 @@ export function renderPlaceWake(wake: PlaceWake, status: ContextStatus, me?: Per
   return lines.join("\n");
 }
 
-export function renderTimerWake(timer: Timer, status: ContextStatus, fallbackMinutes: number, children: readonly ChildInfo[] = []): string {
-  const why =
-    timer.set_by === "fallback"
-      ? `fallback check-in: you have no timed wake, so one comes every ${fallbackMinutes} minutes`
-      : `timed wake (you set it at ${formatTime(timer.created_at)})`;
-  const lines = [`[wake] ${why}`, `Now: ${formatTime(Date.now())}`, `Due: ${formatTime(timer.due_at)}`];
-  if (timer.note) lines.push(`Note: ${timer.note}`);
+/**
+ * A timed wake, a routine's wake or the fallback check-in. A wake set with pots wake makes no claim about who set it:
+ * a script's note can hold outside text, such as an email's subject.
+ */
+export function renderTimerWake(timer: DueTimer, status: ContextStatus, fallbackMinutes: number, children: readonly ChildInfo[] = []): string {
+  const now = Date.now();
+  const lines: string[] = [];
+  if (timer.set_by === "routine" && timer.run_id !== null) lines.push(...renderRoutineFailure(timer, now));
+  else {
+    let why: string;
+    if (timer.set_by === "fallback") why = `fallback check-in: no wake set with pots wake is pending, so one comes every ${fallbackMinutes} minutes`;
+    else if (timer.set_by === "routine")
+      why = `routine ${timer.source ?? "?"}${timer.routine ? `, ${describeSchedule(timer.routine)}` : " (removed since)"}: its time came. Its note was given with pots routine add`;
+    else if (timer.source)
+      why = `timed wake from ${timer.source}: a command on this computer, not a person in a channel, set it with pots wake at ${formatTime(timer.created_at)}. Its note is what that command wrote`;
+    else why = `timed wake, set with pots wake at ${formatTime(timer.created_at)}`;
+    lines.push(`[wake] ${why}`, `Now: ${formatTime(now)}`, `Due: ${formatTime(timer.due_at)}`);
+    if (timer.note) lines.push(`Note: ${timer.note.replace(/\r?\n/g, "\n  ")}`);
+  }
   lines.push(...renderChildren(children, "Your children working now"));
   lines.push(renderContext(status));
   return lines.join("\n");
+}
+
+/** A routine's run failed: how, and the last lines of its output, indented so they cannot look like the wake's lines. */
+function renderRoutineFailure(timer: DueTimer, now: number): string[] {
+  const { routine, run } = timer;
+  const name = timer.source ?? "?";
+  const how =
+    run?.result === "timeout"
+      ? `it ran past its timeout${routine ? ` of ${formatDuration(routine.timeout_ms)}` : ""}, so Pots stopped it and the processes it started`
+      : run?.result === "error"
+        ? "its command could not start"
+        : `its command ended with exit code ${run?.exit_code ?? "?"}`;
+  const lines = [`[wake] routine ${name} failed: ${how}`, `Now: ${formatTime(now)}`];
+  lines.push(routine ? `Routine: ${name}, ${describeSchedule(routine)}, ${describeWork(routine)}` : `Routine: ${name} (removed since)`);
+  if (run) lines.push(`Run: started ${formatTime(run.started_at)}${run.ended_at === null ? "" : `, ended ${formatTime(run.ended_at)}`}`);
+  if (run?.result === "error") lines.push(block("Why", run.output).trimStart());
+  else if (run?.output) lines.push("Last lines of its output:", ...run.output.split("\n").map((line) => `  ${line}`));
+  else lines.push("Output: (none)");
+  lines.push("Later failures of this routine do not wake you until one of its runs succeeds.");
+  return lines;
 }
 
 /** A child ended: its final message, or why it failed. */

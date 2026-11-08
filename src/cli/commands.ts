@@ -10,11 +10,12 @@ import { chatCommand } from "./chat.ts";
 import { control, listBots, userError } from "./control.ts";
 import { initCommand } from "./init.ts";
 import { loginCommand } from "./login.ts";
+import { mcpCommand } from "./mcp.ts";
 import * as ServiceLayer from "./service.ts";
 import { traceCommand } from "./trace.ts";
 
 // pots: one command for people and for the bots. People set up and run bots (init, chat, service, status); bots and
-// their scripts act in their channels (send, react, call, wake, context, turn-page, children). Each command loads only
+// their scripts act in their channels (send, react, call, wake, routine, context, turn-page, children). Each command loads only
 // what it uses: the agent's scripts run pots often, and only pots start needs the gateway and the agent.
 
 const { version } = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { version: string };
@@ -106,7 +107,7 @@ const service = Command.make("service").pipe(
 
 const pots = Command.make("pots").pipe(
   Command.withDescription("Pots (pi-durable-bot): AI coworkers that live on this computer and work in your chat apps."),
-  Command.withSubcommands([initCommand, loginCommand, chatCommand, start, status, service, botCommand, traceCommand, ...agentCommands]),
+  Command.withSubcommands([initCommand, loginCommand, mcpCommand, chatCommand, start, status, service, botCommand, traceCommand, ...agentCommands]),
 );
 
 /** Resolves once stdout and stderr have written all they were given. On macOS a pipe takes writes asynchronously. */

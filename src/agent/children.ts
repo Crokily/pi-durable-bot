@@ -16,9 +16,9 @@ import {
 import { obj, opt, str } from "@earendil-works/pi-schema";
 
 // Children: agents the main agent starts for longer work, so it stays free to talk. A child is a conversation of its
-// own that starts with only the brief, and has read, write, edit, bash and screen: not the channel actions send, react
-// and call, and not the task tool. When it ends, its final message goes back to the main agent as a wake, once, also
-// across restarts. Built as pi-durable's example of background subagents: an anchor task owns each child's
+// own that starts with only the brief, and has read, write, edit, bash, screen and codemode: not the channel actions
+// send, react and call, and not the task tool. When it ends, its final message goes back to the main agent as a wake,
+// once, also across restarts. Built as pi-durable's example of background subagents: an anchor task owns each child's
 // conversation, and a reporter task delivers each message to the child and reports its answer.
 
 /** A child, as the main conversation's children document keeps it. */

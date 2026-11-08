@@ -4,23 +4,29 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
+import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import type { TelemetrySpan } from "@earendil-works/pi-telemetry";
 import { Agent, type Database, openDatabase } from "../agent/agent.ts";
 import { type ChildEnd, describeChild, reportRequestId } from "../agent/children.ts";
 import type { MemoryNote } from "../agent/memory.ts";
+import { createCodemode } from "../agent/codemode.ts";
 import { SCREEN_VARIABLES, screenOf } from "../agent/screen.ts";
 import { createJudge } from "../agent/judge.ts";
+import { Mcp } from "../agent/mcp.ts";
 import { openResources } from "../agent/resources.ts";
 import { loadChannel } from "../channels/load.ts";
 import type { Address, ChannelAdapter, ChannelConfig } from "../core/channel.ts";
 import { MEMORY_DIR, SECRETS_DIR } from "../core/home.ts";
 import { VERSION } from "../core/version.ts";
 import type { Judge } from "../core/judge.ts";
+import { formatTime } from "../core/time.ts";
 import type { Delivered, PlaceWake, WakeTarget } from "../core/wake.ts";
-import type { Print } from "../gateway/config.ts";
+import type { Print, RunCommand } from "../gateway/config.ts";
 import { Gateway, type TimersHandle } from "../gateway/gateway.ts";
-import type { Timer } from "../gateway/timers.ts";
+import { describeSchedule, describeWork, type RoutineInput, renderRoutines } from "../gateway/routines.ts";
+import type { DueTimer } from "../gateway/timers.ts";
 import { ControlServer } from "./control.ts";
 import { type BotDefinition, type BotPaths, botPaths } from "./definition.ts";
 import { describeMachine } from "./machine.ts";
@@ -203,12 +209,23 @@ export class Bot implements WakeTarget {
     const current = () => (bot ? bot.#definition : definition);
     const settings = () => current().settings;
     const judge = createJudge(definition.judge, env.models, () => current().model);
+    // The environment of bash commands, of routines' commands and of the stdio MCP servers. Without the screen's variables: a command that uses
+    // the screen goes through the screen tool, which holds the screen for one agent at a time. Without POTS_FROM, which
+    // only a routine's command has.
+    const left = new Set<string>([...SCREEN_VARIABLES, "POTS_FROM"]);
+    const shellEnv: Record<string, string> = {
+      ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && !left.has(entry[0]))),
+      POTS_BOT: id,
+      PATH: `${dirname(env.potsCommand)}${delimiter}${process.env.PATH ?? ""}`,
+      HOME: process.env.HOME ?? homedir(),
+    };
     const gateway = await Gateway.open(sql, {
       bot: id,
       judge: () => (bot ? bot.#judge : judge),
       settings,
       fallbackWakeMinutes: () => settings().fallbackWakeMinutes,
       fireTimer: (timer, caller) => self().#deliverTimer(timer, caller),
+      runCommand: commandRunner(paths.workspace, shellEnv),
       filesDir: paths.files,
       print,
     });
@@ -238,6 +255,19 @@ export class Bot implements WakeTarget {
       },
     };
     const skills = { name: "skills", render: () => resources.skills() ?? NO_SKILLS };
+    // MCP servers from pi's mcp.json, which pi and pots mcp share; they connect now, in the background. Read again before
+    // each request, so a change counts from the next wake.
+    const mcp = await Mcp.open({ cwd: paths.workspace, projectTrusted: () => resources.projectTrusted(), env: shellEnv, models: env.models, log: print });
+    // pi's code mode, for every agent of the bot; its scripts call the servers' tools.
+    const codemode = createCodemode(() => mcp.namespaces());
+    const codemodeSection = { name: "codemode", render: codemode.section };
+    const mcpServers = {
+      name: "mcp_servers",
+      render: () => {
+        mcp.reload();
+        return mcp.section();
+      },
+    };
     // The memory, as Claude Code's auto memory: files in the bot's memory folder and in the one all bots share.
     const folders = { own: paths.memory, shared: MEMORY_DIR };
     const memoryOn = () => settings().autoMemory;
@@ -251,19 +281,13 @@ export class Bot implements WakeTarget {
       thinking: definition.thinking,
       compaction: () => settings().compaction,
       workspace: paths.workspace,
-      // Without the screen's variables: a command that uses the screen goes through the screen tool, which holds the
-      // screen for one agent at a time.
-      shellEnv: {
-        ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !(SCREEN_VARIABLES as readonly string[]).includes(name))),
-        POTS_BOT: id,
-        PATH: `${dirname(env.potsCommand)}${delimiter}${process.env.PATH ?? ""}`,
-        HOME: process.env.HOME ?? homedir(),
-      },
+      shellEnv,
       screen: { current: () => screenOf(current().screen, process.env), bot: paths.dir, name: () => current().name },
       // The start of every request, so the provider's prompt cache can keep it: only facts that stay the same. What
       // changes from one wake to the next (the time, the context use, the bot's own address in a channel) is in the
       // wake. The bot's own sections are pinned for the page; a new name shows at once, as AGENTS.md and skills do,
-      // since people change them on purpose. New sections go at the end, and every section always has a text.
+      // since people change them on purpose. New sections go at the end, before the memory, and every section but the
+      // memory always has a text.
       sections: [
         { name: "identity", render: () => identitySection(facts()) },
         { name: "work", render: () => workSection(facts()), pin: true },
@@ -273,6 +297,8 @@ export class Bot implements WakeTarget {
         { name: "memory", render: () => contextSection(facts()), pin: true },
         projectContext,
         skills,
+        codemodeSection,
+        mcpServers,
         // Without the memory, no section: it is the last one, so the others stay where they are.
         { name: "remembered", render: async () => (memoryOn() ? memorySection(facts(), await indexes()) : undefined), pin: true },
       ],
@@ -288,6 +314,8 @@ export class Bot implements WakeTarget {
           { name: "folder", render: () => folderSection(facts(), true) },
           projectContext,
           skills,
+          codemodeSection,
+          mcpServers,
           { name: "remembered", render: async () => (memoryOn() ? childMemorySection(facts(), await indexes()) : undefined), pin: true },
         ],
         place: () => (bot ? bot.#currentPlace() : undefined),
@@ -315,9 +343,12 @@ export class Bot implements WakeTarget {
         react: (message, emoji, remove, trace) => self().react(message, emoji, remove, trace),
         call: (channel, method, params, trace) => self().call(channel, method, params, trace),
       },
+      codemode,
+      mcp,
       telemetry: gateway.telemetry,
       log: print,
     }).catch(async (error: unknown) => {
+      await mcp.close();
       await gateway.stop().catch(() => {});
       throw error;
     });
@@ -457,9 +488,9 @@ export class Bot implements WakeTarget {
     return readFile(this.paths.responsibilities, "utf8").catch(() => "");
   }
 
-  async #deliverTimer(timer: Timer, caller?: TelemetrySpan): Promise<Delivered> {
+  async #deliverTimer(timer: DueTimer, caller?: TelemetrySpan): Promise<Delivered> {
     const text = renderTimerWake(timer, await this.#agent.contextStatus(), this.#definition.settings.fallbackWakeMinutes, this.#workingChildren());
-    return this.#submit(`timer:${timer.id}`, timer.set_by === "fallback" ? "fallback" : "timer", undefined, text, false, caller);
+    return this.#submit(`timer:${timer.id}`, timer.set_by === "agent" ? "timer" : timer.set_by, undefined, text, false, caller);
   }
 
   /** A child ended: a wake for the main agent, once per reporter, also when this runs again after a restart. */
@@ -576,12 +607,35 @@ export class Bot implements WakeTarget {
         this.call(text(body.channel, "channel"), text(body.method, "method"), (body.params as Record<string, unknown> | undefined) ?? {}),
       "POST /wake": async (body: Record<string, unknown>) => {
         const at = typeof body.at === "number" ? body.at : Date.now();
-        return this.#timers.add(at, typeof body.note === "string" ? body.note : "");
+        const options = {
+          ...(typeof body.from === "string" && body.from ? { source: body.from } : {}),
+          ...(typeof body.id === "string" && body.id ? { requestId: body.id } : {}),
+        };
+        return this.#timers.add(at, typeof body.note === "string" ? body.note : "", options);
       },
       "GET /wakes": async () => this.#timers.pending(),
       "POST /wakes/cancel": async (body: Record<string, unknown>) => {
         if (!(await this.#timers.cancel(Number(body.id)))) throw new Error(`no pending wake ${String(body.id)}`);
         return "cancelled";
+      },
+      "GET /routines": async () => {
+        const listing = await this.#timers.routines();
+        return { ...listing, text: renderRoutines(listing, Date.now()) };
+      },
+      "POST /routines/add": async (body: Record<string, unknown>) => {
+        const input: RoutineInput = { name: text(body.name, "name") };
+        if (typeof body.every === "number") input.every = body.every;
+        if (typeof body.cron === "string") input.cron = body.cron;
+        if (typeof body.note === "string") input.note = body.note;
+        if (typeof body.run === "string") input.run = body.run;
+        if (typeof body.timeout === "number") input.timeout = body.timeout;
+        const { routine, replaced } = await this.#timers.addRoutine(input);
+        return `${replaced ? "Replaced" : "Added"} routine ${routine.name}: ${describeSchedule(routine)}, ${describeWork(routine)}\n  next: ${formatTime(routine.next_at)}`;
+      },
+      "POST /routines/remove": async (body: Record<string, unknown>) => {
+        const name = text(body.name, "name");
+        if (!(await this.#timers.removeRoutine(name))) throw new Error(`there is no routine ${JSON.stringify(name)}`);
+        return `Removed routine ${name}.`;
       },
       "GET /context": async () => {
         const [status, cache] = await Promise.all([this.#agent.contextStatus(), this.#agent.cacheUse()]);
@@ -612,4 +666,13 @@ export class Bot implements WakeTarget {
       }),
     };
   }
+}
+
+/** Runs a routine's command as the bash tool runs one: the same shell, environment and working directory. */
+function commandRunner(workspace: string, shellEnv: Record<string, string>): RunCommand {
+  const shell = new NodeExecutionEnv({ cwd: workspace, shellEnv });
+  return async (command, env, signal, onOutput) => {
+    const result = await shell.exec(command, { env: { ...shellEnv, ...env }, inheritEnv: false, onOutput: (text) => onOutput(text) }, withAbortSignal(signal, BACKGROUND_CONTEXT));
+    return result.ok ? { exitCode: result.value.exitCode } : { error: result.error.message };
+  };
 }

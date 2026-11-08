@@ -120,6 +120,75 @@ describe("pots", { timeout: 120_000 }, () => {
     expect(await fails("wake", "--at", "someday")).toBe('ERROR\n  bad time "someday"; use for example "2026-10-28 09:00" (local time) or Unix ms');
   });
 
+  it("says where a wake comes from, and sets a wake once per ID", async () => {
+    const first = JSON.parse(await pots("wake", "--in", "30m", "--note", "new mail", "--from", "inbox-watch", "--id", "mail-1")) as Record<string, unknown>;
+    expect(first).toMatchObject({ note: "new mail", set_by: "agent", source: "inbox-watch", request_id: "mail-1" });
+    const again = JSON.parse(await pots("wake", "--in", "45m", "--note", "new mail", "--from", "inbox-watch", "--id", "mail-1")) as Record<string, unknown>;
+    expect(again).toEqual({ ...first, state: "pending", repeated: true });
+
+    // $POTS_FROM, as a routine's command has it, unless --from says otherwise.
+    const run = async (args: string[], env: Record<string, string>) => JSON.parse((await gateway.run(args, { env })).stdout) as { id: number; source: string | null };
+    const fromEnv = await run(["wake", "--in", "30m", "--note", "from the routine"], { POTS_FROM: "nightly" });
+    const fromFlag = await run(["wake", "--in", "30m", "--from", "other"], { POTS_FROM: "nightly" });
+    expect([fromEnv.source, fromFlag.source]).toEqual(["nightly", "other"]);
+    const list = JSON.parse(await pots("wake", "--list")) as { id: number; source: string | null }[];
+    expect(list.map((item) => [item.id, item.source])).toEqual([
+      [first.id, "inbox-watch"],
+      [fromEnv.id, "nightly"],
+      [fromFlag.id, "other"],
+    ]);
+    expect(await fails("wake", "--from", "two words")).toBe('ERROR\n  bad --from "two words": use letters, digits, "-" and "_", at most 64 characters');
+    for (const item of list) await pots("wake", "--cancel", String(item.id));
+  });
+
+  it("adds, lists, replaces and removes routines, with the fallback check-in as a built-in one", async () => {
+    /** The output with each time as <time>. */
+    const plain = (text: string) => text.replace(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \w+ \([^)]*\)/g, "<time>");
+    const fallback = "- fallback check-in (built in, cannot be removed): every 120 minutes while no wake set with pots wake is pending\n  next: <time>\n";
+    expect(plain(await pots("routine", "list"))).toBe(`No routines added.\n${fallback}`);
+
+    const standup = await pots("routine", "add", "standup", "--cron", "0 9 * * 1-5", "--note", "prepare the standup");
+    expect(plain(standup)).toBe('Added routine standup: cron "0 9 * * 1-5", wakes the bot with the note "prepare the standup"\n  next: <time>\n');
+    // In this computer's time zone.
+    expect(standup).toMatch(/next: \d{4}-\d{2}-\d{2} 09:00:00 (Monday|Tuesday|Wednesday|Thursday|Friday) /);
+    expect(plain(await pots("routine", "add", "backup", "--every", "1d", "--run", "./backup.sh", "--timeout", "30m"))).toBe(
+      'Added routine backup: every 1d, runs "./backup.sh" (timeout 30m)\n  next: <time>\n',
+    );
+    expect(plain(await pots("routine", "add", "backup", "--every", "2h", "--run", "./backup.sh"))).toBe(
+      'Replaced routine backup: every 2h, runs "./backup.sh" (timeout 10m)\n  next: <time>\n',
+    );
+    expect(plain(await pots("routine", "list"))).toBe(
+      [
+        "Routines (2):",
+        '- backup: every 2h, runs "./backup.sh" (timeout 10m)',
+        "  next: <time>",
+        "  last: none in the last 7 days",
+        '- standup: cron "0 9 * * 1-5", wakes the bot with the note "prepare the standup"',
+        "  next: <time>",
+        "  last: none in the last 7 days",
+        fallback,
+      ].join("\n"),
+    );
+
+    // While a wake set with pots wake is pending, the fallback check-in waits.
+    const wake = JSON.parse(await pots("wake", "--in", "1h")) as { id: number };
+    expect(await pots("routine", "list")).toMatch(/\n {2}next: waits, because a wake set with pots wake is pending\n$/);
+    await pots("wake", "--cancel", String(wake.id));
+
+    expect(await fails("routine", "add", "x", "--every", "1h", "--cron", "0 9 * * *", "--note", "")).toBe("ERROR\n  give exactly one of --every and --cron");
+    expect(await fails("routine", "add", "x", "--note", "hi")).toBe("ERROR\n  give exactly one of --every and --cron");
+    expect(await fails("routine", "add", "x", "--every", "1h")).toBe("ERROR\n  give exactly one of --note and --run");
+    expect(await fails("routine", "add", "x", "--every", "1h", "--note", "hi", "--run", "true")).toBe("ERROR\n  give exactly one of --note and --run");
+    expect(await fails("routine", "add", "x", "--cron", "every morning", "--note", "hi")).toBe('ERROR\n  bad cron expression "every morning": Invalid number of segments in cron expression');
+    expect(await fails("routine", "add", "x", "--every", "3q", "--note", "hi")).toBe('ERROR\n  bad duration "3q"; use for example 90s, 30m, 2h or 1d');
+    expect(await fails("routine", "add", "no/slash", "--every", "1h", "--note", "hi")).toBe('ERROR\n  bad routine name "no/slash": use letters, digits, "-" and "_", at most 64 characters');
+    expect(await fails("routine", "remove", "nope")).toBe('ERROR\n  there is no routine "nope"');
+
+    expect(await pots("routine", "remove", "backup")).toBe("Removed routine backup.\n");
+    expect(await pots("routine", "remove", "standup")).toBe("Removed routine standup.\n");
+    expect(plain(await pots("routine", "list"))).toBe(`No routines added.\n${fallback}`);
+  });
+
   it("shows the context and turns the page", async () => {
     const context = JSON.parse(await pots("context")) as { used: number; window: number; compactAt: number; cache: { requests: number }; text: string };
     expect(context.window).toBe(128_000);

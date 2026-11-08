@@ -27,6 +27,11 @@ export interface BotOptions {
   readonly childModel?: string;
   /** Also a terminal channel, for `pots chat`. */
   readonly terminal?: boolean;
+  /**
+   * The fake model takes system messages after the start of the conversation, as many providers' models do: a section
+   * that changes is then sent at the end, and the leading system message stays as it was.
+   */
+  readonly laterSystemMessages?: boolean;
 }
 
 export interface PlatformRecord {
@@ -77,7 +82,13 @@ export class TestGateway {
           api: "openai-completions",
           apiKey: "fake",
           // The session header shows which provider session a request names, as a provider's cache sees it.
-          compat: { supportsDeveloperRole: false, supportsReasoningEffort: false, sendSessionAffinityHeaders: true, sessionAffinityFormat: "openai" },
+          compat: {
+            supportsDeveloperRole: false,
+            supportsReasoningEffort: false,
+            sendSessionAffinityHeaders: true,
+            sessionAffinityFormat: "openai",
+            ...(options.laterSystemMessages ? { supportsMidConvoSystemMessages: true } : {}),
+          },
           models: [
             { id: "coworker", contextWindow: 128_000, input: ["text", "image"] },
             ...(options.childModel ? [{ id: "helper", contextWindow: 128_000, input: ["text", "image"] }] : []),

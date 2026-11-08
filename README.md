@@ -56,7 +56,7 @@ It is woken in three ways, the same three ways a person notices work:
 |---|---|---|
 | **Someone asks** | gets a message or an @ | A mention or a DM wakes it at once |
 | **It notices** | overhears something that is their job | Every message that does not mention it comes to it too, and it decides itself whether it is about its work. You can also set a judge that reads these messages first and asks two questions: *is this about me?* and *should I respond?* It sees the bot's own list of responsibilities. The judge is a fast classifier such as TypeSafe's Jev, a local model, or the bot's own model |
-| **It checks in** | looks around now and then, and keeps promises | It sets its own timed wakes: "check Acme's pricing every Monday", "follow up at 5 pm". If it has none, it looks around every two hours |
+| **It checks in** | looks around now and then, and keeps promises | It sets its own timed wakes and routines: "check Acme's pricing every Monday", "follow up at 5 pm". While no timed wake is pending, it looks around every two hours |
 
 Being woken is not the same as speaking. Each time, the agent reads the log and decides if it should say anything, where, and when. Most of the time the right answer is to stay quiet.
 
@@ -64,7 +64,7 @@ Being woken is not the same as speaking. Each time, the agent reads the log and 
 
 It has a real machine with a shell, files, the internet, and a screen it uses like a person: the browser and the apps on it, with the mouse and keyboard. It does not wait for a plugin. It writes the script it needs, runs it, fixes it, and keeps the useful ones. That covers research, spreadsheets, reports, monitoring a web page, filling a form, or booking a flight, and also code.
 
-This is **code mode**: the agent gets a few general tools (`read`, `write`, `edit`, `bash`, `screen`) plus three channel actions (`send`, `react`, `call`), and builds the rest itself. One more tool, `task`, hands work to its helpers (below).
+This is **code mode**: the agent gets a few general tools (`read`, `write`, `edit`, `bash`, `screen`) plus three channel actions (`send`, `react`, `call`), and builds the rest itself. One more tool, `task`, hands work to its helpers (below). With `codemode`, pi's code mode, it writes a JavaScript script that calls these tools and the tools of [MCP servers](#mcp-servers) in a sandbox; only what the script returns comes back to it.
 
 `screen` is `bash` with the screen's environment, such as `DISPLAY`; `bash` does not have it. A screen runs one task at a time, as a person's desktop does: the first `screen` command of an agent takes the screen until its work ends, also across bots and the Pots processes of the same user on the machine. Another agent that tries then learns who has it, since when, and when it frees, and decides itself what to do. A bot that sets up its own desktop, such as an Xvfb display, writes its environment into `screen` in its `bot.json`.
 
@@ -72,7 +72,7 @@ One agent at a time per screen is enforced only on Linux, where plain `bash` has
 
 ### 👥 Its own helpers
 
-Longer work does not keep it from talking. With its `task` tool the bot starts **children**: agents that work in the background with `read`, `write`, `edit`, `bash` and `screen`, without the channel actions and `task`, on a brief it writes for them. It answers the person first, hands the work to a child, and stays free for the next message. A child starts from an empty conversation and its brief, so the bot's own context stays small; it sees the bot's memory index as it was when it started. When a child ends, done, failed or with a question for a person, its final message comes back to the bot as a wake, exactly once, also across crashes and restarts; the bot passes on what matters, and sends the child the answer to its question. While a child works for a place, new messages there go to the bot, so it can pass them on. Its timed and fallback wakes list the children that work and how long each has run. A stopped child reports nothing and does nothing more, also when the process dies in the middle of the stop.
+Longer work does not keep it from talking. With its `task` tool the bot starts **children**: agents that work in the background with `read`, `write`, `edit`, `bash`, `screen` and `codemode`, without the channel actions and `task`, on a brief it writes for them. It answers the person first, hands the work to a child, and stays free for the next message. A child starts from an empty conversation and its brief, so the bot's own context stays small; it sees the bot's memory index as it was when it started. When a child ends, done, failed or with a question for a person, its final message comes back to the bot as a wake, exactly once, also across crashes and restarts; the bot passes on what matters, and sends the child the answer to its question. While a child works for a place, new messages there go to the bot, so it can pass them on. Its timed and fallback wakes list the children that work and how long each has run. A stopped child reports nothing and does nothing more, also when the process dies in the middle of the stop.
 
 Children use the bot's model, or the `childModel` of `bot.json`; a change counts for new children and those that exist, also when `childModel` is taken out. The bot chooses each child's thinking level when it starts it: `high`, `xhigh` or `max`, and without a choice the `childThinking` of `bot.json` (`xhigh` by default). A child keeps its level for its whole life, so a new `childThinking` counts for new children only; a level the model does not have becomes the nearest one it has, as in pi. `settings.maxChildren` (50 by default) caps how many work at once. `pots children` lists them, and `pots children --stop <id>` or `--stop-all` stops them.
 
@@ -84,7 +84,20 @@ When it speaks, it speaks like a teammate: in the right channel or thread, in it
 
 ### ⏰ Its own schedule
 
-It promises to come back, and it does. Timed wakes live in the same database as everything else, so they survive restarts. It can also add normal cron jobs on its machine.
+It promises to come back, and it does. A timed wake (`pots wake`) wakes it once, at a time it chooses. A **routine** (`pots routine`) repeats: every 30 minutes, say, or on a cron schedule in the computer's time zone. Both live in the same database as everything else, so they survive restarts. It can also add normal cron jobs on its machine.
+
+| Command | What it does |
+|---|---|
+| `pots routine add <name> (--every <duration> \| --cron "<expr>") (--note "<text>" \| --run "<command>") [--timeout <duration>]` | Add a routine, or replace the one with that name. Names are letters, digits, `-` and `_`; durations are as in `pots wake --in`: `90s`, `30m`, `2h`, `1d` |
+| `pots routine list` | Each routine's schedule, what it does, its next time and its last run; and the fallback check-in |
+| `pots routine remove <name>` | Remove a routine |
+
+- `--note` wakes the bot with the note at each time. `--run` makes Pots run the command at each time, in the bot's shell, folder and environment, with `POTS_FROM` set to the routine's name. The command decides itself whether to wake the bot with `pots wake`, so watching an inbox every few minutes costs no model request until there is mail.
+- A run is skipped while the last run of the same routine still runs. Times missed while the gateway was stopped or the computer was off or asleep are skipped, not made up: the next run is the next time from now.
+- A command runs at most 10 minutes, or its `--timeout`; then Pots stops it and the processes it started. When the gateway stops, it stops the commands it runs.
+- Pots keeps each run's start, end, exit code and last lines of output for 7 days. A failed run (a non-zero exit code, or the timeout) wakes the bot once, with that output; later failures of the same routine do not, until one of its runs succeeds.
+- A script that calls `pots wake` says where the wake comes from with `--from <name>` (letters, digits, `-` and `_`), or `$POTS_FROM`. The wake then tells the bot that it comes from a command on this computer, not from a person, so outside text in its note, such as an email's subject, does not read as the bot's own plan. With `--id <id>`, a second `pots wake` with the same ID gives back the first wake and sets none, as `pots send --id` does.
+- The fallback check-in (`fallbackWakeMinutes` in `bot.json`, 120 by default) comes while no wake set with `pots wake` is pending. Routines do not hold it back.
 
 ### 📓 Its own memory
 
@@ -142,6 +155,7 @@ It joins only the places it is invited to, like a new hire who is added to the r
 |---|---|
 | `pots init` | Set up your first bot, or another one |
 | `pots login` | Sign in to a model, or add an API key or a local server, for every bot on this computer; `--list` shows what can be used |
+| `pots mcp add \| remove \| list \| login \| logout` | The [MCP servers](#mcp-servers) of every bot on this computer, and sign-ins to them |
 | `pots chat` | Talk to a bot in this terminal |
 | `pots status` | The gateway, the service and each bot |
 | `pots service install \| uninstall \| restart \| logs` | The gateway as a background service: launchd on macOS, systemd on Linux (`--system` for a server), Task Scheduler on Windows |
@@ -190,6 +204,21 @@ Then set `"model": "ollama/qwen3:8b"`. The agent needs a model that calls tools 
 { "model": "llama.cpp/<your chat model>", "judge": "llama.cpp/Kev-4B-Q4_K_M" }
 ```
 
+### MCP servers
+
+The bot uses [MCP](https://modelcontextprotocol.io) servers through pi's own MCP support. They are set in pi's files: `~/.pi/agent/mcp.json` for every bot on the computer and the [pi](https://github.com/earendil-works/pi) command line, and `.pi/mcp.json` in a bot's `workspace/` for that bot alone. The bot's `codemode` scripts call their tools, as with pi's default exposure, so the tools the model is told about never change and the provider's prompt cache keeps serving; a section of the prompt lists the servers. A server added, removed or changed applies from the bot's next wake, with no restart.
+
+| Command | What it does |
+|---|---|
+| `pots mcp add <server> -- <command> [args...]` | Add a server that runs on this computer; `--url <url>` adds a remote one |
+| `pots mcp list` | Each server, whether it connects, and its tools |
+| `pots mcp login <server>` | Sign in to a server in your browser; `logout` signs out |
+| `pots mcp remove <server>` | Remove a server |
+
+`pots mcp` is pi's `pi mcp`, with the same options (`pots mcp --help`); npm links only `pots`, so `pi` may not be on your PATH. Sign-ins are stored in pi's `~/.pi/agent/mcp-auth.json`, and the bot uses a new one from its next request. When the browser is on another computer, as over SSH, paste the address the browser was sent to into the terminal.
+
+The bot also looks for a command line tool, an API or an MCP server before it uses the screen. When it finds a command line tool that has no skill yet, it offers to write one in `~/.agents/skills/`, so every bot and pi know when and how to use it.
+
 ## How it decides to act
 
 ```mermaid
@@ -227,8 +256,8 @@ flowchart LR
   end
   subgraph Bot[Bot]
     P[Persona, responsibilities, notes, timers]
-    A[pi-durable agent<br/>read write edit bash screen<br/>send react call task]
-    C[Children<br/>read write edit bash screen]
+    A[pi-durable agent<br/>read write edit bash screen<br/>send react call task codemode]
+    C[Children<br/>read write edit bash screen codemode]
     A --> C
   end
   S --> I
@@ -262,9 +291,9 @@ One gateway process runs every bot on the machine. Everything lives in `~/.pots/
 | `files/` | Files people sent in messages, in `files/tmp/`: one folder per message, and in it one numbered folder per file. Pots deletes them 30 days after they were saved, and nothing else in the bot folder; the bot moves or copies out of `files/tmp/` what it keeps. |
 | `terminal/` | Its terminal channel: what you and the bot say in `pots chat`. |
 | `memory/` | Its memory: one markdown file per memory, and `MEMORY.md`, their index. The bot maintains it. |
-| `bot.sqlite` | Message log, timers and the agent's journal in one file. |
+| `bot.sqlite` | Message log, timers, routines and the agent's journal in one file. |
 
-The same `pots` command gives the bot (and its scripts and cron jobs) its actions from a shell: `pots send`, `pots react`, `pots call`, `pots wake`, `pots context`, `pots turn-page`, `pots children`. Tokens stay inside the running gateway; the agent never sees them.
+The same `pots` command gives the bot (and its scripts and cron jobs) its actions from a shell: `pots send`, `pots react`, `pots call`, `pots wake`, `pots routine`, `pots context`, `pots turn-page`, `pots children`. Tokens stay inside the running gateway; the agent never sees them.
 
 The bot sends its whole conversation with each model request, so the provider's prompt cache matters: a request whose start the provider has cached costs a fraction. The system prompt holds only facts that stay the same, and the bot's own parts of it, its memory too, keep their text for the whole page; a change, such as a new `settings` value in `bot.json`, shows after the page turns, after pi compacts, or after an upgrade. What changes from one wake to the next, such as the time, the context use and the bot's own address in a channel, is in the wake. `pots trace` and `pots context` show how much of the input the cache served and what the requests that missed it cost.
 
@@ -288,7 +317,7 @@ pi-durable-bot runs every day as a teammate in a real workspace. What works toda
 - [x] Any model pi can use: subscription logins, API keys, OpenAI-compatible endpoints, local models
 - [x] A judge you choose: the bot's own model, Jev or another classifier, a local llama.cpp model, or none
 - [x] `AGENTS.md`, Agent Skills and images as in a pi session
-- [ ] MCP servers
+- [x] MCP servers and code mode, through pi's own MCP support
 - [ ] More adapters: Teams, email
 - [ ] `pots init` in a web page, for people who do not use a terminal
 

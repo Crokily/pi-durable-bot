@@ -7,10 +7,10 @@ import type { Address, ChannelAdapter, ChannelSink, Happening, SentMessage } fro
 import type { Judge } from "../../src/core/judge.ts";
 import type { Sql } from "../../src/core/sql.ts";
 import type { PlaceWake, WakeTarget } from "../../src/core/wake.ts";
-import type { GatewayOptions } from "../../src/gateway/config.ts";
+import type { GatewayOptions, RunCommand } from "../../src/gateway/config.ts";
 import { gatewayLayer } from "../../src/gateway/gateway.ts";
 import { MessageLog, type UndecidedEvent } from "../../src/gateway/log.ts";
-import type { Timer } from "../../src/gateway/timers.ts";
+import type { DueTimer } from "../../src/gateway/timers.ts";
 import type { WakerSettings } from "../../src/gateway/waker.ts";
 
 // The gateway core in one process, on an in-memory SQLite database, for tests that use Effect's TestClock.
@@ -20,10 +20,26 @@ export const FILES_DIR = join(tmpdir(), "pots-test-files");
 
 export const SETTINGS: WakerSettings = { debounceMs: 3_000, debounceMaxMs: 20_000, judgeThreshold: 0.5, judgeContextMessages: 20 };
 
+/** A routine's command, as the fake runner got it. The test ends it, or the gateway stops it. */
+export interface FakeCommand {
+  readonly command: string;
+  readonly env: Record<string, string>;
+  /** When it started. */
+  readonly at: number;
+  /** The gateway told it to stop: its timeout, or a stop. */
+  aborted: boolean;
+  /** When it ended, or the gateway told it to stop. */
+  endedAt?: number;
+  output(text: string): void;
+  end(exitCode: number): void;
+}
+
 /** What the core did, with the TestClock time of each. */
 export class Recorder {
   readonly wakes: { wake: PlaceWake; at: number }[] = [];
-  readonly timers: { timer: Timer; at: number }[] = [];
+  readonly timers: { timer: DueTimer; at: number }[] = [];
+  /** The routines' commands that started, in order. */
+  readonly commands: FakeCommand[] = [];
   readonly prints: { message: string; data?: Record<string, unknown> }[] = [];
   /** Places the bot works on now. */
   readonly working = new Set<Address>();
@@ -36,6 +52,28 @@ export class Recorder {
   now(): number {
     return this.#clock.currentTimeMillisUnsafe();
   }
+
+  /** Runs nothing: each command waits until the test ends it, or the gateway stops it. */
+  readonly runCommand: RunCommand = (command, env, signal, onOutput) =>
+    new Promise((resolve) => {
+      const entry: FakeCommand = {
+        command,
+        env,
+        at: this.now(),
+        aborted: false,
+        output: onOutput,
+        end: (exitCode) => {
+          entry.endedAt ??= this.now();
+          resolve({ exitCode });
+        },
+      };
+      signal.addEventListener("abort", () => {
+        entry.aborted = true;
+        entry.endedAt ??= this.now();
+        resolve({ error: "aborted" });
+      });
+      this.commands.push(entry);
+    });
 
   target(): WakeTarget {
     return {
@@ -55,7 +93,9 @@ export interface CoreOptions {
   readonly judge?: Judge;
   readonly fallbackWakeMinutes?: number;
   /** Fails a timer's wake when it returns true. */
-  readonly failTimer?: (timer: Timer) => boolean;
+  readonly failTimer?: (timer: DueTimer) => boolean;
+  /** Holds a timer's wake until the promise it returns resolves, as a bot that is slow to take it. */
+  readonly holdTimer?: (timer: DueTimer) => Promise<void> | undefined;
 }
 
 /** Build the gateway core on a fresh in-memory database for the effect, with a recorder of what it does. */
@@ -73,9 +113,11 @@ export const withCore = <A, E, R>(options: CoreOptions, body: (recorder: Recorde
       fallbackWakeMinutes: () => options.fallbackWakeMinutes ?? 120,
       fireTimer: async (timer) => {
         if (options.failTimer?.(timer)) throw new Error("the bot is busy");
+        await options.holdTimer?.(timer);
         recorder.timers.push({ timer, at: recorder.now() });
         return { submission: `timer-${timer.id}` };
       },
+      runCommand: recorder.runCommand,
       filesDir: FILES_DIR,
       print: (message, data) => recorder.prints.push({ message, ...(data ? { data } : {}) }),
     };

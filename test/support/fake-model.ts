@@ -7,8 +7,10 @@ import type { AddressInfo } from "node:net";
 export interface FakeRequest {
   /** The model the request names, without its provider. */
   readonly model: string;
-  /** The system prompt. */
+  /** The system prompt: every system message, joined. */
   readonly system: string;
+  /** The leading system message alone, which a model that takes later system messages keeps as it was. */
+  readonly prompt: string;
   /** images: how many images the message carries. */
   readonly messages: readonly { role: string; content: string; images: number; toolCalls?: readonly string[] }[];
   readonly tools: readonly string[];
@@ -165,10 +167,12 @@ interface OpenAiMessage {
 function toRequest(body: { model: string; messages: OpenAiMessage[]; tools?: { function: { name: string } }[] }): FakeRequest {
   const text = (content: OpenAiMessage["content"]) =>
     typeof content === "string" ? content : (content ?? []).map((part) => (part.type === "text" ? (part.text ?? "") : "")).join("");
-  const system = body.messages.filter((message) => message.role === "system" || message.role === "developer").map((message) => text(message.content)).join("\n");
+  const isSystem = (message: OpenAiMessage | undefined) => message?.role === "system" || message?.role === "developer";
+  const system = body.messages.filter(isSystem).map((message) => text(message.content)).join("\n");
   return {
     model: body.model,
     system,
+    prompt: isSystem(body.messages[0]) ? text(body.messages[0]!.content) : "",
     messages: body.messages
       .filter((message) => message.role !== "system" && message.role !== "developer")
       .map((message) => ({

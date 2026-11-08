@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { platformFile, readPlatform } from "../../src/channels/test/index.ts";
+import { askGatewayToStop } from "../../src/cli/service.ts";
 import type { FakeModel } from "./fake-model.ts";
 
 // A real gateway process (`pots start`) in a home folder of its own, with one bot on a test channel and a fake model.
@@ -133,16 +134,19 @@ export class TestGateway {
         if (!this.#process) throw new Error(`the gateway exited while starting: ${stderr}`);
         const failed = this.output.slice(from).find((line) => line.message === "bot start failed");
         if (failed) throw new Error(`the bot did not start: ${String(failed.error)}`);
-        return this.output.slice(from).some((line) => line.message === "bot started");
+        // "started" comes after the bot's start, once the gateway can be stopped cleanly.
+        return this.output.slice(from).some((line) => line.message === "bot started") && this.output.slice(from).some((line) => line.message === "started");
       },
       { timeout: 20_000, what: "the bot to start" },
     );
   }
 
-  /** Stop the gateway the normal way (SIGTERM). Windows has no SIGTERM: there Node ends the process at once, as kill does. */
+  /** Stop the gateway the normal way: SIGTERM, or on Windows, which has no SIGTERM, the stop request of pots service. */
   async stop(): Promise<void> {
-    if (!this.#process) return;
-    this.#process.kill("SIGTERM");
+    const child = this.#process;
+    if (!child) return;
+    if (process.platform !== "win32") child.kill("SIGTERM");
+    else if (!(await askGatewayToStop(child.pid!))) throw new Error("the gateway did not take the stop request");
     await this.#exited;
   }
 

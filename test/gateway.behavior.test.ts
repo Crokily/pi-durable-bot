@@ -417,7 +417,7 @@ describe("routines", { timeout: 60_000 }, () => {
   });
 
   // Windows has no SIGTERM: there the gateway ends at once, as after a crash.
-  it.skipIf(process.platform === "win32")("stops the commands it runs when the gateway stops", async () => {
+  it("stops the commands it runs when the gateway stops", async () => {
     await setUp();
     await potsOk("routine", "add", "long", "--every", "1s", "--run", stay("long.pid"));
     await waitFor(() => pids("long.pid").length === 1, { what: "the command to start" });

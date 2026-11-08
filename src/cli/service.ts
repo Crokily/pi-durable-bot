@@ -1,10 +1,11 @@
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { request } from "node:http";
 import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Context, Effect, Layer } from "effect";
-import { LOGS_DIR, PID_FILE, POTS_HOME, runningGateway } from "../core/home.ts";
+import { gatewayPipe, LOGS_DIR, PID_FILE, POTS_HOME, processRunning, runningGateway } from "../core/home.ts";
 import { userError } from "./control.ts";
 
 // The gateway as a background service of the user who runs it, so it starts at login and the bots can use the desktop
@@ -244,11 +245,40 @@ const launcher = join(POTS_HOME, "bin", "gateway.vbs");
 const ps = (text: string) => `'${text.replaceAll("'", "''")}'`;
 const powershell = (script: string) => run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script]);
 
-/** Stop the gateway the task started: the task first (so it does not restart it), then the gateway's processes. */
+/** As long as systemd (TimeoutStopSec) and launchd (ExitTimeOut) let the gateway stop before they kill it. */
+const STOP_TIMEOUT_MS = 30_000;
+
+/**
+ * Ask the gateway with this process ID to stop, as SIGTERM does elsewhere (gatewayPipe). False when nothing listens, as
+ * with a gateway older than this request; true when it answered, or took the request and ended before it could.
+ */
+export function askGatewayToStop(pid: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let connected = false;
+    const req = request({ socketPath: gatewayPipe(pid), method: "POST", path: "/stop" }, (res) => {
+      res.resume();
+      resolve(true);
+    });
+    req.on("socket", (socket) => socket.once("connect", () => (connected = true)));
+    req.on("error", () => resolve(connected));
+    req.setTimeout(10_000, () => req.destroy());
+    req.end();
+  });
+}
+
+/**
+ * Stop the gateway the task started, as systemd and launchd do: ask it to stop, and end its processes only when it has
+ * not ended within their time. Then stop the task, whose launcher starts the gateway again after an exit with an error.
+ */
 const stopWindowsGateway = Effect.gen(function* () {
-  yield* powershell(`Stop-ScheduledTask -TaskName ${ps(TASK)} -ErrorAction SilentlyContinue`).pipe(Effect.ignore);
   const pid = runningGateway();
-  if (pid !== undefined) yield* run("taskkill", ["/PID", String(pid), "/T", "/F"], { quiet: true }).pipe(Effect.ignore);
+  if (pid !== undefined && (yield* Effect.promise(() => askGatewayToStop(pid)))) {
+    const deadline = Date.now() + STOP_TIMEOUT_MS;
+    while (processRunning(pid) && Date.now() < deadline) yield* Effect.sleep("200 millis");
+  }
+  yield* powershell(`Stop-ScheduledTask -TaskName ${ps(TASK)} -ErrorAction SilentlyContinue`).pipe(Effect.ignore);
+  const left = runningGateway();
+  if (left !== undefined) yield* run("taskkill", ["/PID", String(left), "/T", "/F"], { quiet: true }).pipe(Effect.ignore);
   rmSync(PID_FILE, { force: true });
 });
 

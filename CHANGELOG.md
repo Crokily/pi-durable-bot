@@ -4,6 +4,9 @@ What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm inst
 
 ## Unreleased
 
+### Changed
+- **Windows: `pots service restart`, `install` and `uninstall` stop the gateway cleanly.** They used to end its processes at once, as a crash does. Now they ask the gateway to stop, as systemd and launchd do on Linux and macOS: it finishes the decision in progress, stops the commands of routines, and closes its channels and files. A gateway that has not ended after 30 seconds is ended as before. The scheduled task does not start it again.
+
 ### Fixed
 - **Linux: Pots no longer takes another user's system service for its own.** When `/etc/systemd/system/pots.service` runs the gateway as another user, `pots status`, `pots init` and `pots service` treated it as this user's: they said it was installed, and with sudo they restarted it, or stopped and removed it. Now it counts as not there, and this user gets a user service of their own. `pots service install --system` says that the other user has it, and changes nothing. One Pots runs per Linux user.
 - **`pots mcp` in a bot's `workspace/` shows the servers the bot uses.** The bot always reads the `.pi/mcp.json` in its own `workspace/`, but `pots mcp list` there said the file was ignored because pi did not trust the folder. Now `pots mcp` treats that folder as trusted, as the bot does. In other folders it asks pi's trust as before.

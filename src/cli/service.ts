@@ -158,56 +158,83 @@ WantedBy=${system ? "multi-user.target" : "default.target"}
 `;
 }
 
-const systemd: ServiceManager = {
-  get kind() {
-    return existsSync(systemUnit) ? "systemd" : "systemd --user";
-  },
-  installed: () => existsSync(userUnit) || existsSync(systemUnit),
-  install: ({ system }) =>
-    Effect.gen(function* () {
-      mkdirSync(POTS_HOME, { recursive: true });
-      if (system) {
-        if (existsSync(userUnit)) yield* systemd.uninstall();
-        yield* run("sudo", ["tee", systemUnit], { input: unitText(true) });
-        yield* run("sudo", ["systemctl", "daemon-reload"]);
-        yield* run("sudo", ["systemctl", "enable", "pots.service"]);
-        yield* run("sudo", ["systemctl", "restart", "pots.service"]);
-        return;
-      }
-      if (existsSync(systemUnit)) return yield* Effect.fail(userError(`a system service is installed (${systemUnit}); use pots service install --system, or uninstall it first`));
-      mkdirSync(dirname(userUnit), { recursive: true });
-      writeFileSync(userUnit, unitText(false));
-      yield* run("systemctl", ["--user", "daemon-reload"]);
-      yield* run("systemctl", ["--user", "enable", "pots.service"]);
-      yield* run("systemctl", ["--user", "restart", "pots.service"]);
-      // Keep the user's services running without a login session, and start them at boot. Where polkit does not let a
-      // user do that for themselves, sudo without a password often can, as on many cloud servers.
-      const user = userInfo().username;
-      yield* run("loginctl", ["enable-linger", user]).pipe(
-        Effect.catch(() => run("sudo", ["-n", "loginctl", "enable-linger", user])),
-        Effect.catch(() => Effect.logWarning(`could not enable lingering, so the bots stop when you log out. Run: sudo loginctl enable-linger ${user}`)),
-      );
-    }),
-  uninstall: () =>
-    Effect.gen(function* () {
-      if (existsSync(systemUnit)) {
-        yield* run("sudo", ["systemctl", "disable", "--now", "pots.service"]);
-        yield* run("sudo", ["rm", "-f", systemUnit]);
-        yield* run("sudo", ["systemctl", "daemon-reload"]);
-      }
-      if (existsSync(userUnit)) {
-        yield* run("systemctl", ["--user", "disable", "--now", "pots.service"]);
-        rmSync(userUnit, { force: true });
-        yield* run("systemctl", ["--user", "daemon-reload"]);
-      }
-    }),
-  restart: () =>
-    (existsSync(systemUnit) ? run("sudo", ["systemctl", "restart", "pots.service"]) : run("systemctl", ["--user", "restart", "pots.service"])).pipe(
-      Effect.asVoid,
-    ),
-  logs: ({ lines, follow }) =>
-    passthrough("journalctl", [...(existsSync(systemUnit) ? [] : ["--user"]), "-u", "pots.service", "-n", String(lines), "-o", "cat", ...(follow ? ["-f"] : [])]),
-};
+/** The user a system unit runs the gateway as: its User=, or root without one. Undefined when it cannot be read. */
+function unitUser(file: string): string | undefined {
+  try {
+    return /^User=(.*)$/m.exec(readFileSync(file, "utf8"))?.[1]?.trim() ?? "root";
+  } catch {
+    return undefined;
+  }
+}
+
+const isMe = (user: string) => user === userInfo().username || user === String(userInfo().uid);
+
+/**
+ * systemd: a user unit, or a system unit with --system. One Pots per Linux user: a system unit that runs as another
+ * user is that user's, so it counts as not there, and this user gets a user unit of their own. Paths and commands can be
+ * given for tests.
+ */
+export function systemdManager(files = { user: userUnit, system: systemUnit }, exec: typeof run = run): ServiceManager {
+  const ownSystem = () => {
+    const user = unitUser(files.system);
+    return user !== undefined && isMe(user);
+  };
+  const otherUser = () => {
+    const user = unitUser(files.system);
+    return user !== undefined && !isMe(user) ? user : undefined;
+  };
+  const manager: ServiceManager = {
+    get kind() {
+      return ownSystem() ? "systemd" : "systemd --user";
+    },
+    installed: () => existsSync(files.user) || ownSystem(),
+    install: ({ system }) =>
+      Effect.gen(function* () {
+        mkdirSync(POTS_HOME, { recursive: true });
+        if (system) {
+          const other = otherUser();
+          if (other) return yield* Effect.fail(userError(`a system service of user ${other} is installed (${files.system}); use a user service: pots service install`));
+          if (existsSync(files.user)) yield* manager.uninstall();
+          yield* exec("sudo", ["tee", files.system], { input: unitText(true) });
+          yield* exec("sudo", ["systemctl", "daemon-reload"]);
+          yield* exec("sudo", ["systemctl", "enable", "pots.service"]);
+          yield* exec("sudo", ["systemctl", "restart", "pots.service"]);
+          return;
+        }
+        if (ownSystem()) return yield* Effect.fail(userError(`a system service is installed (${files.system}); use pots service install --system, or uninstall it first`));
+        mkdirSync(dirname(files.user), { recursive: true });
+        writeFileSync(files.user, unitText(false));
+        yield* exec("systemctl", ["--user", "daemon-reload"]);
+        yield* exec("systemctl", ["--user", "enable", "pots.service"]);
+        yield* exec("systemctl", ["--user", "restart", "pots.service"]);
+        // Keep the user's services running without a login session, and start them at boot. Where polkit does not let a
+        // user do that for themselves, sudo without a password often can, as on many cloud servers.
+        const user = userInfo().username;
+        yield* exec("loginctl", ["enable-linger", user]).pipe(
+          Effect.catch(() => exec("sudo", ["-n", "loginctl", "enable-linger", user])),
+          Effect.catch(() => Effect.logWarning(`could not enable lingering, so the bots stop when you log out. Run: sudo loginctl enable-linger ${user}`)),
+        );
+      }),
+    uninstall: () =>
+      Effect.gen(function* () {
+        if (ownSystem()) {
+          yield* exec("sudo", ["systemctl", "disable", "--now", "pots.service"]);
+          yield* exec("sudo", ["rm", "-f", files.system]);
+          yield* exec("sudo", ["systemctl", "daemon-reload"]);
+        }
+        if (existsSync(files.user)) {
+          yield* exec("systemctl", ["--user", "disable", "--now", "pots.service"]);
+          rmSync(files.user, { force: true });
+          yield* exec("systemctl", ["--user", "daemon-reload"]);
+        }
+      }),
+    restart: () =>
+      (ownSystem() ? exec("sudo", ["systemctl", "restart", "pots.service"]) : exec("systemctl", ["--user", "restart", "pots.service"])).pipe(Effect.asVoid),
+    logs: ({ lines, follow }) =>
+      passthrough("journalctl", [...(ownSystem() ? [] : ["--user"]), "-u", "pots.service", "-n", String(lines), "-o", "cat", ...(follow ? ["-f"] : [])]),
+  };
+  return manager;
+}
 
 // ---- Windows ----
 
@@ -276,4 +303,4 @@ const windows: ServiceManager = {
 };
 
 /** The service manager of this platform. */
-export const layer = Layer.succeed(Service, process.platform === "darwin" ? launchd : process.platform === "win32" ? windows : systemd);
+export const layer = Layer.succeed(Service, process.platform === "darwin" ? launchd : process.platform === "win32" ? windows : systemdManager());

@@ -76,7 +76,7 @@ describe("children", { timeout: 90_000 }, () => {
     const child = model.requests.find(isChild)!;
     expect(child.messages.map((message) => message.role)).toEqual(["user"]);
     expect(child.messages[0]!.content).toBe("[brief from the main agent]\nfind the answer");
-    expect(child.tools).toEqual(["read", "write", "edit", "bash", "screen"]);
+    expect(child.tools).toEqual(["read", "write", "edit", "bash", "screen", "codemode"]);
     expect(child.system).not.toMatch(/pots send|pots react|pots call|ask-secret/);
     expect(gateway.pots("children")).toMatch(/^c1 "research": ended .* ago, waits for a message, for test:#general, thinking xhigh$/m);
 

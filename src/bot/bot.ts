@@ -9,8 +9,10 @@ import type { TelemetrySpan } from "@earendil-works/pi-telemetry";
 import { Agent, type Database, openDatabase } from "../agent/agent.ts";
 import { type ChildEnd, describeChild, reportRequestId } from "../agent/children.ts";
 import type { MemoryNote } from "../agent/memory.ts";
+import { createCodemode } from "../agent/codemode.ts";
 import { SCREEN_VARIABLES, screenOf } from "../agent/screen.ts";
 import { createJudge } from "../agent/judge.ts";
+import { Mcp } from "../agent/mcp.ts";
 import { openResources } from "../agent/resources.ts";
 import { loadChannel } from "../channels/load.ts";
 import type { Address, ChannelAdapter, ChannelConfig } from "../core/channel.ts";
@@ -238,6 +240,27 @@ export class Bot implements WakeTarget {
       },
     };
     const skills = { name: "skills", render: () => resources.skills() ?? NO_SKILLS };
+    // Without the screen's variables: a command that uses the screen goes through the screen tool, which holds the
+    // screen for one agent at a time. Also the environment of the stdio MCP servers.
+    const shellEnv = {
+      ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !(SCREEN_VARIABLES as readonly string[]).includes(name))),
+      POTS_BOT: id,
+      PATH: `${dirname(env.potsCommand)}${delimiter}${process.env.PATH ?? ""}`,
+      HOME: process.env.HOME ?? homedir(),
+    };
+    // MCP servers from pi's mcp.json, which pi and pots mcp share; they connect now, in the background. Read again before
+    // each request, so a change counts from the next wake.
+    const mcp = await Mcp.open({ cwd: paths.workspace, projectTrusted: () => resources.projectTrusted(), env: shellEnv, models: env.models, log: print });
+    // pi's code mode, for every agent of the bot; its scripts call the servers' tools.
+    const codemode = createCodemode(() => mcp.namespaces());
+    const codemodeSection = { name: "codemode", render: codemode.section };
+    const mcpServers = {
+      name: "mcp_servers",
+      render: () => {
+        mcp.reload();
+        return mcp.section();
+      },
+    };
     // The memory, as Claude Code's auto memory: files in the bot's memory folder and in the one all bots share.
     const folders = { own: paths.memory, shared: MEMORY_DIR };
     const memoryOn = () => settings().autoMemory;
@@ -251,19 +274,13 @@ export class Bot implements WakeTarget {
       thinking: definition.thinking,
       compaction: () => settings().compaction,
       workspace: paths.workspace,
-      // Without the screen's variables: a command that uses the screen goes through the screen tool, which holds the
-      // screen for one agent at a time.
-      shellEnv: {
-        ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !(SCREEN_VARIABLES as readonly string[]).includes(name))),
-        POTS_BOT: id,
-        PATH: `${dirname(env.potsCommand)}${delimiter}${process.env.PATH ?? ""}`,
-        HOME: process.env.HOME ?? homedir(),
-      },
+      shellEnv,
       screen: { current: () => screenOf(current().screen, process.env), bot: paths.dir, name: () => current().name },
       // The start of every request, so the provider's prompt cache can keep it: only facts that stay the same. What
       // changes from one wake to the next (the time, the context use, the bot's own address in a channel) is in the
       // wake. The bot's own sections are pinned for the page; a new name shows at once, as AGENTS.md and skills do,
-      // since people change them on purpose. New sections go at the end, and every section always has a text.
+      // since people change them on purpose. New sections go at the end, before the memory, and every section but the
+      // memory always has a text.
       sections: [
         { name: "identity", render: () => identitySection(facts()) },
         { name: "work", render: () => workSection(facts()), pin: true },
@@ -273,6 +290,8 @@ export class Bot implements WakeTarget {
         { name: "memory", render: () => contextSection(facts()), pin: true },
         projectContext,
         skills,
+        codemodeSection,
+        mcpServers,
         // Without the memory, no section: it is the last one, so the others stay where they are.
         { name: "remembered", render: async () => (memoryOn() ? memorySection(facts(), await indexes()) : undefined), pin: true },
       ],
@@ -288,6 +307,8 @@ export class Bot implements WakeTarget {
           { name: "folder", render: () => folderSection(facts(), true) },
           projectContext,
           skills,
+          codemodeSection,
+          mcpServers,
           { name: "remembered", render: async () => (memoryOn() ? childMemorySection(facts(), await indexes()) : undefined), pin: true },
         ],
         place: () => (bot ? bot.#currentPlace() : undefined),
@@ -315,9 +336,12 @@ export class Bot implements WakeTarget {
         react: (message, emoji, remove, trace) => self().react(message, emoji, remove, trace),
         call: (channel, method, params, trace) => self().call(channel, method, params, trace),
       },
+      codemode,
+      mcp,
       telemetry: gateway.telemetry,
       log: print,
     }).catch(async (error: unknown) => {
+      await mcp.close();
       await gateway.stop().catch(() => {});
       throw error;
     });

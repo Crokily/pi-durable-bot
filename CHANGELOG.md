@@ -2,6 +2,17 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
+## Unreleased
+
+### Added
+- **MCP servers, through pi's own MCP support.** The bot uses the servers in pi's `~/.pi/agent/mcp.json`, which the pi command line shares, and in `.pi/mcp.json` in its `workspace/`. Its code mode scripts call their tools, and a section of its prompt lists the servers. A server added, removed or changed there applies from the bot's next wake, with no restart. Each bot runs one set of servers for itself and its children.
+- **`codemode`, pi's code mode.** The bot and its children have one more tool: a JavaScript script that calls their other tools and the MCP servers' tools in a sandbox, so that only what the script returns comes back. They have it from the first request, also without an MCP server, so the tools the model is told about stay the same and the provider's prompt cache keeps serving. A memory pass cannot use it.
+- **`pots mcp add | remove | list | login | logout`:** pi's `pi mcp`, with the same options, because npm links only `pots`. `pots mcp login <server>` signs you in in the browser, or takes the address the browser was sent to when it runs on another computer; sign-ins are stored in pi's `~/.pi/agent/mcp-auth.json`, and a bot uses a new one from its next request.
+
+### Changed
+- **The bot looks for a command line tool, an API or an MCP server before it uses the screen.** When it finds a command line tool without a skill, it offers to write one in `~/.agents/skills/<name>/SKILL.md`: when to use the tool, how, and how to check its sign-in. Every bot and pi find skills there. When the tool is removed, the bot removes its skill.
+- **The first request after the upgrade is not served from the provider's prompt cache,** because it adds `codemode` and two sections to the prompt. Later requests are, as before.
+
 ## 0.5.1 (2026-11-07)
 
 Pots runs on pi 1.5.0.

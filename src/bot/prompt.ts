@@ -7,7 +7,8 @@ import { formatTime } from "../core/time.ts";
 import type { PlaceWake, WakeEvent, WakeFile } from "../core/wake.ts";
 import { FILE_DAYS, MAX_FILE_BYTES } from "../gateway/files.ts";
 import { LOG_SCHEMA } from "../gateway/log.ts";
-import type { Timer } from "../gateway/timers.ts";
+import { describeSchedule, describeWork, formatDuration } from "../gateway/routines.ts";
+import type { DueTimer } from "../gateway/timers.ts";
 import type { BotPaths } from "./definition.ts";
 import type { Machine } from "./machine.ts";
 
@@ -38,7 +39,7 @@ export function identitySection(facts: PromptFacts): string {
 export function workSection(facts: PromptFacts): string {
   return `# How you work
 - You are a coworker on a team. You listen to every message in the places you were invited to (channels, DMs, group chats). Every event goes into the message log: messages that do not mention you, edits, deletions, reactions, people joining, and your own messages.
-- You are woken when there is something for you: someone mentions you or sends you a DM; the judge finds that people are talking about something you are responsible for and you need to respond (with the judge off, every message that does not mention you comes to you); a time you set comes; or the fallback check-in. A wake message tells you where, who, why and the time now, and gives the new events: the text of each message, the start of its thread when it is a reply, and its files, saved on this computer. Earlier messages and other details are in the message log.
+- You are woken when there is something for you: someone mentions you or sends you a DM; the judge finds that people are talking about something you are responsible for and you need to respond (with the judge off, every message that does not mention you comes to you); a wake set with pots wake or a routine comes; or the fallback check-in. A wake message tells you where, who, why and the time now, and gives the new events: the text of each message, the start of its thread when it is a reply, and its files, saved on this computer. Earlier messages and other details are in the message log.
 - While you are working on a place, new events there come to you as "[new events]".
 - You decide whether to speak, what to say, where and when. You also decide whether a message is out of date and whether it still needs anything.
 - Your answer text is not sent to anyone. To speak in a channel, use send. To add a reaction, use react. For other platform features, use call.
@@ -59,12 +60,14 @@ export function workSection(facts: PromptFacts): string {
 
 # Tools and command line
 - Tools: read, write, edit, bash, screen, send, react, call, and task.
-- The command line pots does the same channel actions, and also handles timed wakes, turning the page and context use. Your scripts and scheduled jobs can use it too:
+- The command line pots does the same channel actions, and also handles timed wakes, routines, turning the page and context use. Your scripts and scheduled jobs can use it too:
   pots send <address> <text, or - to read stdin> [--id <send ID>]   a send ID is sent only once; use the same ID when you redo
   pots react <message address> <emoji> [--remove]
   pots call <channel> <method> [JSON params, or -]
-  pots wake --in 30m | --at "2026-10-28 09:00" [--note <text>]   timed wake; with no time it is now
+  pots wake --in 30m | --at "2026-10-28 09:00" [--note <text>] [--from <name>] [--id <ID>]   timed wake; with no time it is now
   pots wake --list | --cancel <id>
+  pots routine add <name> (--every 30m | --cron "0 9 * * 1-5") (--note <text> | --run <command>) [--timeout 10m]   repeating work; add with a name in use replaces that routine
+  pots routine list | remove <name>
   pots context
   pots turn-page --note <text>
   Outside your own bash (for example in cron), write it in full: ${facts.pots} <command> --bot ${facts.id}
@@ -107,7 +110,9 @@ export function logSection(facts: PromptFacts): string {
 - Tables:
 ${LOG_SCHEMA}
 - bot_wakes(id, at, reason, place, text, submission): each time you were woken, with the full wake message.
-- bot_timers(id, due_at, note, state, set_by, created_at, fired_at): timed wakes. set_by is agent (you set it) or fallback.
+- bot_timers(id, due_at, note, state, set_by, source, request_id, run_id, created_at, fired_at): timed wakes. set_by: agent (set with pots wake, by you, a script or a person), routine (a routine's note, or its failed run run_id) or fallback. source: pots wake --from, or the routine's name. request_id: pots wake --id.
+- bot_routines(name, every_ms, cron, note, run, timeout_ms, created_at, next_at, failing): your routines. failing = 1: a failed run woke you, and the next failures do not until a run succeeds.
+- bot_routine_runs(id, routine, started_at, ended_at, result, exit_code, output): the runs of the last 7 days. result: running, exit (with exit_code), timeout, error (the command could not start), stopped (the gateway stopped it) or woke (a --note routine woke you). output: the last lines of the command's output.
 - Tables that start with pi_ are your conversation storage (pi-durable).`;
 }
 
@@ -137,9 +142,11 @@ export function contextSection(facts: PromptFacts): string {
 - Automatic compaction turns the old conversation into a summary written by pi, and details are lost. You decide when to turn the page. To turn the page: first write what you will need into ${facts.paths.notes}, then run pots turn-page --note "<a message to yourself in the new context>". The first message of the new context is that message and the full notes. After you turn the page you cannot see the old conversation; the message log stays.
 - Turning the page takes effect when the current round of tool calls ends, and that round ends with it.
 
-# Timed wakes
+# Timed wakes and routines
 - Use pots wake to set timed wakes. You can have several at once, and you choose the times: look in now and then at what people are talking about, or do something you promised when its time comes.
-- When you have no timed wake, a fallback check-in comes every ${facts.fallbackWakeMinutes} minutes.`;
+- Scripts you write that call pots wake give --from <a short name>. Their wakes then say that they come from that command on this computer, not from a person, and that the note is what the command wrote. A second pots wake with the --id of an earlier one gives back the earlier wake and sets none.
+- Use pots routine for repeating work. --note wakes you with its note at each time. --run runs a command in your shell at each time, with POTS_FROM set to the routine's name, so a pots wake in it comes from the routine; the command decides whether to wake you. A run is skipped while the last one still runs, and times missed while the gateway was stopped or the computer slept are not made up. A failed run (a non-zero exit code, or its timeout: 10 minutes by default) wakes you once; the next failures do not, until a run succeeds.
+- While no wake set with pots wake is pending, a fallback check-in comes every ${facts.fallbackWakeMinutes} minutes. Routines do not stop it.`;
 }
 
 /** The MEMORY.md of both memory folders, as they are loaded; "" for one that is empty. */
@@ -446,16 +453,48 @@ export function renderPlaceWake(wake: PlaceWake, status: ContextStatus, me?: Per
   return lines.join("\n");
 }
 
-export function renderTimerWake(timer: Timer, status: ContextStatus, fallbackMinutes: number, children: readonly ChildInfo[] = []): string {
-  const why =
-    timer.set_by === "fallback"
-      ? `fallback check-in: you have no timed wake, so one comes every ${fallbackMinutes} minutes`
-      : `timed wake (you set it at ${formatTime(timer.created_at)})`;
-  const lines = [`[wake] ${why}`, `Now: ${formatTime(Date.now())}`, `Due: ${formatTime(timer.due_at)}`];
-  if (timer.note) lines.push(`Note: ${timer.note}`);
+/**
+ * A timed wake, a routine's wake or the fallback check-in. A wake set with pots wake makes no claim about who set it:
+ * a script's note can hold outside text, such as an email's subject.
+ */
+export function renderTimerWake(timer: DueTimer, status: ContextStatus, fallbackMinutes: number, children: readonly ChildInfo[] = []): string {
+  const now = Date.now();
+  const lines: string[] = [];
+  if (timer.set_by === "routine" && timer.run_id !== null) lines.push(...renderRoutineFailure(timer, now));
+  else {
+    let why: string;
+    if (timer.set_by === "fallback") why = `fallback check-in: no wake set with pots wake is pending, so one comes every ${fallbackMinutes} minutes`;
+    else if (timer.set_by === "routine")
+      why = `routine ${timer.source ?? "?"}${timer.routine ? `, ${describeSchedule(timer.routine)}` : " (removed since)"}: its time came. Its note was given with pots routine add`;
+    else if (timer.source)
+      why = `timed wake from ${timer.source}: a command on this computer, not a person in a channel, set it with pots wake at ${formatTime(timer.created_at)}. Its note is what that command wrote`;
+    else why = `timed wake, set with pots wake at ${formatTime(timer.created_at)}`;
+    lines.push(`[wake] ${why}`, `Now: ${formatTime(now)}`, `Due: ${formatTime(timer.due_at)}`);
+    if (timer.note) lines.push(`Note: ${timer.note.replace(/\r?\n/g, "\n  ")}`);
+  }
   lines.push(...renderChildren(children, "Your children working now"));
   lines.push(renderContext(status));
   return lines.join("\n");
+}
+
+/** A routine's run failed: how, and the last lines of its output, indented so they cannot look like the wake's lines. */
+function renderRoutineFailure(timer: DueTimer, now: number): string[] {
+  const { routine, run } = timer;
+  const name = timer.source ?? "?";
+  const how =
+    run?.result === "timeout"
+      ? `it ran past its timeout${routine ? ` of ${formatDuration(routine.timeout_ms)}` : ""}, so Pots stopped it and the processes it started`
+      : run?.result === "error"
+        ? "its command could not start"
+        : `its command ended with exit code ${run?.exit_code ?? "?"}`;
+  const lines = [`[wake] routine ${name} failed: ${how}`, `Now: ${formatTime(now)}`];
+  lines.push(routine ? `Routine: ${name}, ${describeSchedule(routine)}, ${describeWork(routine)}` : `Routine: ${name} (removed since)`);
+  if (run) lines.push(`Run: started ${formatTime(run.started_at)}${run.ended_at === null ? "" : `, ended ${formatTime(run.ended_at)}`}`);
+  if (run?.result === "error") lines.push(block("Why", run.output).trimStart());
+  else if (run?.output) lines.push("Last lines of its output:", ...run.output.split("\n").map((line) => `  ${line}`));
+  else lines.push("Output: (none)");
+  lines.push("Later failures of this routine do not wake you until one of its runs succeeds.");
+  return lines;
 }
 
 /** A child ended: its final message, or why it failed. */

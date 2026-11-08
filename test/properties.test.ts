@@ -233,6 +233,84 @@ describe("timers", () => {
   });
 });
 
+// ---- Routines ----
+
+type RoutineOp =
+  | { kind: "routine"; everyMinutes: number; run: boolean }
+  | { kind: "wake"; inMinutes: number }
+  | { kind: "cancel"; pick: number }
+  | { kind: "end"; pick: number; exitCode: number }
+  | { kind: "wait"; minutes: number };
+
+describe("routines", () => {
+  it("run on their times, never twice at once, skip a time only while the last run still runs, and never hold back the fallback", async () => {
+    const op: fc.Arbitrary<RoutineOp> = fc.oneof(
+      fc.record({ kind: fc.constant("routine" as const), everyMinutes: fc.integer({ min: 1, max: 20 }), run: fc.boolean() }),
+      fc.record({ kind: fc.constant("wake" as const), inMinutes: fc.integer({ min: 0, max: 90 }) }),
+      fc.record({ kind: fc.constant("cancel" as const), pick: fc.nat(5) }),
+      fc.record({ kind: fc.constant("end" as const), pick: fc.nat(5), exitCode: fc.constantFrom(0, 0, 1) }),
+      { arbitrary: fc.record({ kind: fc.constant("wait" as const), minutes: fc.integer({ min: 0, max: 30 }) }), weight: 3 },
+    );
+    await fc.assert(
+      fc.asyncProperty(fc.array(op, { minLength: 1, maxLength: 15 }), async (ops) => {
+        await run(
+          withCore({ fallbackWakeMinutes: 45 }, (recorder) =>
+            Effect.gen(function* () {
+              const timers = yield* Timers;
+              yield* timers.start;
+              const routines: { name: string; every: number; created: number; run: boolean }[] = [];
+              const wakes: { id: number; cancelled: boolean }[] = [];
+              for (const item of ops) {
+                if (item.kind === "routine" && routines.length < 3) {
+                  const name = `r${routines.length}`;
+                  const every = item.everyMinutes * MINUTE;
+                  yield* timers.addRoutine(item.run ? { name, every, run: `./${name}.sh` } : { name, every, note: name });
+                  routines.push({ name, every, created: recorder.now(), run: item.run });
+                } else if (item.kind === "wake") {
+                  wakes.push({ id: (yield* timers.add(recorder.now() + item.inMinutes * MINUTE, "")).id, cancelled: false });
+                } else if (item.kind === "cancel") {
+                  const open = wakes.filter((wake) => !wake.cancelled && !recorder.timers.some((fired) => fired.timer.id === wake.id));
+                  const target = open[item.pick % Math.max(1, open.length)];
+                  if (target) target.cancelled = yield* timers.cancel(target.id);
+                } else if (item.kind === "end") {
+                  const running = recorder.commands.filter((command) => command.endedAt === undefined);
+                  running[item.pick % Math.max(1, running.length)]?.end(item.exitCode);
+                } else if (item.kind === "wait") {
+                  yield* advance(item.minutes * MINUTE, MINUTE);
+                }
+                yield* settle;
+                // Exactly one fallback while no wake set with pots wake is pending, whatever the routines do.
+                const pending = yield* timers.pending;
+                expect(pending.filter((timer) => timer.set_by === "fallback")).toHaveLength(pending.some((timer) => timer.set_by === "agent") ? 0 : 1);
+              }
+              yield* advance(30 * MINUTE, MINUTE);
+              const end = recorder.now();
+              for (const routine of routines) {
+                const starts = routine.run
+                  ? recorder.commands.filter((command) => command.env.POTS_FROM === routine.name).map((command) => ({ at: command.at, ended: command.endedAt ?? Infinity }))
+                  : recorder.timers.filter((entry) => entry.timer.source === routine.name).map((entry) => ({ at: entry.at, ended: entry.at }));
+                // Each time is one of the routine's times, after the one before.
+                for (const [index, start] of starts.entries()) {
+                  expect((start.at - routine.created) % routine.every).toBe(0);
+                  expect(start.at).toBeGreaterThan(index === 0 ? routine.created : starts[index - 1]!.at);
+                  if (index > 0) expect(start.at).toBeGreaterThanOrEqual(starts[index - 1]!.ended);
+                }
+                // A time with no run came while the last run still ran: never two runs at once, and none left out.
+                for (let time = routine.created + routine.every; time <= end; time += routine.every) {
+                  if (starts.some((start) => start.at === time)) continue;
+                  const before = starts.filter((start) => start.at < time).at(-1);
+                  expect(before && time <= before.ended).toBe(true);
+                }
+              }
+            }),
+          ),
+        );
+      }),
+      RUNS,
+    );
+  });
+});
+
 // ---- Inbox ----
 
 describe("inbox", () => {

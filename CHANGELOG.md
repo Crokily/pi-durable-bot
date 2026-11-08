@@ -2,6 +2,15 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
+## Unreleased
+
+### Added
+- **Routines: repeating work.** `pots routine add <name> (--every <duration> | --cron "<expr>") (--note "<text>" | --run "<command>") [--timeout <duration>]` adds one, or replaces the one with that name; `pots routine list` shows each one's schedule, its next time and its last run, and the fallback check-in; `pots routine remove <name>` takes one away. A `--note` routine wakes the bot with its note at each time. A `--run` routine makes Pots run its command at each time, in the bot's shell, with `POTS_FROM` set to the routine's name; the command decides itself whether to wake the bot. `--cron` is in the computer's time zone. A run is skipped while the last one still runs, and times missed while the gateway was stopped or the computer was off or asleep are not made up. A command stops after 10 minutes, or its `--timeout`, with the processes it started, and when the gateway stops. A failed run wakes the bot once, with the last lines of its output, until a run succeeds. Pots keeps each run for 7 days. Routines do not hold back the fallback check-in.
+- **`pots wake --from <name>`** says where a wake comes from; without it, `pots wake` uses `$POTS_FROM`. `pots wake --list` shows it. **`pots wake --id <id>`** sets a wake once: a second `pots wake` with the same ID gives back the first, as `pots send --id` does.
+
+### Changed
+- **A wake that a script set no longer reads as the bot's own plan.** A wake set with `pots wake` said "you set it", also when a script set it with outside text in its note, such as an email's subject. Now it says that it was set with `pots wake`, and when. With `--from`, it says that it comes from that command on this computer, not from a person, and that its note is what the command wrote.
+
 ## 0.5.1 (2026-11-07)
 
 Pots runs on pi 1.5.0.

@@ -72,6 +72,7 @@ Tell your person:
 | `pots status` | The gateway, the service and each bot |
 | `pots service logs` | The gateway's output |
 | `pots trace` | What a bot did: its last wakes, or one wake from its events to the messages it sent |
+| `pots routine list` | The work a bot repeats on a schedule, with each routine's next time and last run |
 | `pots bot new` / `pots bot list` | More bots on the same computer |
 | `npm install -g pi-durable-bot@latest`, then `pots service restart` | Upgrade |
 | `pots service uninstall`, then `npm uninstall -g pi-durable-bot` | Remove it. The bots stay in `~/.pots/` until that folder is deleted |

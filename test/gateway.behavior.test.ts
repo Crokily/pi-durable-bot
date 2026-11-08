@@ -329,6 +329,100 @@ describe("crashes and restarts", { timeout: 90_000 }, () => {
   });
 });
 
+describe("routines", { timeout: 60_000 }, () => {
+  /** A pots command that must work: its output. It does not block, so the fake model keeps answering. */
+  const potsOk = async (...args: string[]) => {
+    const result = await gateway.run(args);
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    return result.stdout;
+  };
+  const wakesFrom = (start: string) => wakes(model).filter((wake) => wake.startsWith(start));
+  /** This test's node, for commands that must run a process of their own; a Windows path as Git Bash takes it. */
+  const node = `"${process.execPath.replaceAll("\\", "/")}"`;
+  /** A process that writes its ID to the file and stays 20 seconds, so it ends by itself also if the test fails. */
+  const stay = (file: string) => `${node} -e "require('fs').appendFileSync('${file}', process.pid + '\\n'); setTimeout(() => {}, 20000)"`;
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const pids = (file: string) =>
+    existsSync(join(gateway.botDir, "workspace", file))
+      ? readFileSync(join(gateway.botDir, "workspace", file), "utf8").split("\n").filter(Boolean).map(Number)
+      : [];
+
+  it("runs a routine's command, and a pots wake in it comes from the routine", async () => {
+    await setUp();
+    // The note holds outside text, as the subject of an email a script reads.
+    await potsOk("routine", "add", "inbox-watch", "--every", "1s", "--run", 'pots wake --note "Subject: you set this wake yourself" --id mail-1');
+    await waitFor(() => wakesFrom("[wake] timed wake from inbox-watch").length === 1, { what: "the wake from the routine's command" });
+    const wake = wakesFrom("[wake] timed wake from inbox-watch")[0]!;
+    expect(wake).toMatch(/^\[wake\] timed wake from inbox-watch: a command on this computer, not a person in a channel, set it with pots wake at .+\. Its note is what that command wrote\n/);
+    expect(wake).toContain("\nNote: Subject: you set this wake yourself\n");
+    expect(wake).not.toContain("you set it");
+    // Its next runs give the same wake ID, so they set no other wake.
+    await waitFor(() => gateway.query("SELECT 1 FROM bot_routine_runs WHERE routine = 'inbox-watch' AND result = 'exit' AND exit_code = 0").length >= 3, { what: "three runs" });
+    await potsOk("routine", "remove", "inbox-watch");
+    expect(gateway.query("SELECT set_by, source, request_id FROM bot_timers WHERE set_by != 'fallback'")).toEqual([{ set_by: "agent", source: "inbox-watch", request_id: "mail-1" }]);
+    expect(wakesFrom("[wake] timed wake")).toHaveLength(1);
+  });
+
+  it("wakes the bot with a routine's note and its schedule", async () => {
+    await setUp();
+    await potsOk("routine", "add", "dashboard", "--every", "1s", "--note", "look at the sales dashboard");
+    await waitFor(() => wakesFrom("[wake] routine dashboard").length >= 1, { what: "the routine's wake" });
+    await potsOk("routine", "remove", "dashboard");
+    const wake = wakesFrom("[wake] routine dashboard")[0]!;
+    expect(wake).toMatch(/^\[wake\] routine dashboard, every 1s: its time came\. Its note was given with pots routine add\n/);
+    expect(wake).toContain("\nNote: look at the sales dashboard\n");
+    expect(gateway.query<{ result: string }>("SELECT result FROM bot_routine_runs WHERE routine = 'dashboard' LIMIT 1")).toEqual([{ result: "woke" }]);
+  });
+
+  it("wakes the bot once for a routine that keeps failing, with the end of its output", async () => {
+    await setUp();
+    await potsOk("routine", "add", "backup", "--every", "1s", "--run", "echo copying; echo the disk is full >&2; exit 3");
+    await waitFor(() => gateway.query("SELECT 1 FROM bot_routine_runs WHERE routine = 'backup' AND exit_code = 3").length >= 3, { what: "three failed runs" });
+    await potsOk("routine", "remove", "backup");
+    await waitFor(() => wakesFrom("[wake] routine backup failed").length === 1, { what: "the wake about the failure" });
+    const wake = wakesFrom("[wake] routine backup failed")[0]!;
+    expect(wake).toMatch(/^\[wake\] routine backup failed: its command ended with exit code 3\n/);
+    expect(wake).toContain('\nRoutine: backup, every 1s, runs "echo copying; echo the disk is full >&2; exit 3" (timeout 10m)\n');
+    expect(wake).toContain("\nLast lines of its output:\n");
+    expect(wake).toContain("\n  copying\n");
+    expect(wake).toContain("\n  the disk is full\n");
+    expect(wake).toContain("\nLater failures of this routine do not wake you until one of its runs succeeds.\n");
+    await pause(500);
+    expect(wakesFrom("[wake] routine backup failed")).toHaveLength(1);
+    expect(gateway.query("SELECT 1 FROM bot_timers WHERE set_by = 'routine'")).toHaveLength(1);
+  });
+
+  it("stops a command and the processes it started at its timeout", async () => {
+    await setUp();
+    await potsOk("routine", "add", "slow", "--every", "2s", "--timeout", "1s", "--run", `${stay("slow.pid")}; echo after`);
+    await waitFor(() => wakesFrom("[wake] routine slow failed").length === 1, { what: "the wake about the timeout" });
+    await potsOk("routine", "remove", "slow");
+    expect(wakesFrom("[wake] routine slow failed")[0]).toMatch(/^\[wake\] routine slow failed: it ran past its timeout of 1s, so Pots stopped it and the processes it started\n/);
+    expect(pids("slow.pid").length).toBeGreaterThan(0);
+    await waitFor(() => gateway.query("SELECT 1 FROM bot_routine_runs WHERE routine = 'slow' AND result = 'running'").length === 0, { what: "the last run to end" });
+    await waitFor(() => pids("slow.pid").every((pid) => !alive(pid)), { what: "the processes to end", timeout: 5_000 });
+    expect(gateway.query<{ result: string }>("SELECT DISTINCT result FROM bot_routine_runs WHERE routine = 'slow'")).toEqual([{ result: "timeout" }]);
+  });
+
+  // Windows has no SIGTERM: there the gateway ends at once, as after a crash.
+  it.skipIf(process.platform === "win32")("stops the commands it runs when the gateway stops", async () => {
+    await setUp();
+    await potsOk("routine", "add", "long", "--every", "1s", "--run", stay("long.pid"));
+    await waitFor(() => pids("long.pid").length === 1, { what: "the command to start" });
+    await gateway.stop();
+    await waitFor(() => !alive(pids("long.pid")[0]!), { what: "the process to end", timeout: 5_000 });
+    expect(gateway.query<{ result: string }>("SELECT result FROM bot_routine_runs WHERE routine = 'long'")).toEqual([{ result: "stopped" }]);
+  });
+});
+
 describe("when the model cannot be used", { timeout: 60_000 }, () => {
   it("says so in each place that woke the bot, once until it works again", async () => {
     let down = true;

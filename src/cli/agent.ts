@@ -66,6 +66,11 @@ const wake = Command.make(
     in: Flag.String("in").pipe(Flag.optional, Flag.withDescription("After this long: 90s, 30m, 2h, 1d.")),
     at: Flag.String("at").pipe(Flag.optional, Flag.withDescription('At this local time, for example "2026-10-28 09:00", or Unix ms.')),
     note: Flag.String("note").pipe(Flag.withDefault(""), Flag.withDescription("What the wake is for.")),
+    from: Flag.String("from").pipe(
+      Flag.optional,
+      Flag.withDescription("Where the wake comes from: a short name of the script or command that sets it. Default: $POTS_FROM."),
+    ),
+    id: Flag.String("id").pipe(Flag.optional, Flag.withDescription("A wake ID. A second wake with the same ID gives back the first and sets none.")),
     list: Flag.Boolean("list").pipe(Flag.withDefault(false), Flag.withDescription("List the pending wakes.")),
     cancel: Flag.Int("cancel").pipe(Flag.optional, Flag.withDescription("Cancel the pending wake with this ID.")),
     bot,
@@ -76,7 +81,9 @@ const wake = Command.make(
       if (input.list) return yield* printResult(yield* control(id, "GET", "/wakes"));
       if (Option.isSome(input.cancel)) return yield* printResult(yield* control(id, "POST", "/wakes/cancel", { id: input.cancel.value }));
       const at = Option.isSome(input.in) ? Date.now() + (yield* duration(input.in.value)) : Option.isSome(input.at) ? yield* time(input.at.value) : Date.now();
-      yield* printResult(yield* control(id, "POST", "/wake", { at, note: input.note }));
+      const from = Option.getOrUndefined(input.from) ?? process.env.POTS_FROM;
+      const body = { at, note: input.note, ...(from ? { from } : {}), ...(Option.isSome(input.id) ? { id: input.id.value } : {}) };
+      yield* printResult(yield* control(id, "POST", "/wake", body));
     }),
 ).pipe(Command.withDescription("Set a timed wake. With no time, the bot is woken now."));
 
@@ -111,7 +118,54 @@ const children = Command.make(
     }),
 ).pipe(Command.withDescription("List the children the bot's main agent started, with each one's thinking level, or stop one or all. A stopped child reports nothing."));
 
-export const agentCommands = [send, react, call, wake, context, turnPage, children] as const;
+const routineAdd = Command.make(
+  "add",
+  {
+    name: Argument.String("name").pipe(Argument.withDescription('A short name: letters, digits, "-" and "_". A routine with this name is replaced.')),
+    every: Flag.String("every").pipe(Flag.optional, Flag.withDescription("Repeat this often: 90s, 30m, 2h, 1d. The first time is one interval from now.")),
+    cron: Flag.String("cron").pipe(Flag.optional, Flag.withDescription('A cron expression in this computer\'s time zone, for example "0 9 * * 1-5".')),
+    note: Flag.String("note").pipe(Flag.optional, Flag.withDescription("Wake the bot with this note.")),
+    run: Flag.String("run").pipe(
+      Flag.optional,
+      Flag.withDescription("Run this command in the bot's shell, with POTS_FROM set to the routine's name. It decides itself whether to wake the bot."),
+    ),
+    timeout: Flag.String("timeout").pipe(Flag.optional, Flag.withDescription("For --run: stop the command and what it started after this long. Default: 10m.")),
+    bot,
+  },
+  (input) =>
+    Effect.gen(function* () {
+      const id = yield* resolveBot(input.bot);
+      const body: Record<string, unknown> = { name: input.name };
+      if (Option.isSome(input.every)) body.every = yield* duration(input.every.value);
+      if (Option.isSome(input.cron)) body.cron = input.cron.value;
+      if (Option.isSome(input.note)) body.note = input.note.value;
+      if (Option.isSome(input.run)) body.run = input.run.value;
+      if (Option.isSome(input.timeout)) body.timeout = yield* duration(input.timeout.value);
+      yield* printResult(yield* control(id, "POST", "/routines/add", body));
+    }),
+).pipe(Command.withDescription("Add a routine: a note that wakes the bot, or a command that runs, at each time of its schedule."));
+
+const routineList = Command.make("list", { bot }, (input) =>
+  Effect.gen(function* () {
+    const id = yield* resolveBot(input.bot);
+    const result = (yield* control(id, "GET", "/routines")) as { text: string };
+    yield* printResult(result.text);
+  }),
+).pipe(Command.withDescription("List the routines, with each one's next time and last run, and the fallback check-in."));
+
+const routineRemove = Command.make("remove", { name: Argument.String("name"), bot }, (input) =>
+  Effect.gen(function* () {
+    const id = yield* resolveBot(input.bot);
+    yield* printResult(yield* control(id, "POST", "/routines/remove", { name: input.name }));
+  }),
+).pipe(Command.withDescription("Remove a routine. A command of it that runs now goes on until it ends."));
+
+const routine = Command.make("routine").pipe(
+  Command.withDescription("Repeating work: a note that wakes the bot, or a command that runs, on a schedule."),
+  Command.withSubcommands([routineAdd, routineList, routineRemove]),
+);
+
+export const agentCommands = [send, react, call, wake, routine, context, turnPage, children] as const;
 
 function duration(text: string) {
   const match = /^(\d+(?:\.\d+)?)(s|m|h|d)$/.exec(text.trim());

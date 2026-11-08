@@ -35,6 +35,12 @@ export class BadHappening extends Data.TaggedError("BadHappening")<{ readonly me
 /** A timer at a time that is not a number. */
 export class BadTime extends Data.TaggedError("BadTime")<{ readonly message: string }> {}
 
+/** A routine's name or a wake's source that is not a short name. */
+export class BadName extends Data.TaggedError("BadName")<{ readonly message: string }> {}
+
+/** A routine that cannot be added as given: its schedule, what it does or its timeout. */
+export class BadRoutine extends Data.TaggedError("BadRoutine")<{ readonly message: string }> {}
+
 /** The bot is not ready to be woken yet. */
 export class NoWakeTarget extends Data.TaggedError("NoWakeTarget")<{ readonly message: string }> {}
 

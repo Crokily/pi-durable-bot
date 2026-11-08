@@ -2,7 +2,9 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
-## Unreleased
+## 0.6.1 (2026-11-08)
+
+Pots is safer on a Linux computer that more than one user shares, and stops cleanly on Windows.
 
 ### Changed
 - **Windows: `pots service restart`, `install` and `uninstall` stop the gateway cleanly.** They used to end its processes at once, as a crash does. Now they ask the gateway to stop, as systemd and launchd do on Linux and macOS: it finishes the decision in progress, stops the commands of routines, and closes its channels and files. A gateway that has not ended after 30 seconds is ended as before. The scheduled task does not start it again.

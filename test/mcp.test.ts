@@ -1,3 +1,4 @@
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
@@ -118,5 +119,25 @@ describe("code mode and MCP servers", { timeout: 90_000 }, () => {
     expect(again.status).toBe(1);
     expect(again.stderr).toBe(`No global MCP server named "shouter" in ${file}.\n`);
     expect((await mcp("list")).stdout).toBe(`No MCP servers configured. Add them to ${file} or .pi/mcp.json.\n`);
+  });
+
+  it("reads the .pi/mcp.json of a bot's workspace in that folder, as the bot does, and asks pi's trust elsewhere", async () => {
+    model = await startFakeModel(script);
+    gateway = new TestGateway({ model });
+    const workspace = join(gateway.botDir, "workspace");
+    const other = join(gateway.home, "project");
+    for (const dir of [workspace, other]) mkdirSync(dir, { recursive: true });
+    const inFolder = (cwd: string, ...args: string[]) => gateway.run(["mcp", ...args], { env: { PI_CODING_AGENT_DIR: join(gateway.home, "pi") }, cwd });
+
+    // No note that the file is ignored. pi names it by the folder as the system gives it, a real path on macOS.
+    const added = await inFolder(workspace, "add", "--local", "shouter", "--", process.execPath, SERVER);
+    expect(added.stdout).toMatch(/^Added project MCP server "shouter" in .+[\\/]workspace[\\/]\.pi[\\/]mcp\.json\.\nCheck it with: pots mcp list\n$/);
+    const listed = await inFolder(workspace, "list");
+    expect(listed.status).toBe(0);
+    expect(listed.stdout).toBe(`shouter: connected, 1 tool (codemode, project)\n  ${process.execPath} ${SERVER}\n  tools: shout\n`);
+
+    // Another folder is pi's project, which pi reads only once a person trusted it.
+    await inFolder(other, "add", "--local", "shouter", "--", process.execPath, SERVER);
+    expect((await inFolder(other, "list")).stdout).toMatch(/[\\/]project[\\/]\.pi[\\/]mcp\.json is ignored because the project is not trusted\./);
   });
 });

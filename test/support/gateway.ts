@@ -173,11 +173,11 @@ export class TestGateway {
   }
 
   /**
-   * Run a pots command, also one that fails, with this standard input and environment. It does not block, so the fake
+   * Run a pots command, also one that fails, with this standard input, environment and folder. It does not block, so the fake
    * model in this process keeps answering while the command waits for the bot.
    */
-  run(args: readonly string[], options: { input?: string; env?: Record<string, string> } = {}): Promise<{ status: number | null; stdout: string; stderr: string }> {
-    const child = spawn(process.execPath, [POTS, ...args], { env: { ...process.env, POTS_HOME: this.home, NO_COLOR: "1", ...options.env } });
+  run(args: readonly string[], options: { input?: string; env?: Record<string, string>; cwd?: string } = {}): Promise<{ status: number | null; stdout: string; stderr: string }> {
+    const child = spawn(process.execPath, [POTS, ...args], { env: { ...process.env, POTS_HOME: this.home, NO_COLOR: "1", ...options.env }, ...(options.cwd ? { cwd: options.cwd } : {}) });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString("utf8")));

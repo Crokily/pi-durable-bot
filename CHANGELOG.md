@@ -2,6 +2,11 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
+## Unreleased
+
+### Fixed
+- **`pots mcp` in a bot's `workspace/` shows the servers the bot uses.** The bot always reads the `.pi/mcp.json` in its own `workspace/`, but `pots mcp list` there said the file was ignored because pi did not trust the folder. Now `pots mcp` treats that folder as trusted, as the bot does. In other folders it asks pi's trust as before.
+
 ## 0.6.0 (2026-11-08)
 
 The bot gets apps and routines: MCP servers and command line tools that it calls, and repeating work on a schedule.

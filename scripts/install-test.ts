@@ -52,8 +52,11 @@ function run(command: string, args: readonly string[], options: { cwd?: string; 
   if (!options.quiet) console.log(`\n$ ${command} ${args.join(" ")}`);
   return new Promise((resolve, reject) => {
     // npm and the pots command are .cmd files on Windows, which only a shell runs. No argument to them needs quoting.
+    // Only a path is quoted: cmd starts a quoted batch name without its extension ("npm") with %~dp0 set to the
+    // current folder, so npm.cmd looks for npm-cli.js in the wrong place.
     const shell = windows && !command.endsWith(".exe");
-    const child = spawn(shell ? `"${command}"` : command, args, { env, cwd: options.cwd ?? work, shell });
+    const quoted = shell && /[\\/]/.test(command) ? `"${command}"` : command;
+    const child = spawn(quoted, args, { env, cwd: options.cwd ?? work, shell });
     let out = "";
     const show = (chunk: Buffer) => {
       out += chunk.toString("utf8");
@@ -116,7 +119,8 @@ async function gatewayLog(): Promise<string> {
     const file = join(potsHome, "logs", "gateway.log");
     return existsSync(file) ? readFileSync(file, "utf8") : "";
   }
-  const unit = mode === "system" ? ["--unit", "pots.service"] : ["--user-unit", "pots.service"];
+  // As root, --user-unit would look for root's own user units; match the runner's user unit by its fields instead.
+  const unit = mode === "system" ? ["--unit", "pots.service"] : [`_SYSTEMD_USER_UNIT=pots.service`, `_UID=${process.getuid!()}`];
   return (await run("sudo", ["journalctl", "--no-pager", "-o", "cat", ...unit], { quiet: true })).out;
 }
 

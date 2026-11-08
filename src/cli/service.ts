@@ -1,10 +1,11 @@
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { request } from "node:http";
 import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Context, Effect, Layer } from "effect";
-import { LOGS_DIR, PID_FILE, POTS_HOME, runningGateway } from "../core/home.ts";
+import { gatewayPipe, LOGS_DIR, PID_FILE, POTS_HOME, processRunning, runningGateway } from "../core/home.ts";
 import { userError } from "./control.ts";
 
 // The gateway as a background service of the user who runs it, so it starts at login and the bots can use the desktop
@@ -158,56 +159,83 @@ WantedBy=${system ? "multi-user.target" : "default.target"}
 `;
 }
 
-const systemd: ServiceManager = {
-  get kind() {
-    return existsSync(systemUnit) ? "systemd" : "systemd --user";
-  },
-  installed: () => existsSync(userUnit) || existsSync(systemUnit),
-  install: ({ system }) =>
-    Effect.gen(function* () {
-      mkdirSync(POTS_HOME, { recursive: true });
-      if (system) {
-        if (existsSync(userUnit)) yield* systemd.uninstall();
-        yield* run("sudo", ["tee", systemUnit], { input: unitText(true) });
-        yield* run("sudo", ["systemctl", "daemon-reload"]);
-        yield* run("sudo", ["systemctl", "enable", "pots.service"]);
-        yield* run("sudo", ["systemctl", "restart", "pots.service"]);
-        return;
-      }
-      if (existsSync(systemUnit)) return yield* Effect.fail(userError(`a system service is installed (${systemUnit}); use pots service install --system, or uninstall it first`));
-      mkdirSync(dirname(userUnit), { recursive: true });
-      writeFileSync(userUnit, unitText(false));
-      yield* run("systemctl", ["--user", "daemon-reload"]);
-      yield* run("systemctl", ["--user", "enable", "pots.service"]);
-      yield* run("systemctl", ["--user", "restart", "pots.service"]);
-      // Keep the user's services running without a login session, and start them at boot. Where polkit does not let a
-      // user do that for themselves, sudo without a password often can, as on many cloud servers.
-      const user = userInfo().username;
-      yield* run("loginctl", ["enable-linger", user]).pipe(
-        Effect.catch(() => run("sudo", ["-n", "loginctl", "enable-linger", user])),
-        Effect.catch(() => Effect.logWarning(`could not enable lingering, so the bots stop when you log out. Run: sudo loginctl enable-linger ${user}`)),
-      );
-    }),
-  uninstall: () =>
-    Effect.gen(function* () {
-      if (existsSync(systemUnit)) {
-        yield* run("sudo", ["systemctl", "disable", "--now", "pots.service"]);
-        yield* run("sudo", ["rm", "-f", systemUnit]);
-        yield* run("sudo", ["systemctl", "daemon-reload"]);
-      }
-      if (existsSync(userUnit)) {
-        yield* run("systemctl", ["--user", "disable", "--now", "pots.service"]);
-        rmSync(userUnit, { force: true });
-        yield* run("systemctl", ["--user", "daemon-reload"]);
-      }
-    }),
-  restart: () =>
-    (existsSync(systemUnit) ? run("sudo", ["systemctl", "restart", "pots.service"]) : run("systemctl", ["--user", "restart", "pots.service"])).pipe(
-      Effect.asVoid,
-    ),
-  logs: ({ lines, follow }) =>
-    passthrough("journalctl", [...(existsSync(systemUnit) ? [] : ["--user"]), "-u", "pots.service", "-n", String(lines), "-o", "cat", ...(follow ? ["-f"] : [])]),
-};
+/** The user a system unit runs the gateway as: its User=, or root without one. Undefined when it cannot be read. */
+function unitUser(file: string): string | undefined {
+  try {
+    return /^User=(.*)$/m.exec(readFileSync(file, "utf8"))?.[1]?.trim() ?? "root";
+  } catch {
+    return undefined;
+  }
+}
+
+const isMe = (user: string) => user === userInfo().username || user === String(userInfo().uid);
+
+/**
+ * systemd: a user unit, or a system unit with --system. One Pots per Linux user: a system unit that runs as another
+ * user is that user's, so it counts as not there, and this user gets a user unit of their own. Paths and commands can be
+ * given for tests.
+ */
+export function systemdManager(files = { user: userUnit, system: systemUnit }, exec: typeof run = run): ServiceManager {
+  const ownSystem = () => {
+    const user = unitUser(files.system);
+    return user !== undefined && isMe(user);
+  };
+  const otherUser = () => {
+    const user = unitUser(files.system);
+    return user !== undefined && !isMe(user) ? user : undefined;
+  };
+  const manager: ServiceManager = {
+    get kind() {
+      return ownSystem() ? "systemd" : "systemd --user";
+    },
+    installed: () => existsSync(files.user) || ownSystem(),
+    install: ({ system }) =>
+      Effect.gen(function* () {
+        mkdirSync(POTS_HOME, { recursive: true });
+        if (system) {
+          const other = otherUser();
+          if (other) return yield* Effect.fail(userError(`a system service of user ${other} is installed (${files.system}); use a user service: pots service install`));
+          if (existsSync(files.user)) yield* manager.uninstall();
+          yield* exec("sudo", ["tee", files.system], { input: unitText(true) });
+          yield* exec("sudo", ["systemctl", "daemon-reload"]);
+          yield* exec("sudo", ["systemctl", "enable", "pots.service"]);
+          yield* exec("sudo", ["systemctl", "restart", "pots.service"]);
+          return;
+        }
+        if (ownSystem()) return yield* Effect.fail(userError(`a system service is installed (${files.system}); use pots service install --system, or uninstall it first`));
+        mkdirSync(dirname(files.user), { recursive: true });
+        writeFileSync(files.user, unitText(false));
+        yield* exec("systemctl", ["--user", "daemon-reload"]);
+        yield* exec("systemctl", ["--user", "enable", "pots.service"]);
+        yield* exec("systemctl", ["--user", "restart", "pots.service"]);
+        // Keep the user's services running without a login session, and start them at boot. Where polkit does not let a
+        // user do that for themselves, sudo without a password often can, as on many cloud servers.
+        const user = userInfo().username;
+        yield* exec("loginctl", ["enable-linger", user]).pipe(
+          Effect.catch(() => exec("sudo", ["-n", "loginctl", "enable-linger", user])),
+          Effect.catch(() => Effect.logWarning(`could not enable lingering, so the bots stop when you log out. Run: sudo loginctl enable-linger ${user}`)),
+        );
+      }),
+    uninstall: () =>
+      Effect.gen(function* () {
+        if (ownSystem()) {
+          yield* exec("sudo", ["systemctl", "disable", "--now", "pots.service"]);
+          yield* exec("sudo", ["rm", "-f", files.system]);
+          yield* exec("sudo", ["systemctl", "daemon-reload"]);
+        }
+        if (existsSync(files.user)) {
+          yield* exec("systemctl", ["--user", "disable", "--now", "pots.service"]);
+          rmSync(files.user, { force: true });
+          yield* exec("systemctl", ["--user", "daemon-reload"]);
+        }
+      }),
+    restart: () =>
+      (ownSystem() ? exec("sudo", ["systemctl", "restart", "pots.service"]) : exec("systemctl", ["--user", "restart", "pots.service"])).pipe(Effect.asVoid),
+    logs: ({ lines, follow }) =>
+      passthrough("journalctl", [...(ownSystem() ? [] : ["--user"]), "-u", "pots.service", "-n", String(lines), "-o", "cat", ...(follow ? ["-f"] : [])]),
+  };
+  return manager;
+}
 
 // ---- Windows ----
 
@@ -217,11 +245,40 @@ const launcher = join(POTS_HOME, "bin", "gateway.vbs");
 const ps = (text: string) => `'${text.replaceAll("'", "''")}'`;
 const powershell = (script: string) => run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script]);
 
-/** Stop the gateway the task started: the task first (so it does not restart it), then the gateway's processes. */
+/** As long as systemd (TimeoutStopSec) and launchd (ExitTimeOut) let the gateway stop before they kill it. */
+const STOP_TIMEOUT_MS = 30_000;
+
+/**
+ * Ask the gateway with this process ID to stop, as SIGTERM does elsewhere (gatewayPipe). False when nothing listens, as
+ * with a gateway older than this request; true when it answered, or took the request and ended before it could.
+ */
+export function askGatewayToStop(pid: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let connected = false;
+    const req = request({ socketPath: gatewayPipe(pid), method: "POST", path: "/stop" }, (res) => {
+      res.resume();
+      resolve(true);
+    });
+    req.on("socket", (socket) => socket.once("connect", () => (connected = true)));
+    req.on("error", () => resolve(connected));
+    req.setTimeout(10_000, () => req.destroy());
+    req.end();
+  });
+}
+
+/**
+ * Stop the gateway the task started, as systemd and launchd do: ask it to stop, and end its processes only when it has
+ * not ended within their time. Then stop the task, whose launcher starts the gateway again after an exit with an error.
+ */
 const stopWindowsGateway = Effect.gen(function* () {
-  yield* powershell(`Stop-ScheduledTask -TaskName ${ps(TASK)} -ErrorAction SilentlyContinue`).pipe(Effect.ignore);
   const pid = runningGateway();
-  if (pid !== undefined) yield* run("taskkill", ["/PID", String(pid), "/T", "/F"], { quiet: true }).pipe(Effect.ignore);
+  if (pid !== undefined && (yield* Effect.promise(() => askGatewayToStop(pid)))) {
+    const deadline = Date.now() + STOP_TIMEOUT_MS;
+    while (processRunning(pid) && Date.now() < deadline) yield* Effect.sleep("200 millis");
+  }
+  yield* powershell(`Stop-ScheduledTask -TaskName ${ps(TASK)} -ErrorAction SilentlyContinue`).pipe(Effect.ignore);
+  const left = runningGateway();
+  if (left !== undefined) yield* run("taskkill", ["/PID", String(left), "/T", "/F"], { quiet: true }).pipe(Effect.ignore);
   rmSync(PID_FILE, { force: true });
 });
 
@@ -276,4 +333,4 @@ const windows: ServiceManager = {
 };
 
 /** The service manager of this platform. */
-export const layer = Layer.succeed(Service, process.platform === "darwin" ? launchd : process.platform === "win32" ? windows : systemd);
+export const layer = Layer.succeed(Service, process.platform === "darwin" ? launchd : process.platform === "win32" ? windows : systemdManager());

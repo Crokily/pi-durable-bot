@@ -24,10 +24,20 @@ export function runningGateway(): number | undefined {
   if (!existsSync(PID_FILE)) return undefined;
   const pid = Number(readFileSync(PID_FILE, "utf8").trim());
   if (!Number.isInteger(pid) || pid <= 0) return undefined;
+  return processRunning(pid) ? pid : undefined;
+}
+
+export function processRunning(pid: number): boolean {
   try {
     process.kill(pid, 0);
-    return pid;
+    return true;
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM" ? pid : undefined;
+    return (error as NodeJS.ErrnoException).code === "EPERM";
   }
 }
+
+/**
+ * Windows has no SIGTERM. There the gateway takes `POST /stop` on this named pipe and stops as it does on SIGTERM
+ * elsewhere; pots service asks it so before it ends the gateway's processes.
+ */
+export const gatewayPipe = (pid: number) => `\\\\.\\pipe\\pots-gateway-${pid}`;

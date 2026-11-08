@@ -1,7 +1,7 @@
 import { Effect, Exit, Layer } from "effect";
 import { TestClock } from "effect/testing";
 import fc from "fast-check";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ChannelSink } from "../src/core/channel.ts";
 import { Channels } from "../src/gateway/channels.ts";
 import { Inbox } from "../src/gateway/inbox.ts";
@@ -16,6 +16,8 @@ import { advance, logHappening, MemoryChannel, message, SETTINGS, settle, withCo
 
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect.pipe(Effect.provide(Layer.mergeAll(TestClock.layer()))));
 const RUNS = { numRuns: 60 };
+// Each test runs 60 random cases; on a slow CI machine that can take longer than the 5 s default.
+vi.setConfig({ testTimeout: 30_000 });
 
 const sink: ChannelSink = {
   receive: async () => {},

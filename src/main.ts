@@ -4,8 +4,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openModels } from "./agent/models.ts";
 import { Bot } from "./bot/bot.ts";
+import { ControlServer } from "./bot/control.ts";
 import { BOT_ID, botPaths, readDefinition } from "./bot/definition.ts";
-import { BIN_DIR, BOTS_DIR, PID_FILE, POTS_HOME, runningGateway } from "./core/home.ts";
+import { BIN_DIR, BOTS_DIR, gatewayPipe, PID_FILE, POTS_HOME, runningGateway } from "./core/home.ts";
 
 // The gateway: runs every bot folder in ~/.pots/bots. A folder with a bot.json is a bot. Checks the folders every few
 // seconds, so a new folder starts a bot, a removed one stops it, and a changed bot.json applies while running.
@@ -34,7 +35,7 @@ function writePotsCommand(): string {
   return command;
 }
 
-/** Run the gateway until SIGTERM or SIGINT. Only one gateway runs per POTS_HOME. */
+/** Run the gateway until SIGTERM or SIGINT, or on Windows a stop request. Only one gateway runs per POTS_HOME. */
 export async function runGateway(): Promise<void> {
   mkdirSync(BOTS_DIR, { recursive: true, mode: 0o700 });
   const other = runningGateway();
@@ -110,7 +111,6 @@ export async function runGateway(): Promise<void> {
   }
 
   await rescan();
-  log("started", { home: POTS_HOME, bots: [...running.keys()] });
   const timer = setInterval(() => void rescan(), SCAN_MS);
 
   async function shutdown(signal: string): Promise<void> {
@@ -128,6 +128,19 @@ export async function runGateway(): Promise<void> {
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("unhandledRejection", (error) => log("unhandled rejection", { error: String(error) }));
+  // Windows has no SIGTERM: pots service asks over a named pipe instead, and waits for this process to end. The shutdown
+  // begins once the answer is written.
+  if (process.platform === "win32") {
+    const control = new ControlServer(gatewayPipe(process.pid), {
+      "POST /stop": async () => {
+        setImmediate(() => void shutdown("stop request"));
+        return "stopping";
+      },
+    });
+    await control.start().catch((error: unknown) => log("stop pipe failed", { error: String(error) }));
+  }
+  // From here on the gateway stops cleanly when it is asked to.
+  log("started", { home: POTS_HOME, bots: [...running.keys()] });
 }
 
 /** Write a file whole: to a part file first, then renamed, so that no reader sees it half written. */

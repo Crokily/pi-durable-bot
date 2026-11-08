@@ -10,7 +10,9 @@ npm run tla     # the TLA+ models, about 2.5 minutes; needs Java and tla2tools.j
 
 Run `npm run check` and `npm test` before every commit. Run `npm run tla` too when you change the inbox, the waker, the outbox or the timers.
 
-Every pull request runs `npm run check` and `npm test` on Linux, macOS and Windows (`.github/workflows/ci.yml`). Dependencies are pinned to exact versions; Dependabot (`.github/dependabot.yml`) opens a pull request each week when a new version comes out, with the Chat SDK packages, the pi packages and the Effect packages each in one pull request, and CI tests it.
+Every pull request runs `npm run check` and `npm test` on Linux, macOS and Windows (`.github/workflows/ci.yml`). It also installs Pots on each of them as a person gets it, with `scripts/install-test.ts`: it packs the package, installs it globally from the tarball without our lockfile, makes a bot with `pots init` and the fake model, runs the gateway as the background service, sends the bot a message with `pots chat -m` and waits for its answer, and removes the service. The gateway must stop cleanly: its output must end with `shutdown` and `bot stopped`. On Linux it does this with a user service, then with a system service (`--system`); a runner has no login session, so CI first turns on lingering, which starts the user's systemd as a login does. The service's gateway reads pi's `~/.pi/agent` and keeps its bots in `~/.pots`, so the script writes there, and only where `CI` is set. To try it on your computer, run `node scripts/install-test.ts --foreground`: it runs `pots start` instead of the service, with folders of its own.
+
+Dependencies are pinned to exact versions; Dependabot (`.github/dependabot.yml`) opens a pull request each week when a new version comes out, with the Chat SDK packages, the pi packages and the Effect packages each in one pull request, and CI tests it.
 
 ## Tests
 

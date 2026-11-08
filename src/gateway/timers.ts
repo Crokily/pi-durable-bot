@@ -217,25 +217,30 @@ export class Timers extends Context.Service<
 
         // ---- Routines ----
 
+        /** Runs are kept RUN_DAYS days; one that still runs is kept until it ends. */
+        const pruneRuns = (tx: SqlExecutor, now: number) => tx.run("DELETE FROM bot_routine_runs WHERE started_at < ? AND result != 'running'", now - RUN_DAYS * DAY_MS);
+
         /**
          * A run ended: keep how, and wake the bot about a failure, once until a run of the routine succeeds. A run the
-         * gateway stopped changes nothing else.
+         * gateway stopped changes nothing else, and neither does a run of a routine that was replaced or removed since it
+         * started (version is the created_at of the routine that started it).
          */
-        const finish = (name: string, runId: number, end: { result: RunResult; exitCode?: number; output: string }) =>
+        const finish = (name: string, version: number, runId: number, end: { result: RunResult; exitCode?: number; output: string }) =>
           Effect.gen(function* () {
             const now = yield* Clock.currentTimeMillis;
             const ended = { result: end.result, exit_code: end.exitCode ?? null };
             const woke = yield* db(() =>
               sql.transaction(async (tx) => {
                 await tx.run("UPDATE bot_routine_runs SET ended_at = ?, result = ?, exit_code = ?, output = ? WHERE id = ?", now, ended.result, ended.exit_code, end.output, runId);
-                await tx.run("DELETE FROM bot_routine_runs WHERE started_at < ? AND result != 'running'", now - RUN_DAYS * DAY_MS);
+                await pruneRuns(tx, now);
                 if (end.result === "stopped") return false;
+                const routine = await tx.get<{ failing: number; created_at: number }>("SELECT failing, created_at FROM bot_routines WHERE name = ?", name);
+                if (!routine || routine.created_at !== version) return false;
                 if (!failed(ended)) {
                   await tx.run("UPDATE bot_routines SET failing = 0 WHERE name = ?", name);
                   return false;
                 }
-                const routine = await tx.get<{ failing: number }>("SELECT failing FROM bot_routines WHERE name = ?", name);
-                if (!routine || routine.failing) return false;
+                if (routine.failing) return false;
                 await tx.run("UPDATE bot_routines SET failing = 1 WHERE name = ?", name);
                 await insertWake(tx, { dueAt: now, note: "", setBy: "routine", source: name, runId, now });
                 return true;
@@ -264,15 +269,15 @@ export class Timers extends Context.Service<
             const halt = Effect.sync(() => controller.abort()).pipe(Effect.andThen(Effect.promise(end).pipe(Effect.timeoutOption(HALT_MS))));
             const outcome = yield* Effect.promise(end).pipe(
               Effect.timeoutOption(routine.timeout_ms),
-              Effect.onInterrupt(() => halt.pipe(Effect.andThen(finish(routine.name, runId, { result: "stopped", output: output.text })))),
+              Effect.onInterrupt(() => halt.pipe(Effect.andThen(finish(routine.name, routine.created_at, runId, { result: "stopped", output: output.text })))),
             );
             yield* Effect.uninterruptible(
               Option.match(outcome, {
-                onNone: () => halt.pipe(Effect.andThen(finish(routine.name, runId, { result: "timeout", output: output.text }))),
+                onNone: () => halt.pipe(Effect.andThen(finish(routine.name, routine.created_at, runId, { result: "timeout", output: output.text }))),
                 onSome: (result) =>
                   "error" in result
-                    ? finish(routine.name, runId, { result: "error", output: result.error })
-                    : finish(routine.name, runId, { result: "exit", exitCode: result.exitCode, output: output.text }),
+                    ? finish(routine.name, routine.created_at, runId, { result: "error", output: result.error })
+                    : finish(routine.name, routine.created_at, runId, { result: "exit", exitCode: result.exitCode, output: output.text }),
               }),
             );
           });
@@ -302,6 +307,7 @@ export class Timers extends Context.Service<
                 sql.transaction(async (tx) => {
                   await setNext(tx);
                   await tx.run("INSERT INTO bot_routine_runs (routine, started_at, ended_at, result) VALUES (?, ?, ?, 'woke')", routine.name, now, now);
+                  await pruneRuns(tx, now);
                   await insertWake(tx, { dueAt: now, note: routine.note ?? "", setBy: "routine", source: routine.name, now });
                 }),
               );
@@ -425,7 +431,13 @@ export class Timers extends Context.Service<
               };
               const replaced = yield* db(() =>
                 sql.transaction(async (tx) => {
-                  const before = await tx.get("SELECT 1 AS x FROM bot_routines WHERE name = ?", routine.name);
+                  const before = await tx.get<{ created_at: number }>("SELECT created_at FROM bot_routines WHERE name = ?", routine.name);
+                  // A newer version than the one it replaces, also within the same millisecond: a run of the old one
+                  // that still runs must not count for it.
+                  if (before && before.created_at >= routine.created_at) {
+                    routine.created_at = before.created_at + 1;
+                    routine.next_at = nextAfter({ ...schedule, created_at: routine.created_at }, now) ?? NEVER;
+                  }
                   await tx.run(
                     "INSERT OR REPLACE INTO bot_routines (name, every_ms, cron, note, run, timeout_ms, created_at, next_at, failing) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)",
                     routine.name,

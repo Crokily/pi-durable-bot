@@ -367,6 +367,8 @@ describe("routines", { timeout: 60_000 }, () => {
     // Its next runs give the same wake ID, so they set no other wake.
     await waitFor(() => gateway.query("SELECT 1 FROM bot_routine_runs WHERE routine = 'inbox-watch' AND result = 'exit' AND exit_code = 0").length >= 3, { what: "three runs" });
     await potsOk("routine", "remove", "inbox-watch");
+    // A run that still runs ends on its own; on Windows its processes would keep the test's folder until then.
+    await waitFor(() => gateway.query("SELECT 1 FROM bot_routine_runs WHERE routine = 'inbox-watch' AND result = 'running'").length === 0, { what: "the last run to end" });
     expect(gateway.query("SELECT set_by, source, request_id FROM bot_timers WHERE set_by != 'fallback'")).toEqual([{ set_by: "agent", source: "inbox-watch", request_id: "mail-1" }]);
     expect(wakesFrom("[wake] timed wake")).toHaveLength(1);
   });
@@ -387,6 +389,8 @@ describe("routines", { timeout: 60_000 }, () => {
     await potsOk("routine", "add", "backup", "--every", "1s", "--run", "echo copying; echo the disk is full >&2; exit 3");
     await waitFor(() => gateway.query("SELECT 1 FROM bot_routine_runs WHERE routine = 'backup' AND exit_code = 3").length >= 3, { what: "three failed runs" });
     await potsOk("routine", "remove", "backup");
+    // A run that still runs ends on its own; on Windows its processes would keep the test's folder until then.
+    await waitFor(() => gateway.query("SELECT 1 FROM bot_routine_runs WHERE routine = 'backup' AND result = 'running'").length === 0, { what: "the last run to end" });
     await waitFor(() => wakesFrom("[wake] routine backup failed").length === 1, { what: "the wake about the failure" });
     const wake = wakesFrom("[wake] routine backup failed")[0]!;
     expect(wake).toMatch(/^\[wake\] routine backup failed: its command ended with exit code 3\n/);

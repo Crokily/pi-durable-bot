@@ -7,6 +7,7 @@ import { advance, type Recorder, settle, withCore } from "./support/core.ts";
 
 const SECOND = 1_000;
 const MINUTE = 60_000;
+const DAY = 24 * 60 * MINUTE;
 
 /** The routines' wakes so far: [routine, failed run's result or "note", when]. */
 const routineWakes = (recorder: Recorder) =>
@@ -280,6 +281,44 @@ describe("routines", () => {
       }),
     );
   });
+
+  it.effect("keep a replaced routine's run that still runs apart from the routine that replaced it", () =>
+    withCore({ fallbackWakeMinutes: 600 }, (recorder) =>
+      Effect.gen(function* () {
+        const timers = yield* Timers;
+        yield* timers.start;
+        yield* timers.addRoutine({ name: "backup", every: 10 * MINUTE, run: "./old.sh" });
+        yield* pass(10 * MINUTE);
+        const old = recorder.commands.at(-1)!;
+        assert.strictEqual(old.command, "./old.sh");
+        yield* timers.addRoutine({ name: "backup", every: 10 * MINUTE, run: "./new.sh" });
+        // The old command fails after the replacement: its run is kept, but it wakes nobody and does not count for the
+        // new routine.
+        old.end(1);
+        yield* settle;
+        assert.deepStrictEqual(routineWakes(recorder), []);
+        assert.strictEqual((yield* timers.routines).routines[0]!.failing, 0);
+        yield* pass(10 * MINUTE);
+        const replacement = recorder.commands.at(-1)!;
+        assert.strictEqual(replacement.command, "./new.sh");
+        replacement.end(2);
+        yield* settle;
+        assert.deepStrictEqual(routineWakes(recorder), [["backup", "exit", 20 * MINUTE]]);
+      }),
+    ));
+
+  it.effect("drop the runs older than 7 days, also when only --note routines run", () =>
+    withCore({ fallbackWakeMinutes: 600 }, (recorder, sql) =>
+      Effect.gen(function* () {
+        const timers = yield* Timers;
+        yield* timers.start;
+        yield* Effect.promise(() => sql.run("INSERT INTO bot_routine_runs (routine, started_at, ended_at, result) VALUES ('look', ?, ?, 'woke')", -8 * DAY, -8 * DAY));
+        yield* timers.addRoutine({ name: "look", every: MINUTE, note: "look around" });
+        yield* pass(MINUTE);
+        assert.strictEqual(recorder.timers.length, 1);
+        assert.deepStrictEqual(yield* Effect.promise(() => sql.all<{ started_at: number }>("SELECT started_at FROM bot_routine_runs")), [{ started_at: MINUTE }]);
+      }),
+    ));
 
   it.effect("replace a routine added again with the same name, and remove one", () =>
     withCore({ fallbackWakeMinutes: 600 }, (recorder) =>

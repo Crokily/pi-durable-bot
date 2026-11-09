@@ -236,7 +236,7 @@ All pages of this computer, of every bot, are under one address, so the browser 
 
 ## Cleanup
 
-- Pots deletes a page, with its links, when nobody opened it and you did not change it for 30 days. Pages in `pages/keep/` are never deleted that way.
+- Pots deletes a page, with its links, when nobody opened it, you made no link to it and you did not change it for 30 days. Pages in `pages/keep/` are never deleted that way.
 - A password page link expires 1 hour after you made it, unless it was used before.
 - Deleting a bot deletes its pages and links.
 - `pages/keep/` grows until you tidy it. Look through it now and then and ask the people whether old pages can go; a routine helps, for example `pots routine add tidy-pages --cron "0 10 1 * *" --note "Look through pages/keep/"`.

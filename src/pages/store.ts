@@ -53,8 +53,10 @@ const ADDED_COLUMNS = [
 ] as const;
 
 const DAY_MS = 86_400_000;
-/** A page under pages/, not pages/keep/, that nobody opened and nothing changed for this long is deleted with its links. */
+/** A page under pages/, not pages/keep/, that nobody opened or linked and nothing changed for this long is deleted with its links. */
 export const PAGE_DAYS = 30;
+/** A password page's wake that failed is tried again after this long. For tests: change ms. */
+export const secretWakeRetry = { ms: 10_000 };
 /** A password link that was not submitted stops working after this long. */
 export const SECRET_LINK_MS = 3_600_000;
 /** Password links are listed and kept this long after they were made. */
@@ -75,6 +77,9 @@ interface PageRow {
   changed_at: number;
   opened_at: number | null;
 }
+
+/** A page with the time its newest link was made, which counts as activity for the cleanup. */
+const PAGE_ACTIVITY = "SELECT p.*, (SELECT MAX(l.created_at) FROM bot_page_links l WHERE l.page = p.name) AS linked_at FROM bot_pages p";
 
 interface LinkRow {
   id: number;
@@ -164,6 +169,9 @@ export class BotPages {
   readonly #options: BotPagesOptions;
   readonly #clock: () => number;
   #cleaning: ReturnType<typeof setInterval> | undefined;
+  /** The next try of password-page wakes that failed, and whether the store stopped, so none is tried after. */
+  #wakeRetry: ReturnType<typeof setTimeout> | undefined;
+  #stopped = false;
   /** The cleanup that runs now, which a stop waits for, so it never runs on a closed database. */
   #cleanup: Promise<void> = Promise.resolve();
   /** One change at a time per page: making or opening a link waits while a cleanup deletes the page, and the reverse. */
@@ -239,7 +247,24 @@ export class BotPages {
       if (await this.#written(row)) await this.#sql.run("UPDATE bot_secret_links SET state = 'used', used_at = ? WHERE id = ?", this.#clock(), row.id);
       else await this.#sql.run("UPDATE bot_secret_links SET state = 'open', claimed_at = NULL, claim = NULL WHERE id = ?", row.id);
     }
+    await this.#wakePending();
+  }
+
+  /** Set the wake of each used password link that has none. */
+  async #wakePending(): Promise<void> {
     for (const row of await this.#sql.all<SecretRow>("SELECT * FROM bot_secret_links WHERE state = 'used' AND woken_at IS NULL")) await this.#wakeSecret(row);
+  }
+
+  /** Try the wakes that failed again after secretWakeRetry.ms, and again after that while one fails. */
+  #retryWakes(): void {
+    if (this.#wakeRetry || this.#stopped) return;
+    this.#wakeRetry = setTimeout(() => {
+      this.#wakeRetry = undefined;
+      this.#wakePending().catch((error: unknown) => {
+        this.#options.print("secret page wake failed", { error: error instanceof Error ? error.message : String(error) });
+        this.#retryWakes();
+      });
+    }, secretWakeRetry.ms).unref();
   }
 
   /** Delete old pages now, and then once a day, on the wall clock. */
@@ -257,7 +282,9 @@ export class BotPages {
   }
 
   stopCleanup(): Promise<void> {
+    this.#stopped = true;
     clearInterval(this.#cleaning);
+    clearTimeout(this.#wakeRetry);
     return this.#cleanup;
   }
 
@@ -442,7 +469,13 @@ export class BotPages {
     this.crashTests.afterSecretWrite();
     await this.#sql.run("UPDATE bot_secret_links SET state = 'used', used_at = ? WHERE id = ?", this.#clock(), claimed.id);
     this.crashTests.afterSecretUsed();
-    await this.#wakeSecret(claimed);
+    try {
+      await this.#wakeSecret(claimed);
+    } catch (error) {
+      // The values are in the file and the link is used, so the person is done. The bot's wake is tried again.
+      this.#options.print("secret page wake failed", { link: secretId(claimed), error: error instanceof Error ? error.message : String(error) });
+      this.#retryWakes();
+    }
     return "saved";
   }
 
@@ -483,7 +516,7 @@ export class BotPages {
   }
 
   /**
-   * Delete each page under pages/ (not pages/keep/) that nobody opened and nothing changed for PAGE_DAYS days, with its
+   * Delete each page under pages/ (not pages/keep/) that nobody opened or linked and nothing changed for PAGE_DAYS days, with its
    * links; the records of a page whose folder is gone go by the same rule. Each page is looked at again right before it
    * is deleted, alone for that page until it is gone, so one opened, linked or changed meanwhile stays, and no link is
    * made to it while it goes. Password links are deleted 7 days after they were made. For tests, hooks.beforeDelete
@@ -492,14 +525,15 @@ export class BotPages {
    */
   async cleanup(hooks: { beforeDelete?: (page: string) => Promise<void>; beforeRemove?: (page: string) => Promise<void> } = {}): Promise<string[]> {
     for (const name of await listPageNames(this.dir)) await this.#observe(name);
-    const stale = (row: PageRow, now: number) => Math.max(row.opened_at ?? 0, row.changed_at) < now - PAGE_DAYS * DAY_MS;
-    const candidates = (await this.#sql.all<PageRow>("SELECT * FROM bot_pages")).filter((row) => !row.name.startsWith("keep/") && stale(row, this.#clock()));
+    type Activity = PageRow & { linked_at: number | null };
+    const stale = (row: Activity, now: number) => Math.max(row.opened_at ?? 0, row.changed_at, row.linked_at ?? 0) < now - PAGE_DAYS * DAY_MS;
+    const candidates = (await this.#sql.all<Activity>(PAGE_ACTIVITY)).filter((row) => !row.name.startsWith("keep/") && stale(row, this.#clock()));
     const deleted: string[] = [];
     for (const candidate of candidates) {
       await hooks.beforeDelete?.(candidate.name);
       const gone = await this.#withPage(candidate.name, async () => {
         await this.#observe(candidate.name);
-        const row = await this.#sql.get<PageRow>("SELECT * FROM bot_pages WHERE name = ?", candidate.name);
+        const row = await this.#sql.get<Activity>(`${PAGE_ACTIVITY} WHERE p.name = ?`, candidate.name);
         if (!row || !stale(row, this.#clock())) return false;
         await hooks.beforeRemove?.(candidate.name);
         // Only a plain folder in pages/: never what a link points to. The records go once the folder is gone; when its

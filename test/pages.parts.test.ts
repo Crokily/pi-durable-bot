@@ -11,7 +11,7 @@ import { CLOUDFLARED_VERSION, downloadCloudflared, ensureCloudflared, untar } fr
 import { fileTestHooks, inside, openFile, pageFolder, pathSegments } from "../src/pages/files.ts";
 import { PageHost, QUICK_TUNNEL_NOTE } from "../src/pages/host.ts";
 import { readSettings } from "../src/pages/settings.ts";
-import { BotPages, PAGE_DAYS, SECRET_LINK_MS } from "../src/pages/store.ts";
+import { BotPages, PAGE_DAYS, SECRET_LINK_MS, secretWakeRetry } from "../src/pages/store.ts";
 import { QuickTunnel } from "../src/pages/tunnel.ts";
 import { waitFor } from "./support/gateway.ts";
 
@@ -127,6 +127,8 @@ interface Fixture {
   pages: BotPages;
   woke: { note: string; requestId: string }[];
   now: number;
+  /** How many of the next wakes fail. */
+  failWakes: number;
 }
 
 async function fixture(): Promise<Fixture> {
@@ -134,7 +136,7 @@ async function fixture(): Promise<Fixture> {
   const secrets = join(dir, "secrets");
   const sql = await openDatabase(join(dir, "bot.sqlite"));
   // From the wall clock: a written file's time is compared with it.
-  const state = { now: Date.now() };
+  const state = { now: Date.now(), failWakes: 0 };
   const woke: Fixture["woke"] = [];
   const seen = new Set<string>();
   const pages = await BotPages.open({
@@ -145,6 +147,10 @@ async function fixture(): Promise<Fixture> {
     name: () => "Coworker",
     // As the timers do: one wake per request ID.
     wake: async (note, requestId) => {
+      if (state.failWakes > 0) {
+        state.failWakes--;
+        throw new Error("database is locked");
+      }
       if (seen.has(requestId)) return;
       seen.add(requestId);
       woke.push({ note, requestId });
@@ -152,9 +158,9 @@ async function fixture(): Promise<Fixture> {
     print: () => {},
     clock: () => state.now,
   });
-  return Object.defineProperty({ dir, secrets, sql, pages, woke } as Omit<Fixture, "now">, "now", {
-    get: () => state.now,
-    set: (value: number) => (state.now = value),
+  return Object.defineProperties({ dir, secrets, sql, pages, woke } as Omit<Fixture, "now" | "failWakes">, {
+    now: { get: () => state.now, set: (value: number) => (state.now = value) },
+    failWakes: { get: () => state.failWakes, set: (value: number) => (state.failWakes = value) },
   }) as Fixture;
 }
 
@@ -166,7 +172,10 @@ const page = (f: Fixture, name: string, text = "<h1>hi</h1>") => {
 describe("password links", () => {
   let f: Fixture;
   beforeEach(async () => (f = await fixture()));
-  afterEach(async () => f.sql.close());
+  afterEach(async () => {
+    await f.pages.stopCleanup();
+    await f.sql.close();
+  });
 
   const form = (values: Record<string, string>) => new URLSearchParams(values);
 
@@ -248,6 +257,23 @@ describe("password links", () => {
     await f.pages.resume();
     expect(f.woke.map((wake) => wake.requestId)).toEqual(["secret:S1", "secret:S2"]);
   });
+
+  it("say the values are saved when the bot's wake fails, and set the wake later, without a restart", async () => {
+    secretWakeRetry.ms = 5;
+    try {
+      const link = await f.pages.createSecretLink({ file: "a.env", keys: ["A"] });
+      // The first try and the first retry fail.
+      f.failWakes = 2;
+      expect(await f.pages.submitSecret(link.token, form({ A: "kept" }))).toBe("saved");
+      expect(f.woke).toEqual([]);
+      expect(readFileSync(join(f.secrets, "a.env"), "utf8")).toContain("A=kept");
+      await waitFor(() => f.woke.length === 1);
+      expect(f.woke.map((wake) => wake.requestId)).toEqual(["secret:S1"]);
+      expect(await f.sql.get("SELECT state, woken_at IS NOT NULL AS woken FROM bot_secret_links")).toEqual({ state: "used", woken: 1 });
+    } finally {
+      secretWakeRetry.ms = 10_000;
+    }
+  });
 });
 
 describe("page cleanup", () => {
@@ -293,6 +319,25 @@ describe("page cleanup", () => {
     expect(deleted).toEqual(["untouched"]);
     expect(readdirSync(join(f.dir, "pages")).sort()).toEqual(["edited-meanwhile", "opened-meanwhile"]);
     expect(await f.pages.openLink(link.token)).toMatchObject({ page: "opened-meanwhile" });
+  });
+
+  it("keeps an old page that gets a new link, also one made between its first look and the delete", async () => {
+    page(f, "linked-before");
+    page(f, "linked-meanwhile");
+    page(f, "untouched");
+    // The daily look sees them for the first time.
+    expect(await f.pages.cleanup()).toEqual([]);
+    f.now += (PAGE_DAYS + 1) * DAY;
+    const before = await f.pages.createLink("linked-before");
+    let meanwhile: { token: string } | undefined;
+    const deleted = await f.pages.cleanup({
+      beforeDelete: async (name) => {
+        if (name === "linked-meanwhile") meanwhile = await f.pages.createLink(name);
+      },
+    });
+    expect(deleted).toEqual(["untouched"]);
+    expect(await f.pages.openLink(before.token)).toMatchObject({ page: "linked-before" });
+    expect(await f.pages.openLink(meanwhile!.token)).toMatchObject({ page: "linked-meanwhile" });
   });
 
   it("makes and opens no link of a page while the cleanup removes it", async () => {

@@ -1,15 +1,16 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, unlinkSync } from "node:fs";
-import { rm, stat } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { readSecrets, writeSecrets } from "../core/env-file.ts";
+import { CLAIM_LINE, writeSecrets } from "../core/env-file.ts";
 import type { Sql } from "../core/sql.ts";
 import type { Print } from "../gateway/config.ts";
-import { folderVersion, listPageNames, pageFolder, pageNameProblem } from "./files.ts";
+import { folderVersion, identity, listPageNames, pageFolder, pageNameProblem } from "./files.ts";
 
 // A bot's pages and links, in its own bot.sqlite: each link is written before it is given out, so it works after a
-// restart; it goes with its page, or with the bot. Secret values never come here: a password page's link keeps only its
-// file, its key names and its times.
+// restart; it goes with its page, or with the bot. A link is to one folder: when that folder is deleted, or another
+// folder takes its name, the link is dead for good. Secret values never come here: a password page's link keeps only
+// its file, its key names, its times and the ID of the submission that claimed it.
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS bot_pages (
@@ -24,7 +25,8 @@ CREATE TABLE IF NOT EXISTS bot_page_links (
   page TEXT NOT NULL,
   made_for TEXT,
   created_at INTEGER NOT NULL,
-  revoked_at INTEGER
+  revoked_at INTEGER,
+  folder TEXT
 );
 CREATE INDEX IF NOT EXISTS bot_page_links_page ON bot_page_links (page);
 CREATE TABLE IF NOT EXISTS bot_secret_links (
@@ -39,9 +41,16 @@ CREATE TABLE IF NOT EXISTS bot_secret_links (
   state TEXT NOT NULL,
   claimed_at INTEGER,
   used_at INTEGER,
-  woken_at INTEGER
+  woken_at INTEGER,
+  claim TEXT
 );
 `;
+
+/** Columns that came after the tables, added to a bot.sqlite from before them. */
+const ADDED_COLUMNS = [
+  ["bot_page_links", "folder", "TEXT"],
+  ["bot_secret_links", "claim", "TEXT"],
+] as const;
 
 const DAY_MS = 86_400_000;
 /** A page under pages/, not pages/keep/, that nobody opened and nothing changed for this long is deleted with its links. */
@@ -52,8 +61,6 @@ export const SECRET_LINK_MS = 3_600_000;
 const SECRET_KEEP_MS = 7 * DAY_MS;
 /** An open is written at most this often per page: a page loads many files, and a live page asks for its version often. */
 const OPEN_WRITE_MS = 60_000;
-/** A file written after the claim, by this much clock tolerance, counts as written by it. */
-const CLAIM_SLACK_MS = 2_000;
 /** Random bytes of a token: 144 bits, 24 base64url characters. */
 const TOKEN_BYTES = 18;
 
@@ -75,6 +82,8 @@ interface LinkRow {
   page: string;
   made_for: string | null;
   created_at: number;
+  /** The identity of the page folder the link was made for (device and inode). */
+  folder: string | null;
 }
 
 interface SecretRow {
@@ -90,6 +99,8 @@ interface SecretRow {
   claimed_at: number | null;
   used_at: number | null;
   woken_at: number | null;
+  /** The ID of the submission that claimed the link, also in a comment line of the file it wrote. */
+  claim: string | null;
 }
 
 /** A page link someone opened: what the page server needs to serve it and to tell the bot. */
@@ -155,8 +166,10 @@ export class BotPages {
   #cleaning: ReturnType<typeof setInterval> | undefined;
   /** The cleanup that runs now, which a stop waits for, so it never runs on a closed database. */
   #cleanup: Promise<void> = Promise.resolve();
+  /** One change at a time per page: making or opening a link waits while a cleanup deletes the page, and the reverse. */
+  readonly #locks = new Map<string, Promise<void>>();
   /** Test hooks: a crash between the steps of a password page's submission. */
-  readonly crashTests = { afterSecretWrite: () => {}, afterSecretUsed: () => {} };
+  readonly crashTests = { beforeSecretWrite: () => {}, afterSecretWrite: () => {}, afterSecretUsed: () => {} };
 
   private constructor(options: BotPagesOptions) {
     this.id = options.id;
@@ -168,7 +181,47 @@ export class BotPages {
 
   static async open(options: BotPagesOptions): Promise<BotPages> {
     await options.sql.exec(SCHEMA);
+    for (const [table, name, type] of ADDED_COLUMNS) {
+      const columns = new Set((await options.sql.all<{ name: string }>(`PRAGMA table_info(${table})`)).map((column) => column.name));
+      if (!columns.has(name)) await options.sql.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
+    }
     return new BotPages(options);
+  }
+
+  /** Run work alone for this page, in this process: the one gateway is the only process that serves and cleans. */
+  async #withPage<T>(page: string, work: () => Promise<T>): Promise<T> {
+    const before = this.#locks.get(page) ?? Promise.resolve();
+    const run = before.then(work);
+    const after = run.then(
+      () => {},
+      () => {},
+    );
+    this.#locks.set(page, after);
+    try {
+      return await run;
+    } finally {
+      if (this.#locks.get(page) === after) this.#locks.delete(page);
+    }
+  }
+
+  /**
+   * The identity of the page's folder now, after the links of a folder that is gone, or that another folder of the same
+   * name replaced, are taken back for good; a link from before folders were recorded takes the folder it finds. Run
+   * under #withPage.
+   */
+  async #settle(page: string): Promise<string | undefined> {
+    const folder = await pageFolder(this.dir, page);
+    const current = folder ? await identity(folder) : undefined;
+    const now = this.#clock();
+    await this.#sql.transaction(async (tx) => {
+      if (current === undefined) {
+        await tx.run("UPDATE bot_page_links SET revoked_at = ? WHERE page = ? AND revoked_at IS NULL", now, page);
+        return;
+      }
+      await tx.run("UPDATE bot_page_links SET folder = ? WHERE page = ? AND revoked_at IS NULL AND folder IS NULL", current, page);
+      await tx.run("UPDATE bot_page_links SET revoked_at = ? WHERE page = ? AND revoked_at IS NULL AND folder != ?", now, page, current);
+    });
+    return current;
   }
 
   get botName(): string {
@@ -182,8 +235,9 @@ export class BotPages {
    */
   async resume(): Promise<void> {
     for (const row of await this.#sql.all<SecretRow>("SELECT * FROM bot_secret_links WHERE state = 'writing'")) {
+      // Only the claim's own line in the file shows that its write happened: a file with the keys may be an older one.
       if (await this.#written(row)) await this.#sql.run("UPDATE bot_secret_links SET state = 'used', used_at = ? WHERE id = ?", this.#clock(), row.id);
-      else await this.#sql.run("UPDATE bot_secret_links SET state = 'open', claimed_at = NULL WHERE id = ?", row.id);
+      else await this.#sql.run("UPDATE bot_secret_links SET state = 'open', claimed_at = NULL, claim = NULL WHERE id = ?", row.id);
     }
     for (const row of await this.#sql.all<SecretRow>("SELECT * FROM bot_secret_links WHERE state = 'used' AND woken_at IS NULL")) await this.#wakeSecret(row);
   }
@@ -212,16 +266,19 @@ export class BotPages {
   async createLink(page: string, person?: string): Promise<{ id: string; token: string }> {
     const problem = pageNameProblem(page);
     if (problem) throw new Error(problem);
-    if (!(await pageFolder(this.dir, page))) throw new Error(`there is no page folder pages/${page}/ (or it is a symbolic link); write pages/${page}/index.html first`);
     const forPerson = personProblem(person);
-    await this.#observe(page);
-    const token = newToken();
-    const now = this.#clock();
-    const id = await this.#sql.transaction(async (tx) => {
-      await tx.run("INSERT INTO bot_page_links (token, page, made_for, created_at) VALUES (?, ?, ?, ?)", token, page, forPerson, now);
-      return (await tx.get<{ id: number }>("SELECT last_insert_rowid() AS id"))!.id;
+    return this.#withPage(page, async () => {
+      const folder = await this.#settle(page);
+      if (!folder) throw new Error(`there is no page folder pages/${page}/ (or it is a symbolic link); write pages/${page}/index.html first`);
+      await this.#observe(page);
+      const token = newToken();
+      const now = this.#clock();
+      const id = await this.#sql.transaction(async (tx) => {
+        await tx.run("INSERT INTO bot_page_links (token, page, made_for, created_at, folder) VALUES (?, ?, ?, ?, ?)", token, page, forPerson, now, folder);
+        return (await tx.get<{ id: number }>("SELECT last_insert_rowid() AS id"))!.id;
+      });
+      return { id: linkId({ id }), token };
     });
-    return { id: linkId({ id }), token };
   }
 
   async createSecretLink(input: { file: string; keys: readonly string[]; text?: string; person?: string }): Promise<{ id: string; token: string; expiresAt: number }> {
@@ -279,6 +336,9 @@ export class BotPages {
   async list(): Promise<PageListing> {
     const names = new Set(await listPageNames(this.dir));
     for (const name of names) await this.#observe(name);
+    for (const { page } of await this.#sql.all<{ page: string }>("SELECT DISTINCT page FROM bot_page_links WHERE revoked_at IS NULL")) {
+      await this.#withPage(page, () => this.#settle(page));
+    }
     const rows = await this.#sql.all<PageRow>("SELECT * FROM bot_pages ORDER BY name");
     const links = await this.#sql.all<LinkRow>("SELECT * FROM bot_page_links WHERE revoked_at IS NULL ORDER BY id");
     const pages: PageListing["pages"] = [];
@@ -313,16 +373,22 @@ export class BotPages {
   // ---- Serving ----
 
   /**
-   * The page link with this token, when it is not revoked, and the page counts as opened now. In one transaction, so a
-   * cleanup either sees the open and keeps the page, or deleted the link before it.
+   * The page link with this token, when it is not revoked and its page folder is still the one it was made for; the
+   * page counts as opened now. Alone for its page, so a cleanup either sees the open and keeps the page, or deleted the
+   * page and its links before it. A link whose folder is gone or replaced is taken back here.
    */
   async openLink(token: string): Promise<OpenedLink | undefined> {
-    const now = this.#clock();
-    return this.#sql.transaction(async (tx) => {
-      const link = await tx.get<LinkRow>("SELECT * FROM bot_page_links WHERE token = ? AND revoked_at IS NULL", token);
-      if (!link) return undefined;
-      await tx.run("UPDATE bot_pages SET opened_at = ? WHERE name = ? AND (opened_at IS NULL OR opened_at < ?)", now, link.page, now - OPEN_WRITE_MS);
-      return { id: linkId(link), page: link.page, madeFor: link.made_for };
+    const found = await this.#sql.get<LinkRow>("SELECT * FROM bot_page_links WHERE token = ? AND revoked_at IS NULL", token);
+    if (!found) return undefined;
+    return this.#withPage(found.page, async () => {
+      await this.#settle(found.page);
+      const now = this.#clock();
+      return this.#sql.transaction(async (tx) => {
+        const link = await tx.get<LinkRow>("SELECT * FROM bot_page_links WHERE token = ? AND revoked_at IS NULL", token);
+        if (!link) return undefined;
+        await tx.run("UPDATE bot_pages SET opened_at = ? WHERE name = ? AND (opened_at IS NULL OR opened_at < ?)", now, link.page, now - OPEN_WRITE_MS);
+        return { id: linkId(link), page: link.page, madeFor: link.made_for };
+      });
     });
   }
 
@@ -352,6 +418,7 @@ export class BotPages {
    */
   async submitSecret(token: string, form: URLSearchParams): Promise<SecretResult> {
     const now = this.#clock();
+    const claim = randomBytes(12).toString("hex");
     const claimed = await this.#sql.transaction(async (tx): Promise<SecretRow | SecretResult> => {
       const row = await tx.get<SecretRow>("SELECT * FROM bot_secret_links WHERE token = ?", token);
       if (!row || row.state === "revoked") return "missing";
@@ -359,15 +426,17 @@ export class BotPages {
       if (row.expires_at <= now) return "expired";
       const problem = valuesProblem(JSON.parse(row.keys) as string[], form);
       if (problem) return { problem };
-      await tx.run("UPDATE bot_secret_links SET state = 'writing', claimed_at = ? WHERE id = ?", now, row.id);
+      await tx.run("UPDATE bot_secret_links SET state = 'writing', claimed_at = ?, claim = ? WHERE id = ?", now, claim, row.id);
       return row;
     });
     if (typeof claimed === "string" || "problem" in claimed) return claimed;
     const keys = JSON.parse(claimed.keys) as string[];
+    this.crashTests.beforeSecretWrite();
     try {
-      writeSecrets(join(this.#options.secretsDir, claimed.file), Object.fromEntries(keys.map((key) => [key, form.get(key)!.trim()])));
+      // The claim's line goes in the same write as the values: after a crash, it alone shows the write happened.
+      writeSecrets(join(this.#options.secretsDir, claimed.file), Object.fromEntries(keys.map((key) => [key, form.get(key)!.trim()])), claim);
     } catch (error) {
-      await this.#sql.run("UPDATE bot_secret_links SET state = 'open', claimed_at = NULL WHERE id = ? AND state = 'writing'", claimed.id);
+      await this.#sql.run("UPDATE bot_secret_links SET state = 'open', claimed_at = NULL, claim = NULL WHERE id = ? AND state = 'writing'", claimed.id);
       throw new Error(`could not write ${claimed.file} in the secrets folder: ${error instanceof Error ? error.message : String(error)}`);
     }
     this.crashTests.afterSecretWrite();
@@ -386,17 +455,11 @@ export class BotPages {
     this.#options.print("secret page used", { link: id, file: row.file, keys });
   }
 
-  /** Whether a claimed link's file has all its keys, written since the claim. */
+  /** Whether a claimed link's file was written by its claim: the file has the claim's own comment line. */
   async #written(row: SecretRow): Promise<boolean> {
-    const file = join(this.#options.secretsDir, row.file);
-    try {
-      const info = await stat(file);
-      if (info.mtimeMs < (row.claimed_at ?? 0) - CLAIM_SLACK_MS) return false;
-      readSecrets(file, JSON.parse(row.keys) as string[]);
-      return true;
-    } catch {
-      return false;
-    }
+    if (!row.claim) return false;
+    const text = await readFile(join(this.#options.secretsDir, row.file), "utf8").catch(() => "");
+    return text.split("\n").includes(`${CLAIM_LINE}${row.claim}`);
   }
 
   // ---- Age ----
@@ -422,29 +485,34 @@ export class BotPages {
   /**
    * Delete each page under pages/ (not pages/keep/) that nobody opened and nothing changed for PAGE_DAYS days, with its
    * links; the records of a page whose folder is gone go by the same rule. Each page is looked at again right before it
-   * is deleted, so one opened or changed meanwhile stays. Password links are deleted 7 days after they were made.
-   * hooks.beforeDelete runs between the first look and the second, for tests. The names of the deleted pages.
+   * is deleted, alone for that page until it is gone, so one opened, linked or changed meanwhile stays, and no link is
+   * made to it while it goes. Password links are deleted 7 days after they were made. For tests, hooks.beforeDelete
+   * runs between the first look and the second, and hooks.beforeRemove after the second, before the folder is removed.
+   * The names of the deleted pages.
    */
-  async cleanup(hooks: { beforeDelete?: (page: string) => Promise<void> } = {}): Promise<string[]> {
+  async cleanup(hooks: { beforeDelete?: (page: string) => Promise<void>; beforeRemove?: (page: string) => Promise<void> } = {}): Promise<string[]> {
     for (const name of await listPageNames(this.dir)) await this.#observe(name);
     const stale = (row: PageRow, now: number) => Math.max(row.opened_at ?? 0, row.changed_at) < now - PAGE_DAYS * DAY_MS;
     const candidates = (await this.#sql.all<PageRow>("SELECT * FROM bot_pages")).filter((row) => !row.name.startsWith("keep/") && stale(row, this.#clock()));
     const deleted: string[] = [];
     for (const candidate of candidates) {
       await hooks.beforeDelete?.(candidate.name);
-      await this.#observe(candidate.name);
-      const now = this.#clock();
-      const gone = await this.#sql.transaction(async (tx) => {
-        const row = await tx.get<PageRow>("SELECT * FROM bot_pages WHERE name = ?", candidate.name);
-        if (!row || !stale(row, now)) return false;
-        await tx.run("DELETE FROM bot_page_links WHERE page = ?", row.name);
-        await tx.run("DELETE FROM bot_pages WHERE name = ?", row.name);
+      const gone = await this.#withPage(candidate.name, async () => {
+        await this.#observe(candidate.name);
+        const row = await this.#sql.get<PageRow>("SELECT * FROM bot_pages WHERE name = ?", candidate.name);
+        if (!row || !stale(row, this.#clock())) return false;
+        await hooks.beforeRemove?.(candidate.name);
+        // Only a plain folder in pages/: never what a link points to. The records go once the folder is gone; when its
+        // removal fails, they stay, and the next cleanup tries again.
+        const folder = await pageFolder(this.dir, candidate.name);
+        if (folder) await rm(folder, { recursive: true, force: true });
+        await this.#sql.transaction(async (tx) => {
+          await tx.run("DELETE FROM bot_page_links WHERE page = ?", candidate.name);
+          await tx.run("DELETE FROM bot_pages WHERE name = ?", candidate.name);
+        });
         return true;
       });
       if (!gone) continue;
-      // Only a plain folder in pages/: never what a link points to.
-      const folder = await pageFolder(this.dir, candidate.name);
-      if (folder) await rm(folder, { recursive: true, force: true });
       deleted.push(candidate.name);
       this.#options.print("page deleted", { page: candidate.name, days: PAGE_DAYS });
     }
@@ -485,6 +553,7 @@ export function secretCrashTests(dir: string, print: Print): BotPages["crashTest
     process.kill(process.pid, "SIGKILL");
   };
   return {
+    beforeSecretWrite: crash("crash-before-secret-write", "crash test: dying after the secret link was claimed, before its file was written"),
     afterSecretWrite: crash("crash-after-secret-write", "crash test: dying after the secret file was written"),
     afterSecretUsed: crash("crash-after-secret-used", "crash test: dying after the secret link was marked used"),
   };

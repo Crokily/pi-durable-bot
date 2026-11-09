@@ -1,9 +1,7 @@
-import type { Stats } from "node:fs";
-import { createReadStream } from "node:fs";
 import { realpath } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Print } from "../gateway/config.ts";
-import { contentType, pageFolder, pathSegments, resolveFile } from "./files.ts";
+import { contentType, openFile, pageFolder, pathSegments, type Resolved } from "./files.ts";
 import { renderFailed, renderNotFound, renderSecretExpired, renderSecretForm, renderSecretSaved, renderSecretUsed, SECRET_PAGE_HEADERS } from "./secret-page.ts";
 import type { BotPages, OpenedLink } from "./store.ts";
 
@@ -106,10 +104,10 @@ export class PageRequests {
     const folder = await pageFolder(bot.dir, link.page);
     const segments = pathSegments(sub);
     if (!folder || !segments) return text(response, 404, "Not found.");
-    const resolved = await resolveFile(folder, segments, sub === "" || sub.endsWith("/"), true);
+    const resolved = await openFile(folder, segments, sub === "" || sub.endsWith("/"), true);
     if (!resolved) return text(response, 404, "Not found.");
     if (resolved.kind === "folder") return redirect(response, `${sub.split("/").pop()}/${query}`);
-    sendFile(request, response, resolved.path, resolved.stat);
+    await sendFile(request, response, resolved);
   }
 
   async #kit(request: IncomingMessage, response: ServerResponse, sub: string): Promise<void> {
@@ -117,9 +115,9 @@ export class PageRequests {
     const root = await realpath(this.#host.kitDir).catch(() => undefined);
     const segments = pathSegments(sub);
     if (!root || !segments || segments.length === 0 || sub.endsWith("/")) return text(response, 404, "Not found.");
-    const resolved = await resolveFile(root, segments, false, false);
+    const resolved = await openFile(root, segments, false, false);
     if (!resolved || resolved.kind !== "file") return text(response, 404, "Not found.");
-    sendFile(request, response, resolved.path, resolved.stat);
+    await sendFile(request, response, resolved);
   }
 
   async #info(response: ServerResponse, bot: BotPages, link: OpenedLink): Promise<void> {
@@ -229,45 +227,44 @@ function redirect(response: ServerResponse, location: string): void {
   response.end();
 }
 
-/** A file, with a validator so the browser can ask whether it changed, and one byte range when asked (video needs it). */
-function sendFile(request: IncomingMessage, response: ServerResponse, path: string, stat: Stats): void {
-  const etag = `W/"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`;
+/**
+ * An open file, read from its descriptor only, with a validator so the browser can ask whether it changed, and one
+ * byte range when asked (video needs it). The descriptor is closed when the file is sent, or at once when no body goes.
+ */
+async function sendFile(request: IncomingMessage, response: ServerResponse, file: Extract<Resolved, { kind: "file" }>): Promise<void> {
+  const { size, handle } = file;
+  const etag = `W/"${size.toString(16)}-${Math.floor(file.mtimeMs).toString(16)}"`;
   const headers: Record<string, string | number> = {
-    "content-type": contentType(path),
+    "content-type": contentType(file.path),
     "cache-control": FILE_CACHE,
     etag,
-    "last-modified": stat.mtime.toUTCString(),
+    "last-modified": new Date(file.mtimeMs).toUTCString(),
     "accept-ranges": "bytes",
   };
-  if (request.headers["if-none-match"] === etag) {
-    response.writeHead(304, headers);
+  const done = async (status: number, extra: Record<string, string | number> = {}) => {
+    await handle.close().catch(() => {});
+    response.writeHead(status, { ...headers, ...extra });
     response.end();
-    return;
-  }
+  };
+  if (request.headers["if-none-match"] === etag) return done(304);
   let start = 0;
-  let end = stat.size - 1;
+  let end = size - 1;
   let status = 200;
   const range = /^bytes=(\d*)-(\d*)$/.exec(request.headers.range ?? "");
   if (range && (range[1] || range[2])) {
     if (range[1]) {
       start = Number(range[1]);
-      if (range[2]) end = Math.min(Number(range[2]), stat.size - 1);
-    } else start = Math.max(0, stat.size - Number(range[2]));
-    if (start > end || start >= stat.size) {
-      response.writeHead(416, { ...headers, "content-range": `bytes */${stat.size}` });
-      response.end();
-      return;
-    }
+      if (range[2]) end = Math.min(Number(range[2]), size - 1);
+    } else start = Math.max(0, size - Number(range[2]));
+    if (start > end || start >= size) return done(416, { "content-range": `bytes */${size}` });
     status = 206;
-    headers["content-range"] = `bytes ${start}-${end}/${stat.size}`;
+    headers["content-range"] = `bytes ${start}-${end}/${size}`;
   }
-  headers["content-length"] = stat.size === 0 ? 0 : end - start + 1;
+  if (request.method === "HEAD" || size === 0) return done(status, { "content-length": size === 0 ? 0 : end - start + 1 });
+  headers["content-length"] = end - start + 1;
   response.writeHead(status, headers);
-  if (request.method === "HEAD" || stat.size === 0) {
-    response.end();
-    return;
-  }
-  const stream = createReadStream(path, { start, end });
+  const stream = handle.createReadStream({ start, end, autoClose: true });
   stream.on("error", () => response.destroy());
+  response.on("close", () => stream.destroy());
   stream.pipe(response);
 }

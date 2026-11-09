@@ -181,7 +181,7 @@ export class QuickTunnel {
   #run(command: readonly string[]): Promise<string> {
     this.#state = "starting";
     this.#tail = [];
-    this.#stopLeftover();
+    stopLeftoverTunnel(this.#options.home, this.#options.print, this.#child?.pid);
     writeFileSync(this.#configFile, CONFIG);
     const args = [...command.slice(1), "tunnel", "--no-autoupdate", "--config", this.#configFile, "--url", this.#options.target, "--metrics", "127.0.0.1:0"];
     // The person's own tunnel settings in the environment (TUNNEL_TOKEN, TUNNEL_URL, …) are not for this one.
@@ -247,34 +247,37 @@ export class QuickTunnel {
     for (const waiter of this.#waiters) waiter.reject(new Error(error));
     this.#waiters.clear();
   }
+}
 
-  /**
-   * A cloudflared that an earlier gateway started and could not stop, when it crashed, keeps a public entry to this
-   * computer open. Stop it, when the process of the ID file is still a cloudflared with this home's config file.
-   */
-  #stopLeftover(): void {
-    if (!existsSync(this.#pidFile)) return;
-    try {
-      const [pidText, config] = readFileSync(this.#pidFile, "utf8").split("\n");
-      const pid = Number(pidText);
-      if (Number.isInteger(pid) && pid > 0 && config && pid !== this.#child?.pid) {
-        const command =
-          process.platform === "win32"
-            ? execFileSync("tasklist", ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"], { encoding: "utf8", timeout: 5_000, windowsHide: true })
-            : execFileSync("ps", ["-o", "args=", "-p", String(pid)], { encoding: "utf8", timeout: 5_000 });
-        const ours = process.platform === "win32" ? /cloudflared/i.test(command) : command.includes(config) && command.includes("cloudflared");
-        if (ours) {
-          process.kill(pid);
-          this.#options.print("stopped a quick tunnel left from before", { pid });
-        }
+/**
+ * A cloudflared that an earlier gateway of this home started and could not stop, as when it crashed, keeps a public
+ * entry to the page server open: the port stays the same, so its old address works again. Stop it, when the process of
+ * the ID file is still a cloudflared with this home's config file; the gateway does this at every start, also with a
+ * publicUrl, which needs no tunnel.
+ */
+export function stopLeftoverTunnel(home: string, print: Print, except?: number): void {
+  const pidFile = join(home, "cloudflared.pid");
+  if (!existsSync(pidFile)) return;
+  try {
+    const [pidText, config] = readFileSync(pidFile, "utf8").split("\n");
+    const pid = Number(pidText);
+    if (Number.isInteger(pid) && pid > 0 && config && pid !== except && pid !== process.pid) {
+      const command =
+        process.platform === "win32"
+          ? execFileSync("tasklist", ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"], { encoding: "utf8", timeout: 5_000, windowsHide: true })
+          : execFileSync("ps", ["-o", "args=", "-p", String(pid)], { encoding: "utf8", timeout: 5_000 });
+      const ours = process.platform === "win32" ? /cloudflared/i.test(command) : command.includes(config) && command.includes("cloudflared");
+      if (ours) {
+        process.kill(pid);
+        print("stopped a quick tunnel left from before", { pid });
       }
-    } catch {
-      // not running, or not ours
     }
-    try {
-      unlinkSync(this.#pidFile);
-    } catch {
-      // gone already
-    }
+  } catch {
+    // not running, or not ours
+  }
+  try {
+    unlinkSync(pidFile);
+  } catch {
+    // gone already
   }
 }

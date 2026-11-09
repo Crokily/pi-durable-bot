@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import type { Stats } from "node:fs";
-import { lstat, readdir, realpath, stat } from "node:fs/promises";
-import { extname, isAbsolute, join, relative } from "node:path";
+import { constants } from "node:fs";
+import { type FileHandle, lstat, open, readdir, realpath, stat } from "node:fs/promises";
+import { extname, join, relative, sep } from "node:path";
 
 // Where pages live and which files a link may serve: only regular files inside the link's own page folder, after the
 // real path is resolved. No "..", no encoded separators, no symbolic link, junction or hard link that leads out.
@@ -17,14 +17,27 @@ export function pageNameProblem(name: string): string | undefined {
 /** The bot's pages folder. */
 export const pagesDir = (botDir: string) => join(botDir, "pages");
 
-const caseless = process.platform === "win32" || process.platform === "darwin";
-const same = (a: string, b: string) => (caseless ? a.toLowerCase() === b.toLowerCase() : a === b);
-
-/** True when path is inside root (both real paths), or is root itself when allowRoot. */
+/**
+ * True when path is inside root, or is root itself when allowRoot. Both are canonical paths from the file system
+ * (realpath, which is the native one), compared exactly: never by case, since a case-sensitive file system, which macOS
+ * and Windows can have too, holds pages/Report and pages/report side by side.
+ */
 export function inside(root: string, path: string, allowRoot = false): boolean {
-  const rel = relative(caseless ? root.toLowerCase() : root, caseless ? path.toLowerCase() : path);
-  if (rel === "") return allowRoot;
-  return !rel.startsWith("..") && !isAbsolute(rel);
+  if (path === root) return allowRoot;
+  return path.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
+}
+
+/**
+ * A folder's or file's identity on the file system, which a folder of the same name made later does not share: its
+ * device and inode, and its birth time, since a file system can give a freed inode to the next folder it makes.
+ */
+export async function identity(path: string): Promise<string | undefined> {
+  try {
+    const info = await stat(path, { bigint: true });
+    return `${info.dev}:${info.ino}:${info.birthtimeNs}`;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -37,7 +50,7 @@ export async function pageFolder(botDir: string, name: string): Promise<string |
     const base = await realpath(botDir);
     const expected = join(base, "pages", ...name.split("/"));
     const folder = await realpath(join(botDir, "pages", ...name.split("/")));
-    if (!same(folder, expected)) return undefined;
+    if (folder !== expected) return undefined;
     // realpath already followed any link; lstat says whether the parts themselves are links.
     let path = join(base, "pages");
     for (const part of ["", ...name.split("/")]) {
@@ -85,30 +98,53 @@ export function pathSegments(raw: string): string[] | undefined {
 }
 
 export type Resolved =
-  | { kind: "file"; path: string; stat: Stats }
+  /** An open file: stream it from handle, which the caller closes. */
+  | { kind: "file"; path: string; handle: FileHandle; size: number; mtimeMs: number }
   /** A folder asked for without the closing "/": the browser must come back with it, or relative links break. */
   | { kind: "folder" };
 
+/** For tests: runs after a file was found and checked, before it is opened, so a test can swap it for a link. */
+export const fileTestHooks: { beforeOpen?: (path: string) => Promise<void> | void } = {};
+
 /**
- * The file that segments name inside root (a real path), when it is a regular file whose real path stays in root. A
- * folder gives its index.html when trailingSlash. With refuseHardLinks, a file with more than one name is refused: it
- * may be a second name of a file outside the folder.
+ * Open the file that segments name inside root (a canonical path), when it is a regular file that stays in root. A
+ * folder gives its index.html when trailingSlash. The file is opened once, without following a link in its last part
+ * where the system can (O_NOFOLLOW), and then the open descriptor is checked: a regular file, with one name only when
+ * refuseHardLinks (a second name may be a file outside the folder), and the same file (device and inode) that its path
+ * still leads to, inside root. So a file or a folder above it swapped for a link between the first look and the open is
+ * refused, and what is sent is read from that descriptor, never from the path again.
  */
-export async function resolveFile(root: string, segments: readonly string[], trailingSlash: boolean, refuseHardLinks: boolean): Promise<Resolved | undefined> {
+export async function openFile(root: string, segments: readonly string[], trailingSlash: boolean, refuseHardLinks: boolean): Promise<Resolved | undefined> {
+  let path: string;
   try {
-    let path = await realpath(join(root, ...segments));
+    path = await realpath(join(root, ...segments));
     if (!inside(root, path, true)) return undefined;
-    let info = await stat(path);
+    const info = await stat(path);
     if (info.isDirectory()) {
       if (!trailingSlash && segments.length > 0) return { kind: "folder" };
       path = await realpath(join(path, "index.html"));
       if (!inside(root, path)) return undefined;
-      info = await stat(path);
     } else if (trailingSlash) return undefined;
-    if (!info.isFile()) return undefined;
-    if (refuseHardLinks && info.nlink > 1) return undefined;
-    return { kind: "file", path, stat: info };
+    await fileTestHooks.beforeOpen?.(path);
   } catch {
+    return undefined;
+  }
+  let handle: FileHandle;
+  try {
+    handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  } catch {
+    return undefined;
+  }
+  try {
+    const opened = await handle.stat({ bigint: true });
+    if (!opened.isFile() || (refuseHardLinks && opened.nlink > 1n)) throw new Error("not a plain file");
+    const again = await realpath(path);
+    if (!inside(root, again)) throw new Error("left the folder");
+    const there = await stat(again, { bigint: true });
+    if (there.dev !== opened.dev || there.ino !== opened.ino) throw new Error("another file");
+    return { kind: "file", path: again, handle, size: Number(opened.size), mtimeMs: Number(opened.mtimeMs) };
+  } catch {
+    await handle.close().catch(() => {});
     return undefined;
   }
 }

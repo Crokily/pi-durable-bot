@@ -21,7 +21,7 @@ import type {
   SentMessage,
 } from "../../core/channel.ts";
 import { expandHome, readSecrets } from "../../core/env-file.ts";
-import { formMismatch, parseFormId } from "../../core/forms.ts";
+import { noForm, parseFormId } from "../../core/forms.ts";
 
 // Addresses (only this file parses them):
 //   place               <id>:#<channel ID>                              discord:#1100  (a server channel or a DM)
@@ -379,8 +379,8 @@ export class DiscordChannel implements ChannelAdapter {
   }
 
   /**
-   * Before a click is stored: when its custom_id is form:<name> or form:<name>:<extra> and the form is stored as a
-   * Discord modal, the modal to open, with the click's custom_id as its own, so its submission says which form and
+   * Before a click is stored: when its custom_id is form:<name> or form:<name>:<extra> and the stored form is a
+   * Discord modal's data (a title and components, no type), the modal to open, with the click's custom_id as its own, so its submission says which form and
    * extra it is, and comes with the message of the button.
    */
   async #prepareForm(sink: ChannelSink, raw: Extract<Raw, { source: "gateway" }>): Promise<void> {
@@ -389,7 +389,12 @@ export class DiscordChannel implements ChannelAdapter {
     const parsed = parseFormId(d.data?.custom_id);
     if (!parsed) return;
     const form = await sink.form(parsed.name);
-    const mismatch = formMismatch(parsed.name, form, "discord");
+    const mismatch =
+      form === undefined
+        ? noForm(parsed.name)
+        : form.type !== undefined || form.title === undefined || !Array.isArray(form.components)
+          ? `the form ${parsed.name} is not a Discord modal's data (a title and components)`
+          : undefined;
     raw.form = {
       name: parsed.name,
       ...(parsed.extra !== undefined ? { extra: parsed.extra } : {}),

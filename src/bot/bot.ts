@@ -670,7 +670,7 @@ export class Bot implements WakeTarget {
         const name = text(body.name, "name");
         if (body.form === undefined) throw new Error('"form" is required');
         const { form, replaced } = await this.#gateway.forms.add(name, body.form);
-        return `${replaced ? "Replaced" : "Added"} form ${form.name} (${form.platform}${form.title !== undefined ? ` "${form.title}"` : ""}). A button with the ID form:${form.name} or form:${form.name}:<extra> opens it.`;
+        return `${replaced ? "Replaced" : "Added"} form ${form.name}. A button with the ID form:${form.name} or form:${form.name}:<extra> opens it.`;
       },
       "POST /forms/remove": async (body: Record<string, unknown>) => {
         const name = text(body.name, "name");

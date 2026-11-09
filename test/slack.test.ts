@@ -29,7 +29,7 @@ function message(fields: Record<string, unknown> = {}) {
  * channel made after a restart.
  */
 interface FormStore {
-  forms: Map<string, unknown>;
+  forms: Map<string, Record<string, unknown>>;
   openings: Map<string, FormOpening>;
 }
 
@@ -391,7 +391,7 @@ describe("buttons and forms", () => {
       { kind: "interaction", text: 'clicked button "Fill in" (action_id form:nope:1), and no form opened: no form nope is stored (pots form list shows the forms)' },
     ]);
     expect(await channel.translate(events[1]!.raw)).toMatchObject([
-      { kind: "interaction", text: 'clicked button "Ask" (action_id form:ask), and no form opened: the form ask is a Discord form, and this is Slack' },
+      { kind: "interaction", text: 'clicked button "Ask" (action_id form:ask), and no form opened: the form ask is not a Slack view of type modal' },
     ]);
   });
 

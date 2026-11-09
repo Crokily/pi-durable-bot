@@ -88,7 +88,7 @@ function message(fields: Record<string, unknown>) {
 
 /** A sink like the gateway's: it drops a known event ID, and keeps raws as JSON, as the inbox does. */
 /** fail: the receive of this event ID fails while it returns true. */
-function memorySink(options: { lastAlive?: number; newest?: Record<string, string>; places?: string[]; fail?: (id: string) => boolean; forms?: Record<string, unknown> } = {}) {
+function memorySink(options: { lastAlive?: number; newest?: Record<string, string>; places?: string[]; fail?: (id: string) => boolean; forms?: Record<string, Record<string, unknown>> } = {}) {
   const events: { id: string; raw: any }[] = [];
   const logs: string[] = [];
   const forms = new Map(Object.entries(options.forms ?? {}));
@@ -485,7 +485,7 @@ describe("Discord channel", () => {
       { kind: "interaction", text: 'clicked button "Ask" (custom_id form:nope), and no form opened: no form nope is stored (pots form list shows the forms)' },
     ]);
     expect(await translate(clicks[3]!.raw)).toMatchObject([
-      { kind: "interaction", text: 'clicked button "Slack one" (custom_id form:slackish), and no form opened: the form slackish is a Slack form, and this is Discord' },
+      { kind: "interaction", text: `clicked button "Slack one" (custom_id form:slackish), and no form opened: the form slackish is not a Discord modal's data (a title and components)` },
     ]);
   });
 

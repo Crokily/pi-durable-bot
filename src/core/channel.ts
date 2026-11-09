@@ -106,8 +106,8 @@ export interface ChannelSink {
   places(): Promise<Address[]>;
   /** When the gateway last ran, in Unix ms. Undefined on the first start. */
   lastAlive(): number | undefined;
-  /** The form stored with pots form add under this name, in its platform's own format, or undefined. */
-  form(name: string): Promise<unknown>;
+  /** The form stored with pots form add under this name, as the bot gave it: a JSON object, which the adapter checks. */
+  form(name: string): Promise<Record<string, unknown> | undefined>;
   /** Keep what a form opened for, under an ID the adapter made, before the form opens. The same ID again replaces it. */
   formOpened(id: string, opening: FormOpening): Promise<void>;
   /** What a form opened for, by the adapter's ID, also after a restart; undefined when unknown. */

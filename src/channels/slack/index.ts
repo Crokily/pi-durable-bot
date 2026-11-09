@@ -19,7 +19,7 @@ import type {
   SentMessage,
 } from "../../core/channel.ts";
 import { expandHome, readSecrets } from "../../core/env-file.ts";
-import { formMismatch, parseFormId } from "../../core/forms.ts";
+import { noForm, parseFormId } from "../../core/forms.ts";
 import { GatewaySlackAdapter, SEND_EVENT_TYPE } from "./sdk.ts";
 
 // Addresses (only this file parses them):
@@ -192,7 +192,8 @@ class SlackChannel implements ChannelAdapter {
     const click: FormClick = { name: parsed.name, ...(parsed.extra !== undefined ? { extra: parsed.extra } : {}), action_id: action.action_id };
     raw.form = click;
     const view = await sink.form(parsed.name);
-    const mismatch = formMismatch(parsed.name, view, "slack");
+    const mismatch =
+      view === undefined ? noForm(parsed.name) : view.type !== "modal" ? `the form ${parsed.name} is not a Slack view of type modal` : undefined;
     if (mismatch || typeof body.trigger_id !== "string") {
       click.missing = mismatch ?? "Slack gave no trigger_id with the click";
       return undefined;

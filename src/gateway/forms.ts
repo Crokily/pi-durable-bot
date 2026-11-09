@@ -1,6 +1,5 @@
 import { Clock, Context, Effect, Layer } from "effect";
 import type { Address, FormOpening } from "../core/channel.ts";
-import { type FormPlatform, formPlatform } from "../core/forms.ts";
 import type { Sql } from "../core/sql.ts";
 import { formatTime } from "../core/time.ts";
 import { BadForm, BadName, type LogError } from "./errors.ts";
@@ -8,7 +7,8 @@ import { db } from "./log.ts";
 import { nameProblem } from "./routines.ts";
 
 /**
- * Forms the bot stored with pots form add, in the platform's own format, and what each opened form is for. A button
+ * Forms the bot stored with pots form add, in the platform's own format, and what each opened form is for. A form is
+ * kept as it is, a JSON object: the channel adapter whose button opens it checks it. A button
  * whose ID is form:<name> or form:<name>:<extra> opens the form at once, within the 3 seconds the platform gives; the
  * opening is kept here before the form opens, so its submission gets its place and message back, also after a restart.
  */
@@ -40,18 +40,8 @@ const DAY_MS = 86_400_000;
 
 export interface StoredForm {
   name: string;
-  platform: FormPlatform;
-  /** The form's title, when it has one as plain text. */
-  title?: string;
   updated_at: number;
   form: Record<string, unknown>;
-}
-
-function titleOf(form: Record<string, unknown>): string | undefined {
-  const title = form.title as unknown;
-  if (typeof title === "string") return title;
-  if (title && typeof title === "object" && typeof (title as { text?: unknown }).text === "string") return (title as { text: string }).text;
-  return undefined;
 }
 
 export class Forms extends Context.Service<
@@ -73,20 +63,19 @@ export class Forms extends Context.Service<
       Forms,
       Effect.gen(function* () {
         yield* db(() => sql.exec(SCHEMA));
-        const stored = (row: { name: string; form: string; updated_at: number }): StoredForm => {
-          const form = JSON.parse(row.form) as Record<string, unknown>;
-          const title = titleOf(form);
-          const found = formPlatform(form);
-          const platform = "platform" in found ? found.platform : "slack";
-          return { name: row.name, platform, ...(title !== undefined ? { title } : {}), updated_at: row.updated_at, form };
-        };
+        const stored = (row: { name: string; form: string; updated_at: number }): StoredForm => ({
+          name: row.name,
+          updated_at: row.updated_at,
+          form: JSON.parse(row.form) as Record<string, unknown>,
+        });
         return Forms.of({
           add: (name, form) =>
             Effect.gen(function* () {
               const problem = nameProblem(name, "form name");
               if (problem) return yield* Effect.fail(new BadName({ message: problem }));
-              const found = formPlatform(form);
-              if ("problem" in found) return yield* Effect.fail(new BadForm({ message: found.problem }));
+              if (!form || typeof form !== "object" || Array.isArray(form)) {
+                return yield* Effect.fail(new BadForm({ message: "a form is a JSON object, in the platform's own format (the channel's skill says which)" }));
+              }
               const now = yield* Clock.currentTimeMillis;
               const replaced = yield* db(async () => {
                 const known = await sql.get<{ name: string }>("SELECT name FROM gw_forms WHERE name = ?", name);
@@ -163,6 +152,6 @@ export class Forms extends Context.Service<
 export function renderForms(forms: readonly StoredForm[]): string {
   if (forms.length === 0) return "No forms stored.";
   return forms
-    .map((form) => `${form.name}: ${form.platform}${form.title !== undefined ? ` "${form.title}"` : ""}, updated ${formatTime(form.updated_at)}`)
+    .map((form) => `${form.name}: updated ${formatTime(form.updated_at)}`)
     .join("\n");
 }

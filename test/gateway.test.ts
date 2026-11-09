@@ -147,11 +147,13 @@ describe("Gateway", () => {
       const first = await openGateway(join(dir, "bot.sqlite"));
       const channel = new MemoryChannel();
       await first.gateway.start(target, [channel]);
-      expect(await first.gateway.forms.add("deploy", { ...view, blocks: [{ type: "divider" }] })).toMatchObject({ replaced: false, form: { name: "deploy", platform: "slack", title: "Deploy" } });
+      expect(await first.gateway.forms.add("deploy", { ...view, blocks: [{ type: "divider" }] })).toMatchObject({ replaced: false, form: { name: "deploy" } });
       expect(await first.gateway.forms.add("deploy", view)).toMatchObject({ replaced: true });
-      expect(await first.gateway.forms.add("ask", modal)).toMatchObject({ replaced: false, form: { platform: "discord", title: "Ask" } });
+      expect(await first.gateway.forms.add("ask", modal)).toMatchObject({ replaced: false, form: { name: "ask", form: modal } });
       await expect(first.gateway.forms.add("bad name", view)).rejects.toThrow('bad form name "bad name"');
-      await expect(first.gateway.forms.add("blocks", { blocks: [] })).rejects.toThrow("a form is a Slack view of type modal");
+      // The gateway keeps a form as it is: the adapter whose button opens it checks it.
+      expect(await first.gateway.forms.add("blocks", { blocks: [] })).toMatchObject({ replaced: false });
+      await expect(first.gateway.forms.add("list", [view])).rejects.toThrow("a form is a JSON object");
       await channel.sink!.formOpened("opening-1", opening);
       await first.gateway.stop();
       await first.sql.close();
@@ -159,9 +161,10 @@ describe("Gateway", () => {
       const second = await openGateway(join(dir, "bot.sqlite"));
       const again = new MemoryChannel();
       await second.gateway.start(target, [again]);
-      expect((await second.gateway.forms.list()).map((form) => [form.name, form.platform, form.form])).toEqual([
-        ["ask", "discord", modal],
-        ["deploy", "slack", view],
+      expect((await second.gateway.forms.list()).map((form) => [form.name, form.form])).toEqual([
+        ["ask", modal],
+        ["blocks", { blocks: [] }],
+        ["deploy", view],
       ]);
       expect(await again.sink!.form("deploy")).toEqual(view);
       expect(await again.sink!.form("nope")).toBeUndefined();

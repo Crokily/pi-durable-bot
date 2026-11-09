@@ -56,7 +56,7 @@ When someone uses a slash command or a button of the app, you get a `command` or
 
 ## Buttons, forms, tables and clicks
 
-`send` posts Markdown text. For buttons, menus and tables, post the message yourself with `call` and Slack's [Block Kit](https://docs.slack.dev/block-kit/): method `chat.postMessage` ([reference](https://docs.slack.dev/reference/methods/chat.postMessage)), params `channel`, `blocks`, and a short `text`, which Slack shows in notifications. Add `thread_ts` to post in a thread. Leave out `markdown_text`: Slack does not take it with `blocks`. Put Markdown in a `markdown` block instead.
+`send` posts Markdown text. For buttons, menus and tables, post the message yourself with `call` and Slack's [Block Kit](https://docs.slack.dev/block-kit/): method `chat.postMessage` ([reference](https://docs.slack.dev/reference/methods/chat.postMessage)), params `channel`, `blocks`, and a short `text`, which Slack shows in notifications. Add `thread_ts` to post in a thread. Leave out `markdown_text`: Slack does not take it with `blocks`. Put Markdown in a `markdown` block instead, with `**bold**`, as in `send`. Do not write text as `mrkdwn` in a `section` block: Slack's older mrkdwn does not make `*bold*` that touches Chinese, Japanese or Korean characters, and shows the asterisks.
 
 ```json
 {
@@ -79,7 +79,7 @@ When someone uses a slash command or a button of the app, you get a `command` or
 
 **When someone clicks.** Pots acknowledges the click to Slack at once, within the 3 seconds Slack allows, so the person sees no error. The click wakes you straight away, not through the judge and without waiting for more messages, as an `interaction` event. The platform sends Pots only the clicks on your own buttons, also on a message the log does not have, such as an ephemeral one. The wake says which button (its `action_id`, `value` and text) and who clicked (their person address). Slack's whole payload is the event's raw data in the log.
 
-**Mark the question answered.** Anyone who can see the message can click, and a click is not an answer until you decide it counts. Whose click counts, and what it means, is your call, as with messages. When it counts, change your message with `call` `chat.update` ([reference](https://docs.slack.dev/reference/methods/chat.update)): params `channel`, the `ts` of your message, and new `text` and `blocks`, for example the question and a line "✓ Test, chosen by <@U123>", without the `actions` block. Until you change it, the buttons stay, and a click days later still wakes you.
+**Mark the question answered.** Anyone who can see the message can click, and a click is not an answer until you decide it counts. Whose click counts, and what it means, is your call, as with messages. When it counts, change your message with `call` `chat.update` ([reference](https://docs.slack.dev/reference/methods/chat.update)): params `channel`, the `ts` of your message, and new `text` and `blocks`, for example the question and a line "✓ Test, chosen by <@U123>" in a `markdown` block, without the `actions` block. Until you change it, the buttons stay, and a click days later still wakes you.
 
 **Forms.** Slack opens a form (a modal) only within 3 seconds of a click, which is too soon for you, so you store the form first and Pots opens it:
 

@@ -1,4 +1,11 @@
-# Connect Discord
+---
+name: discord-channel
+description: Discord for a Pots bot. How to connect a Discord bot yourself (the application, its token, inviting it to a server, bot.json), send and edit messages, threads, call Discord's REST API, files and limits, and how to post buttons, menus and forms (components and modals), get clicks and mark a question answered. Use when you connect Discord, or need more in Discord than plain text.
+---
+
+# Discord
+
+## Connect
 
 Written for a bot that connects itself; a person can follow it too. The bot connects to Discord's gateway, so the computer needs no public address.
 
@@ -38,7 +45,7 @@ A second Discord bot is a second channel entry with its own `id` (for example `d
 
 ## call
 
-The `call` tool, with the channel's `id` (`discord`), calls any endpoint of Discord's REST API (https://discord.com/developers/docs) with the bot token. The method is the HTTP method and the path. The params are the query for GET and DELETE, and the JSON body for the others. For example:
+The `call` tool, with the channel's `id` (`discord`), calls any endpoint of Discord's REST API (https://docs.discord.com/developers) with the bot token. The method is the HTTP method and the path. The params are the query for GET and DELETE, and the JSON body for the others. For example:
 
 | method | params | does |
 |---|---|---|
@@ -50,6 +57,52 @@ The `call` tool, with the channel's `id` (`discord`), calls any endpoint of Disc
 The IDs are in the addresses (`discord:#<channel ID>/<message ID>`) and in the raw data in the log.
 
 When someone uses a command or a button of yours, you get an `interaction` event, and Discord is told that the answer comes later. Answer a command within 15 minutes, with the `application_id` and `token` from the event's raw data: method `PATCH /webhooks/<application_id>/<token>/messages/@original`, params `{"content": "…"}`.
+
+## Buttons, forms, tables and clicks
+
+`send` posts text. For buttons and menus, post the message yourself with `call`: method `POST /channels/<channel ID>/messages` ([reference](https://docs.discord.com/developers/resources/message)) with `components` ([reference](https://docs.discord.com/developers/components/reference)). To reply to a message, add `"message_reference": {"message_id": "<message ID>"}`.
+
+```json
+{
+  "content": "Where should I deploy release 4.2?",
+  "components": [
+    { "type": 1, "components": [
+      { "type": 2, "style": 1, "label": "Test", "custom_id": "deploy:test" },
+      { "type": 2, "style": 4, "label": "Production", "custom_id": "deploy:prod" }
+    ] }
+  ]
+}
+```
+
+- A message has at most 5 action rows (type 1). A row holds up to 5 buttons (type 2) or one select menu. Button styles: 1 primary, 2 secondary, 3 success, 4 danger, 5 link (a `url` and no `custom_id`; a click on it does not reach you).
+- `custom_id` is 1 to 100 characters and unique in the message. You choose it, and it comes back with the click, so make it say what the click means.
+- A button's `label` is at most 80 characters. A string select menu (type 3, alone in its row) has at most 25 `options`, each with a `label` and a `value` of at most 100 characters; `min_values` and `max_values` (up to 25) let people choose several.
+- Discord's newer layout, with the message flag `IS_COMPONENTS_V2` (32768), adds text, sections, containers, images and separators, up to 40 components in a message, but such a message cannot have `content` or `embeds` ([guide](https://docs.discord.com/developers/components/using-message-components)).
+- **Tables**: Discord's Markdown has no tables. Send a small table as a code block with aligned columns, and a large one as a page (the pages skill).
+- When Discord refuses the components, the `call` error gives Discord's answer. Fix what it names and call again.
+
+**When someone clicks.** Pots answers the click at once, within the 3 seconds Discord allows: it tells Discord that the message may change later, so the person sees no error. The click wakes you straight away, not through the judge and without waiting for more messages, as an `interaction` event on your message. The wake says which button or menu (its `custom_id`, and the values chosen in a menu) and who clicked (their person address). Discord's whole interaction is the event's raw data in the log.
+
+**Mark the question answered.** Anyone who can see the message can click, and a click is not an answer until you decide it counts. Whose click counts, and what it means, is your call, as with messages. When it counts, change your message with `call` `PATCH /channels/<channel ID>/messages/<message ID>`: a new `content`, and `components` with the buttons `"disabled": true`, or `[]` to take them away. Until you change it, the buttons stay, and a click days later still wakes you.
+
+**Forms.** Discord opens a form (a modal) only as the first answer to a click, within 3 seconds, which is too soon for you, so you store the form first and Pots opens it:
+
+1. `pots form add <name> <JSON>`, or `-` to read the JSON from stdin: the `data` of a Discord modal ([reference](https://docs.discord.com/developers/interactions/receiving-and-responding)), with `custom_id`, `title` (at most 45 characters) and `components`: 1 to 5 [Label](https://docs.discord.com/developers/components/reference) components (type 18, `label` at most 45 characters), each holding one text input (type 4; `style` 1 for one line, 2 for several; up to 4000 characters), select menu, radio group, checkbox group or checkbox. Each one's `custom_id` names its value in the answer. Adding a name in use replaces that form.
+2. Post a button whose `custom_id` is `form:<name>`, or `form:<name>:<extra>`. `<extra>` comes back with the answer, so one form serves many messages, for example `form:bug-report:4.2`.
+3. Someone clicks, and Pots opens the form at once. When they submit it, you are woken at once with the form's name, `<extra>`, the submitted values and who submitted it.
+
+`pots form list` shows your forms, and `pots form remove <name>` removes one.
+
+```sh
+pots form add bug-report - <<'EOF'
+{"custom_id": "bug-report", "title": "Report a bug", "components": [
+  {"type": 18, "label": "What happened?", "component": {"type": 4, "custom_id": "what", "style": 2, "max_length": 1000}}]}
+EOF
+```
+
+**Link previews.** Discord shows a preview (an embed) of the links in a message. `send` does not turn this off. When you send a page link, and always a password page link (the pages skill), post it with `call` and the message flag `SUPPRESS_EMBEDS`, which is 4:
+
+`call discord POST /channels/123/messages {"content": "The plan: https://…/p/…/", "flags": 4}`
 
 ## Limits
 

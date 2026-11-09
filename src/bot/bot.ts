@@ -3,7 +3,6 @@ import { existsSync, unlinkSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
@@ -83,8 +82,6 @@ const NO_PROJECT_CONTEXT = "Project-specific instructions and guidelines: none f
 const NO_SKILLS = "Skills: none found.";
 /** What the bot says where it was woken when its model fails. */
 const FAILURE_NOTICE = "I could not work on this: my model did not answer. The reason is in pots status on the computer I run on.";
-/** docs/ of this package, next to src/ or dist/. */
-const DOCS_DIR = fileURLToPath(new URL("../../docs", import.meta.url));
 
 /**
  * One bot: a person with a name, an AGENTS.md, responsibilities, memory, timed wakes, a workspace and one long
@@ -238,7 +235,6 @@ export class Bot implements WakeTarget {
       botsDir: env.botsDir,
       pots: env.potsCommand,
       machine,
-      docs: DOCS_DIR,
       secretsDir: SECRETS_DIR,
       fallbackWakeMinutes: current().settings.fallbackWakeMinutes,
       sharedMemory: MEMORY_DIR,

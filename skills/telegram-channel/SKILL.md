@@ -1,4 +1,11 @@
-# Connect Telegram
+---
+name: telegram-channel
+description: Telegram for a Pots bot. How to connect a Telegram bot yourself (BotFather, its token, groups, bot.json), topics, files and limits, and how to post buttons under a message (inline keyboards), get clicks, mark a question answered, and send tables. Use when you connect Telegram, or need more in Telegram than plain text.
+---
+
+# Telegram
+
+## Connect
 
 Written for a bot that connects itself; a person can follow it too. The bot gets its messages by long polling, so the computer needs no public address.
 
@@ -24,6 +31,38 @@ In a group with topics, each topic is a thread. A reply to a message in a topic 
 Turning topics on makes a group a supergroup, which is a new chat with a new address. The log has a system event in each of the two chats that gives the other's address, and a send to the old address fails with an error that gives the new one.
 
 A second Telegram bot is a second channel entry with its own `id` (for example `telegram-shop`) and its own env file.
+
+## call
+
+The `call` tool, with the channel's `id` (`telegram`), calls any method of the Bot API (https://core.telegram.org/bots/api) with the bot token. The method is the method's name, and the params are its parameters. The chat ID is the number in a place address: `telegram:#-1001234567890`.
+
+## Buttons, forms, tables and clicks
+
+**Tables** need nothing more: `send` posts a rich message, and a Markdown table in your text shows as a table, with at most 20 columns. In a chat that does not take rich messages, it shows as plain text; a large table goes in a page (the pages skill).
+
+**Buttons** go under a message as an inline keyboard. Post the message yourself with `call`: `sendMessage` ([reference](https://core.telegram.org/bots/api#sendmessage)) with `reply_markup.inline_keyboard` ([reference](https://core.telegram.org/bots/api#inlinekeyboardmarkup)), a list of rows, each a list of buttons. For rich formatting, use `sendRichMessage` with `"rich_message": {"markdown": "…"}` and the same `reply_markup`. In a topic, add `message_thread_id`.
+
+`call telegram sendMessage {"chat_id": -1001234567890, "text": "Where should I deploy release 4.2?", "reply_markup": {"inline_keyboard": [[{"text": "Test", "callback_data": "deploy:test"}, {"text": "Production", "callback_data": "deploy:prod", "style": "danger"}]]}}`
+
+- `callback_data` is 1 to 64 **bytes**, not characters ([reference](https://core.telegram.org/bots/api#inlinekeyboardbutton)): a few words or an ID, never a long text, and fewer letters in a script that takes several bytes a letter. You choose it, and it comes back with the click, so make it say what the click means.
+- `style` is `primary`, `success` or `danger`. A button with a `url` instead of `callback_data` opens the link, and its click does not reach you.
+- A chat has no menus or check boxes: give one button per choice, or a page for many choices.
+- When Telegram refuses the message, the `call` error gives Telegram's answer. Fix what it names and call again.
+
+**When someone clicks.** Pots answers the click to Telegram itself (`answerCallbackQuery`) at once, so the button stops spinning. Do not call `answerCallbackQuery` yourself: the click is answered already. The click wakes you straight away, not through the judge and without waiting for more messages, as an `interaction` event on your message. The wake says which button (its `callback_data`) and who clicked (their person address). Telegram's callback query is the event's raw data in the log.
+
+**Mark the question answered.** Anyone in a group can press the buttons, and a click is not an answer until you decide it counts. Whose click counts, and what it means, is your call, as with messages. When it counts, change your message with `call`:
+
+- `editMessageReplyMarkup` ([reference](https://core.telegram.org/bots/api#editmessagereplymarkup)) changes only the buttons, for example to one disabled button that shows the answer: `{"chat_id": -1001234567890, "message_id": 42, "reply_markup": {"inline_keyboard": [[{"text": "✓ Test, chosen by @alice", "disabled": {}}]]}}`.
+- `editMessageText` ([reference](https://core.telegram.org/bots/api#editmessagetext)) changes the text, with `chat_id`, `message_id` and `text`, or `rich_message` for a rich message. Give `reply_markup` with the buttons the message should keep.
+
+Until you change it, the buttons stay, and a click days later still wakes you.
+
+**Forms.** Telegram has no forms. Ask one short question in text; for several inputs, write a page (the pages skill) and send its link.
+
+**Link previews.** Telegram shows a preview of a link in a message. When you send a page link, and always a password page link (the pages skill), post it with `call` `sendMessage` and `"link_preview_options": {"is_disabled": true}` ([reference](https://core.telegram.org/bots/api#linkpreviewoptions)). `send` posts a rich message, which has no such option, so send these links with `call`:
+
+`call telegram sendMessage {"chat_id": -1001234567890, "text": "The plan: https://…/p/…/", "link_preview_options": {"is_disabled": true}}`
 
 ## Files
 

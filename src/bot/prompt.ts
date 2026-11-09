@@ -24,8 +24,6 @@ export interface PromptFacts {
   /** Full path of the pots command. */
   pots: string;
   machine: Machine;
-  /** The package's docs folder. */
-  docs: string;
   secretsDir: string;
   fallbackWakeMinutes: number;
   /** The memory all bots of this computer share. */
@@ -60,7 +58,7 @@ export function workSection(facts: PromptFacts): string {
 
 # Tools and command line
 - Tools: read, write, edit, bash, screen, send, react, call, task, and codemode.
-- The command line pots does the same channel actions, and also handles timed wakes, routines, turning the page and context use. Your scripts and scheduled jobs can use it too:
+- The command line pots does the same channel actions, and also handles timed wakes, routines, page links, forms, turning the page and context use. Your scripts and scheduled jobs can use it too:
   pots send <address> <text, or - to read stdin> [--id <send ID>]   a send ID is sent only once; use the same ID when you redo
   pots react <message address> <emoji> [--remove]
   pots call <channel> <method> [JSON params, or -]
@@ -68,6 +66,10 @@ export function workSection(facts: PromptFacts): string {
   pots wake --list | --cancel <id>
   pots routine add <name> (--every 30m | --cron "0 9 * * 1-5") (--note <text> | --run <command>) [--timeout 10m]   repeating work; add with a name in use replaces that routine
   pots routine list | remove <name>
+  pots page link <name> [--for <person address>]   a link to your page pages/<name>/ for people; the pages skill says more
+  pots page unlink <link ID or URL> | list
+  pots page secret --file <name>.env --keys A,B [--text <text>] [--for <person address>]   a one-time Pots page where a person writes secrets into that file
+  pots form add <name> <JSON, or -> | remove <name> | list   a Slack or Discord form that a button with the ID form:<name> opens
   pots context
   pots turn-page --note <text>
   Outside your own bash (for example in cron), write it in full: ${facts.pots} <command> --bot ${facts.id}
@@ -122,7 +124,7 @@ export function folderSection(facts: PromptFacts, child = false): string {
   const paths = facts.paths;
   const secrets = child
     ? ""
-    : ` When the person has to give you secrets, such as tokens they copied, ask in the terminal channel with call <its channel id> ask-secret {"text": "…", "file": "<app>.env", "keys": ["<TOKEN_NAME>", …]}: pots chat asks for each key without showing it and writes it to that file in ${facts.secretsDir}, and you get a message that names the keys it wrote. You never see the values, so they stay out of your log.`;
+    : ` When the person has to give you secrets, such as tokens they copied, ask in the terminal channel with call <its channel id> ask-secret {"text": "…", "file": "<app>.env", "keys": ["<TOKEN_NAME>", …]}: pots chat asks for each key without showing it and writes it to that file in ${facts.secretsDir}, and you get a message that names the keys it wrote. You never see the values, so they stay out of your log. In a chat app, never ask for a secret in a message: send a password page (pots page secret).`;
   return `# Your folder: ${paths.dir}
 - bot.json: your definition: name, model, thinking, childModel (the model of children; unset, your model), childThinking (the thinking level of a child you start without one; xhigh by default), judge, channels (channel accounts), screen (the environment of your screen, which the screen tool runs with), settings (settings.maxChildren: how many children may work at once; settings.autoMemory: false turns your memory off). model is "provider/modelId". judge decides which messages that do not mention you wake you: "off" (all of them; the default), a classifier "provider/modelId" such as typesafe/jev-latest, or "main" (your own model judges, which is slower). Models and logins are pi's: ~/.pi/agent/auth.json, and ~/.pi/agent/models.json for OpenAI-compatible and local endpoints. Changes take effect within a few seconds. If it has an error, the error goes into bot.json.error and the old definition stays in use.
 - AGENTS.md: your personality, how you talk, and anything else you want to know at every request. Context files are found as pi finds them: AGENTS.md (or AGENTS.override.md, CLAUDE.md) in ~/.pi/agent and in your working directory and every folder above it, so one in ${facts.botsDir} is for every bot there. They are read before each request, so changes take effect at once.
@@ -133,7 +135,8 @@ export function folderSection(facts: PromptFacts, child = false): string {
 - memory/: your memory, one file per memory and MEMORY.md, its index.
 - workspace/: your working directory.
 - files/: the files of messages people send. They are saved under files/tmp/, one folder per message, when the message comes, and the wake gives each file's path. Pots deletes them ${FILE_DAYS} days after they are saved; to keep one, move or copy it out of files/tmp/. Files over ${MAX_FILE_BYTES / 1024 / 1024} MB, and files not saved in time, are not saved: the wake gives their URL, and you download them yourself if you need them. The message log keeps each file's name, type, size and URL (gw_messages.files), so you can download a file again later from the platform. A file URL may need the channel account's token.
-- Channel types: slack, discord, telegram, terminal (the person who set you up, in their terminal), test. A message can have at most 12000 characters on Slack, 2000 on Discord and 32768 on Telegram; send longer text in parts. How to connect a new chat app yourself is in ${facts.docs}/channels/; put its tokens in ${facts.secretsDir}, readable only by this user.${secrets}
+- pages/: web pages you write for people, one folder each (pages/<name>/index.html); pages/keep/ holds those to keep. For long content, many questions at once, or a secret, the pages skill says how to write a page, give a link and get the answers back.
+- Channel types: slack, discord, telegram, terminal (the person who set you up, in their terminal), test. A message can have at most 12000 characters on Slack, 2000 on Discord and 32768 on Telegram; send longer text in parts. How to connect a chat app yourself, and to send buttons, menus, forms and tables on it, is in its skill: slack-channel, discord-channel, telegram-channel. Put its tokens in ${facts.secretsDir}, readable only by this user.${secrets}
 - Other bots are in ${facts.botsDir}, one subfolder per bot. You can change their definitions. A new folder with a bot.json is a new bot.`;
 }
 

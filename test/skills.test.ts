@@ -113,6 +113,8 @@ describe("the skills that come with Pots", () => {
         expect(existsSync(resolve(dirname(file), target)), `${name}: ${target}`).toBe(true);
       }
       expect(text).not.toContain("docs/channels");
+      // An env file holds values as typed, so sourcing it would run a value's $(…); a skill reads one line instead.
+      for (const line of text.split("\n")) expect(line, `${name} sources a file: ${line}`).not.toMatch(/(^|[\s;&|(`])(source|\.)\s+["']?[~$/\w.-]*(\.env|secrets)/);
     }
   });
 

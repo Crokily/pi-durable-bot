@@ -134,20 +134,60 @@ describe("the page kit", () => {
     expect(gone.calls).toHaveLength(1);
   });
 
-  it("asks for the version again when it could not, and stops when the link is gone", async () => {
-    let tries = 0;
-    const flaky = fakeIo([200], async () => {
-      if (++tries < 3) throw new TypeError("Failed to fetch");
-      return "v7";
-    });
-    expect((await kit.deliver("/p/tok/", answers, flaky.io)).ok).toBe(true);
-    expect(flaky.calls.map((call) => call.body.version)).toEqual(["v7"]);
+  it("reads the page's version when it loads, trying again a few times, and stops at a revoked link", async () => {
+    /** A fake __pots/info: each read takes the next result, a version, a status or "throw" (no connection). */
+    const info = (results: (string | number | "throw")[]) => {
+      const sleeps: number[] = [];
+      let reads = 0;
+      const io = {
+        fetch: async (url: string) => {
+          expect(url).toBe("/p/tok/__pots/info");
+          reads++;
+          const result = results.shift() ?? "throw";
+          if (result === "throw") throw new TypeError("Failed to fetch");
+          if (typeof result === "number") return { ok: false, status: result, json: async () => ({}) };
+          return { ok: true, status: 200, json: async () => ({ page: "plan", version: result }) };
+        },
+        sleep: async (ms: number) => {
+          sleeps.push(ms);
+        },
+      };
+      return { io, sleeps, reads: () => reads };
+    };
+    const flaky = info(["throw", 503, "v7"]);
+    expect(await kit.readVersion("/p/tok/", flaky.io)).toBe("v7");
     expect(flaky.sleeps).toEqual([1000, 2000]);
+
+    const down = info([]);
+    await expect(kit.readVersion("/p/tok/", down.io)).rejects.toEqual({ status: 0 });
+    expect(down.reads()).toBe(4);
+    expect(down.sleeps).toEqual([1000, 2000, 4000]);
+
+    const revoked = info([404]);
+    await expect(kit.readVersion("/p/tok/", revoked.io)).rejects.toEqual({ status: 404 });
+    expect(revoked.reads()).toBe(1);
+  });
+
+  it("never sends answers with a version read after the page loaded", async () => {
+    // The page could not read its version when it loaded; the page has changed since, to v2. The kit keeps the failed
+    // read, so nothing goes out, and the person is asked to reload; asking now would stamp the old answers with v2.
+    const failedAtLoad = Promise.reject({ status: 0 });
+    failedAtLoad.catch(() => {});
+    let asked = 0;
+    const stale = fakeIo([200], () => {
+      asked++;
+      return failedAtLoad;
+    });
+    const result = await kit.deliver("/p/tok/", answers, stale.io);
+    expect(result).toEqual({ ok: false, status: 0, message: "no-version", bytes: undefined });
+    expect(stale.calls).toEqual([]);
+    expect(stale.sleeps).toEqual([]);
+    expect(asked).toBe(1);
 
     const revoked = fakeIo([], async () => {
       throw { status: 404 };
     });
-    expect((await kit.deliver("/p/tok/", answers, revoked.io)).status).toBe(404);
+    expect(await kit.deliver("/p/tok/", answers, revoked.io)).toMatchObject({ ok: false, status: 404, message: "gone" });
     expect(revoked.calls).toEqual([]);
   });
 

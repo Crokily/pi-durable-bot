@@ -27,6 +27,8 @@
   var MAX_BYTES = 64 * 1024;
   /** Waits between tries after a failed send, in ms; the last one repeats. */
   var RETRY_DELAYS = [1000, 2000, 4000, 8000, 15000, 30000];
+  /** Waits between tries to read the page's version when it loads, in ms; then the kit gives up. */
+  var VERSION_DELAYS = [1000, 2000, 4000];
 
   // ---- Plain functions: no DOM ----
 
@@ -146,9 +148,42 @@
   }
 
   /**
+   * The page's version from __pots/info, read once, when the page loads: answers carry the version of the page the
+   * person sees, so a version read later, after the page may have changed, would be wrong. A network failure or a
+   * server error is tried again after VERSION_DELAYS; then, or at once for a revoked link (404), it rejects with
+   * {status} (0 when there was no answer).
+   *
+   * io: {fetch(url, init) → Promise<Response>, sleep(ms) → Promise}
+   */
+  function readVersion(base, io) {
+    var attempt = 0;
+    var once = function () {
+      return io
+        .fetch(base + "__pots/info", { cache: "no-store", credentials: "same-origin" })
+        .then(function (response) {
+          if (!response.ok) throw { status: response.status };
+          return response.json();
+        })
+        .then(function (info) {
+          if (!info || info.version == null) throw { status: 0 };
+          return String(info.version);
+        })
+        .then(null, function (error) {
+          var failed = error && typeof error.status === "number" ? error.status : 0;
+          if (retryable(failed) && attempt < VERSION_DELAYS.length) return io.sleep(VERSION_DELAYS[attempt++]).then(once);
+          throw { status: failed };
+        });
+    };
+    return once();
+  }
+
+  /**
    * Sends one submission to Pots until it is taken. The same submission ID goes with every try, so Pots wakes the bot
    * once, also when an answer came through and only Pots' reply was lost. A network failure, a timeout, 429 or a
    * server error is tried again after a wait; 400, 404 and the others end it.
+   *
+   * io.version() gives the version the page was loaded at, the same every time. When it could not be read, nothing is
+   * sent ("no-version", or "gone" for a revoked link): a version read now could belong to a newer page.
    *
    * io: {fetch(url, init) → Promise<Response>, sleep(ms) → Promise, randomId() → string,
    *      version() → Promise<string>, onStatus(state, detail)}
@@ -168,30 +203,36 @@
       status("sending", { attempt: attempt });
       return io
         .version()
-        .then(function (version) {
-          var body = JSON.stringify({ submission: submission, version: version, answers: answers });
-          if (utf8Length(body) > MAX_BYTES) return { final: true, status: 413, message: "too-large", bytes: utf8Length(body) };
-          return io
-            .fetch(base + "__pots/submit", {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: body,
-              cache: "no-store",
-              credentials: "same-origin",
-            })
-            .then(function (response) {
-              if (response.ok) return { final: true, ok: true };
-              return response.text().then(
-                function (text) { return { final: !retryable(response.status), status: response.status, message: text }; },
-                function () { return { final: !retryable(response.status), status: response.status, message: "" }; },
-              );
-            });
-        })
-        .then(null, function (error) {
-          // No answer at all, or __pots/info failed: with its status (404 for a revoked link), or 0.
-          var failed = error && typeof error.status === "number" ? error.status : 0;
-          return { final: !retryable(failed), status: failed, message: failed ? "info" : "network" };
-        })
+        .then(
+          function (version) {
+            var body = JSON.stringify({ submission: submission, version: version, answers: answers });
+            if (utf8Length(body) > MAX_BYTES) return { final: true, status: 413, message: "too-large", bytes: utf8Length(body) };
+            return io
+              .fetch(base + "__pots/submit", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: body,
+                cache: "no-store",
+                credentials: "same-origin",
+              })
+              .then(function (response) {
+                if (response.ok) return { final: true, ok: true };
+                return response.text().then(
+                  function (text) { return { final: !retryable(response.status), status: response.status, message: text }; },
+                  function () { return { final: !retryable(response.status), status: response.status, message: "" }; },
+                );
+              })
+              .then(null, function () {
+                // No answer at all: tried again.
+                return { final: false, status: 0, message: "network" };
+              });
+          },
+          function (error) {
+            // The version of the page as loaded is not known: never sent with a later one.
+            var failed = error && typeof error.status === "number" ? error.status : 0;
+            return { final: true, status: failed, message: failed === 404 ? "gone" : "no-version" };
+          },
+        )
         .then(function (result) {
           if (result.final) {
             if (result.ok) {
@@ -219,28 +260,23 @@
     questionAnswer: questionAnswer,
     answersFrom: answersFrom,
     retryable: retryable,
+    readVersion: readVersion,
     deliver: deliver,
   };
   root.PotsKit = api;
   if (typeof document === "undefined" || typeof window === "undefined") return;
 
   var base = pageBase(location.pathname) || new URL("./", location.href).pathname;
-  /** The version of the page as it was loaded, from __pots/info; one request, shared. */
+  /**
+   * The version of the page as it was loaded: read once, when the kit starts, and kept, also when it failed. A later
+   * read could see a newer page than the one on screen.
+   */
   var loaded = null;
   function loadVersion() {
-    if (!loaded)
-      loaded = fetch(base + "__pots/info", { cache: "no-store", credentials: "same-origin" })
-        .then(function (response) {
-          if (!response.ok) throw { status: response.status };
-          return response.json();
-        })
-        .then(function (info) {
-          return String(info.version);
-        })
-        .then(null, function (error) {
-          loaded = null;
-          throw error;
-        });
+    if (!loaded) {
+      loaded = readVersion(base, { fetch: function (url, init) { return fetch(url, init); }, sleep: sleep });
+      loaded.then(null, function () {});
+    }
     return loaded;
   }
 
@@ -377,6 +413,7 @@
     done: "Sent. Thank you.",
     gone: "This link no longer works. Ask for a new one.",
     tooLarge: "Your answers are too long to send. Shorten them and send again.",
+    noVersion: "This page could not reach Pots when it opened. Copy what you wrote, reload the page, and send again.",
     failed: "Pots did not take the answers",
   };
 
@@ -438,8 +475,10 @@
           show(form, "failed", MESSAGES.gone);
           return;
         }
+        // The answers stay on screen, so the person can send them again or copy them.
         setDisabled(form, false);
-        if (result.message === "too-large") show(form, "failed", MESSAGES.tooLarge);
+        if (result.message === "no-version") show(form, "failed", MESSAGES.noVersion);
+        else if (result.message === "too-large") show(form, "failed", MESSAGES.tooLarge);
         else show(form, "failed", MESSAGES.failed + " (" + result.status + ")" + (result.message ? ": " + clean(result.message).slice(0, 200) : "."));
       });
   }
@@ -533,7 +572,9 @@
     var every = Math.max(2, seconds) * 1000;
     var tick = function () {
       if (document.visibilityState === "hidden") return;
-      Promise.all([loadVersion(), fetch(base + "__pots/info", { cache: "no-store", credentials: "same-origin" }).then(function (response) { return response.json(); })])
+      // A page whose version could not be read when it loaded counts as changed: a reload gives it one.
+      var seen = loadVersion().then(null, function () { return null; });
+      Promise.all([seen, fetch(base + "__pots/info", { cache: "no-store", credentials: "same-origin" }).then(function (response) { return response.json(); })])
         .then(function (both) {
           if (String(both[1].version) === both[0]) return;
           if (busy || dirty) banner();
@@ -554,7 +595,8 @@
       if (event.target && event.target.closest && event.target.closest("form")) dirty = true;
     });
     var refresh = document.body.getAttribute("data-pots-refresh");
-    if (document.querySelector("form[data-pots]") || refresh !== null) loadVersion().then(null, function () {});
+    // The version of the page on screen, read now, for answers sent later.
+    loadVersion();
     loadSources();
     if (refresh !== null) watch(Number(refresh) || 5);
   }

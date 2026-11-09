@@ -104,12 +104,13 @@ EOF
 
 ## Files
 
-The files of a message are saved for you, and the wake gives their paths. The message log keeps each file's `url_private`. Downloading it needs the bot token (scope `files:read`), so Pots downloads only from Slack's own hosts. To download a file again later, read the token in the shell, so that it stays out of messages and logs, and send it in the `Authorization` header:
+The files of a message are saved for you, and the wake gives their paths. The message log keeps each file's `url_private`. Downloading it needs the bot token (scope `files:read`), so Pots downloads only from Slack's own hosts. To download a file again later, read the token from its line of the env file in the shell, so that it stays out of messages and logs, and send it in the `Authorization` header:
 
 ```sh
-. ~/.pots/secrets/slack.env
-curl -sS -o plan.png -H "Authorization: Bearer $SLACK_BOT_TOKEN" "<url_private>"
+curl -sS -o plan.png -H "Authorization: Bearer $(grep '^SLACK_BOT_TOKEN=' ~/.pots/secrets/slack.env | cut -d= -f2-)" "<url_private>"
 ```
+
+Never `source` the env file or `.` it in a shell, and never print the token: the file holds each value exactly as it was typed, and a value with `$(…)` in it would run as a command.
 
 Do not add `-L`: Slack's docs ask you to handle redirects on purpose, so that the token goes to no other host. If you get a web page instead of the file, the app does not have the `files:read` scope.
 

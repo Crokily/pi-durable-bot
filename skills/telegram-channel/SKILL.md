@@ -69,11 +69,11 @@ Until you change it, the buttons stay, and a click days later still wakes you.
 The files of a message are saved for you, and the wake gives their paths. The message log keeps each file's URL as `telegram-file:<file ID>`, without the token. To download a file again later:
 
 1. `call <channel id> getFile {"file_id": "<file ID>"}` gives its `file_path`.
-2. Download it from Telegram's file host with the token from the env file, read in the shell, so that it stays out of messages and logs:
+2. Download it from Telegram's file host with the token from its line of the env file, read in the shell, so that it stays out of messages and logs:
    ```sh
-   . ~/.pots/secrets/telegram.env
-   curl -sS -o photo.jpg "https://api.telegram.org/file/bot$TELEGRAM_BOT_TOKEN/<file_path>"
+   curl -sS -o photo.jpg "https://api.telegram.org/file/bot$(grep '^TELEGRAM_BOT_TOKEN=' ~/.pots/secrets/telegram.env | cut -d= -f2-)/<file_path>"
    ```
+   Never `source` the env file or `.` it in a shell, and never print the token: the file holds each value exactly as it was typed, and a value with `$(…)` in it would run as a command.
    The link works for at least an hour. Telegram gives bots files of at most 20 MB.
 
 To send a file, give its local path to `call`: `call <channel id> sendDocument {"chat_id": -1001234567890, "document": "/path/to/report.pdf"}` (also sendPhoto, sendVideo, sendMediaGroup and the others). The chat ID is the number in a place address: `telegram:#-1001234567890`.

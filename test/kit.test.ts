@@ -134,7 +134,7 @@ describe("the page kit", () => {
     expect(gone.calls).toHaveLength(1);
   });
 
-  it("reads the page's version when it loads, trying again a few times, and stops at a revoked link", async () => {
+  it("reads the page's version once, when it loads, and never again later", async () => {
     /** A fake __pots/info: each read takes the next result, a version, a status or "throw" (no connection). */
     const info = (results: (string | number | "throw")[]) => {
       const sleeps: number[] = [];
@@ -154,14 +154,19 @@ describe("the page kit", () => {
       };
       return { io, sleeps, reads: () => reads };
     };
-    const flaky = info(["throw", 503, "v7"]);
-    expect(await kit.readVersion("/p/tok/", flaky.io)).toBe("v7");
-    expect(flaky.sleeps).toEqual([1000, 2000]);
+    const ok = info(["v7"]);
+    expect(await kit.readVersion("/p/tok/", ok.io)).toBe("v7");
 
-    const down = info([]);
-    await expect(kit.readVersion("/p/tok/", down.io)).rejects.toEqual({ status: 0 });
-    expect(down.reads()).toBe(4);
-    expect(down.sleeps).toEqual([1000, 2000, 4000]);
+    // A failed first read is final: the page may change while the kit waits, so a second read could stamp the old
+    // answers with the new version.
+    const flaky = info(["throw", "v8"]);
+    await expect(kit.readVersion("/p/tok/", flaky.io)).rejects.toEqual({ status: 0 });
+    expect(flaky.reads()).toBe(1);
+    expect(flaky.sleeps).toEqual([]);
+
+    const busy = info([503, "v8"]);
+    await expect(kit.readVersion("/p/tok/", busy.io)).rejects.toEqual({ status: 503 });
+    expect(busy.reads()).toBe(1);
 
     const revoked = info([404]);
     await expect(kit.readVersion("/p/tok/", revoked.io)).rejects.toEqual({ status: 404 });

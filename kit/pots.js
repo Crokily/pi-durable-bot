@@ -28,7 +28,8 @@
   /** Waits between tries after a failed send, in ms; the last one repeats. */
   var RETRY_DELAYS = [1000, 2000, 4000, 8000, 15000, 30000];
   /** Waits between tries to read the page's version when it loads, in ms; then the kit gives up. */
-  var VERSION_DELAYS = [1000, 2000, 4000];
+  // No retries: a version read seconds later can belong to a page that changed after this one loaded.
+  var VERSION_DELAYS = [];
 
   // ---- Plain functions: no DOM ----
 
@@ -150,7 +151,7 @@
   /**
    * The page's version from __pots/info, read once, when the page loads: answers carry the version of the page the
    * person sees, so a version read later, after the page may have changed, would be wrong. A network failure or a
-   * server error is tried again after VERSION_DELAYS; then, or at once for a revoked link (404), it rejects with
+   * server error is not tried again (VERSION_DELAYS is empty: a later read could see a newer page); it rejects with
    * {status} (0 when there was no answer).
    *
    * io: {fetch(url, init) → Promise<Response>, sleep(ms) → Promise}

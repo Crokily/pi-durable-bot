@@ -88,9 +88,10 @@ function message(fields: Record<string, unknown>) {
 
 /** A sink like the gateway's: it drops a known event ID, and keeps raws as JSON, as the inbox does. */
 /** fail: the receive of this event ID fails while it returns true. */
-function memorySink(options: { lastAlive?: number; newest?: Record<string, string>; places?: string[]; fail?: (id: string) => boolean } = {}) {
+function memorySink(options: { lastAlive?: number; newest?: Record<string, string>; places?: string[]; fail?: (id: string) => boolean; forms?: Record<string, Record<string, unknown>> } = {}) {
   const events: { id: string; raw: any }[] = [];
   const logs: string[] = [];
+  const forms = new Map(Object.entries(options.forms ?? {}));
   const sink: ChannelSink = {
     receive: async (id, raw) => {
       if (options.fail?.(id)) throw new Error("database is locked");
@@ -100,9 +101,12 @@ function memorySink(options: { lastAlive?: number; newest?: Record<string, strin
     threads: async () => [],
     places: async () => options.places ?? [],
     lastAlive: () => options.lastAlive,
+    form: async (name) => structuredClone(forms.get(name)),
+    formOpened: async () => {},
+    formOpening: async () => undefined,
     log: (text, data) => logs.push(`${text} ${JSON.stringify(data ?? {})}`),
   };
-  return { sink, events, logs };
+  return { sink, events, logs, forms };
 }
 
 const DISCORD_EPOCH = 1420070400000n;
@@ -150,6 +154,35 @@ async function connect(options: Parameters<typeof memorySink>[0] = {}) {
   };
   const translate = async (raw: unknown): Promise<Happening[]> => channel.translate(raw);
   return { fake, channel, sink, events, logs, gateway, translate };
+}
+
+/** An interaction's token: it rides in the callback's URL, and must not reach an error the bot sees. */
+const INTERACTION_TOKEN = "aW50ZXJhY3Rpb24tdG9rZW4tdGhhdC1tdXN0LW5vdC1sZWFr";
+
+/** An interaction in #general by Alice, as Discord sends it. */
+function interaction(id: string, type: number) {
+  return {
+    id,
+    application_id: "100",
+    type,
+    token: INTERACTION_TOKEN,
+    version: 1,
+    guild_id: "10",
+    channel_id: "20",
+    channel: { id: "20", type: 0, name: "general", guild_id: "10" },
+    member: { ...member(), user: ALICE, permissions: "0" },
+    app_permissions: "0",
+    locale: "en-US",
+    entitlements: [],
+    authorizing_integration_owners: { 0: "10" },
+    context: 0,
+    attachment_size_limit: 10_485_760,
+  };
+}
+
+/** A click on a button of a message, as Discord sends it. */
+function componentClick(id: string, customId: string, on: ReturnType<typeof message>) {
+  return { ...interaction(id, 3), message: on, data: { custom_id: customId, component_type: 2 } };
 }
 
 describe("Discord channel", () => {
@@ -410,6 +443,145 @@ describe("Discord channel", () => {
     expect(await translate(event!.raw)).toMatchObject([
       { kind: "interaction", place: { address: "discord:#20" }, person: { address: "discord:@200" }, text: "/ask question: why?", fromMe: false },
     ]);
+  });
+
+  it("answers a click on a form: button with the stored form as its one first answer, and other clicks with later", async () => {
+    const form = {
+      title: "Deploy",
+      custom_id: "deploy",
+      components: [{ type: 18, label: "Why?", component: { type: 4, custom_id: "why", style: 2 } }],
+    };
+    const { fake, gateway, translate } = await connect({ forms: { deploy: form, slackish: { type: "modal", title: { type: "plain_text", text: "x" }, blocks: [] } } });
+    fake.route("POST", "/interactions/(\\d+)/([\\w-]+)/callback", () => undefined);
+    const components = [
+      {
+        type: 1,
+        components: [
+          { type: 2, style: 1, label: "Fill in", custom_id: "form:deploy:prod" },
+          { type: 2, style: 2, label: "Test", custom_id: "deploy:test" },
+          { type: 2, style: 2, label: "Ask", custom_id: "form:nope" },
+          { type: 2, style: 2, label: "Slack one", custom_id: "form:slackish" },
+        ],
+      },
+    ];
+    const asked = message({ id: "700", author: BOT, content: "Where to?", components });
+    const clicks = await gateway([
+      ["INTERACTION_CREATE", componentClick("951", "form:deploy:prod", asked)],
+      ["INTERACTION_CREATE", componentClick("952", "deploy:test", asked)],
+      ["INTERACTION_CREATE", componentClick("953", "form:nope", asked)],
+      ["INTERACTION_CREATE", componentClick("954", "form:slackish", asked)],
+    ]);
+    await until(() => fake.requested("POST", "/interactions/\\d+/[\\w-]+/callback").length === 4);
+    const answers = Object.fromEntries(fake.requested("POST", "/interactions/\\d+/[\\w-]+/callback").map((request) => [request.path.split("/")[2], request.body]));
+    // The form is the first answer, and the only one; its custom_id is the button's, so the submission says which form it is.
+    expect(answers).toEqual({ "951": { type: 9, data: { ...form, custom_id: "form:deploy:prod" } }, "952": { type: 6 }, "953": { type: 6 }, "954": { type: 6 } });
+    // The form itself is not stored with the click: pots form list has it.
+    expect(clicks[0]!.raw.form).toEqual({ name: "deploy", extra: "prod", opened: true });
+    expect(await translate(clicks[0]!.raw)).toMatchObject([
+      { kind: "form_opened", place: { address: "discord:#20" }, message: "discord:#20/700", person: { address: "discord:@200" }, text: 'opened form deploy for them: clicked button "Fill in" (custom_id form:deploy:prod)' },
+    ]);
+    expect(await translate(clicks[1]!.raw)).toMatchObject([{ kind: "interaction", message: "discord:#20/700", text: 'clicked button "Test" (custom_id deploy:test)' }]);
+    expect(await translate(clicks[2]!.raw)).toMatchObject([
+      { kind: "interaction", text: 'clicked button "Ask" (custom_id form:nope), and no form opened: no form nope is stored (pots form list shows the forms)' },
+    ]);
+    expect(await translate(clicks[3]!.raw)).toMatchObject([
+      { kind: "interaction", text: `clicked button "Slack one" (custom_id form:slackish), and no form opened: the form slackish is not a Discord modal's data (a title and components)` },
+    ]);
+  });
+
+  it("makes no event of an autocomplete, which comes at every keystroke, and does not answer it", async () => {
+    const { fake, gateway, translate } = await connect();
+    fake.route("POST", "/interactions/(\\d+)/([\\w-]+)/callback", () => undefined);
+    const [typed, sent] = await gateway([
+      ["INTERACTION_CREATE", { ...interaction("980", 4), data: { id: "960", name: "deploy", type: 1, options: [{ name: "repo", type: 3, value: "po", focused: true }] } }],
+      ["INTERACTION_CREATE", { ...interaction("981", 2), data: { id: "960", name: "deploy", type: 1, options: [{ name: "repo", type: 3, value: "pots" }] } }],
+    ]);
+    expect(await translate(typed!.raw)).toEqual([]);
+    expect(await translate(sent!.raw)).toMatchObject([{ kind: "interaction", text: "/deploy repo: pots" }]);
+    await until(() => fake.requested("POST", "/interactions/981/[\\w-]+/callback").length === 1);
+    expect(fake.requested("POST", "/interactions/980/[\\w-]+/callback")).toEqual([]);
+  });
+
+  it("acknowledges a form's submission and gives its values, on the message of the button that opened it", async () => {
+    const { fake, gateway, translate } = await connect();
+    fake.route("POST", "/interactions/(\\d+)/([\\w-]+)/callback", () => undefined);
+    const asked = message({ id: "700", author: BOT, content: "Where to?" });
+    const [submitted] = await gateway([
+      [
+        "INTERACTION_CREATE",
+        {
+          ...interaction("960", 5),
+          message: asked,
+          data: {
+            custom_id: "form:deploy:prod",
+            components: [
+              { type: 18, id: 1, component: { type: 4, id: 2, custom_id: "why", value: "the login fix\nand the logo" } },
+              { type: 1, id: 3, components: [{ type: 4, id: 4, custom_id: "ticket", value: "" }] },
+              { type: 18, id: 5, component: { type: 3, id: 6, custom_id: "env", values: ["prod"] } },
+            ],
+          },
+        },
+      ],
+    ]);
+    await until(() => fake.requested("POST", "/interactions/960/[\\w-]+/callback").length === 1);
+    expect(fake.requested("POST", "/interactions/960/[\\w-]+/callback")[0]!.body).toEqual({ type: 6 });
+    expect(await translate(submitted!.raw)).toEqual([
+      expect.objectContaining({
+        kind: "form",
+        place: expect.objectContaining({ address: "discord:#20" }),
+        message: "discord:#20/700",
+        person: { address: "discord:@200", name: "Alice" },
+        fromMe: false,
+        text: ["submitted form deploy (custom_id form:deploy:prod, extra: prod)", "why: the login fix", "  and the logo", "ticket: (empty)", "env: value prod"].join("\n"),
+      }),
+    ]);
+  });
+
+  it("tells the bot at once, with Discord's answer and no token, when Discord refuses a form, and answers the click with later", async () => {
+    const form = { title: "Deploy", components: [{ type: 18, label: "Why?", component: { type: 4, style: 2 } }] };
+    const { fake, events, gateway, translate, logs } = await connect({ forms: { deploy: form } });
+    const refusal = {
+      code: 50035,
+      message: "Invalid Form Body",
+      errors: { data: { components: { 0: { component: { custom_id: { _errors: [{ code: "BASE_TYPE_REQUIRED", message: "This field is required" }] } } } } } },
+    };
+    fake.route("POST", "/interactions/(\\d+)/([\\w-]+)/callback", (request) => (request.body.type === 9 ? new Reply(400, refusal) : undefined));
+    await gateway([["INTERACTION_CREATE", componentClick("970", "form:deploy", message({ id: "700", author: BOT, components: [] }))]]);
+    await until(() => events.length === 2 && fake.requested("POST", "/interactions/970/[\\w-]+/callback").length === 2);
+    expect(fake.requested("POST", "/interactions/970/[\\w-]+/callback").map((request) => request.body.type)).toEqual([9, 6]);
+    expect(events[1]!.id).toBe("form-failed:970");
+    const [failed] = await translate(events[1]!.raw);
+    expect(failed).toMatchObject({ kind: "form", message: "discord:#20/700", person: { address: "discord:@200" } });
+    expect(failed!.text).toBe(
+      "the form deploy did not open after they clicked button (custom_id form:deploy). Discord said: Discord answered 400, code 50035: Invalid Form Body\n" +
+        "data.components[0].component.custom_id[BASE_TYPE_REQUIRED]: This field is required",
+    );
+    expect(failed!.text).not.toContain(INTERACTION_TOKEN);
+    expect(JSON.stringify(logs)).not.toContain(INTERACTION_TOKEN);
+  });
+
+  it("gives Discord's code and the fields it refused when it refuses a call, and never the token or the URL", async () => {
+    const { fake, channel } = await connect();
+    fake.route("POST", "/channels/20/messages", () =>
+      new Reply(400, {
+        code: 50035,
+        message: "Invalid Form Body",
+        errors: { components: { 0: { components: { 0: { custom_id: { _errors: [{ code: "BASE_TYPE_REQUIRED", message: "This field is required" }] } } } } } },
+      }),
+    );
+    const refused = await channel
+      .call("POST /channels/20/messages", { content: "Where to?", components: [{ type: 1, components: [{ type: 2, style: 1, label: "Test" }] }] })
+      .then(() => undefined, (error: Error) => error.message);
+    expect(refused).toBe("Discord answered 400, code 50035: Invalid Form Body\ncomponents[0].components[0].custom_id[BASE_TYPE_REQUIRED]: This field is required");
+    const sent = await channel.send("discord:#20", "hello", "tool:1").then(() => undefined, (error: Error) => error.message);
+    expect(sent).toContain("code 50035");
+    fake.route("POST", `/webhooks/100/${INTERACTION_TOKEN}`, () => new Reply(404, { code: 10015, message: "Unknown Webhook" }));
+    const hook = await channel.call(`POST /webhooks/100/${INTERACTION_TOKEN}`, { content: "late" }).then(() => undefined, (error: Error) => error.message);
+    expect(hook).toBe("Discord answered 404, code 10015: Unknown Webhook");
+    for (const text of [refused, sent, hook]) {
+      expect(text).not.toContain("test-token");
+      expect(text).not.toContain(INTERACTION_TOKEN);
+    }
   });
 
   it("parses only its own addresses", async () => {

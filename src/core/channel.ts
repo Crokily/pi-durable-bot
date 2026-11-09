@@ -39,7 +39,10 @@ export type FileInfo = typeof FileInfo.Type;
  * One thing that happened in a channel, in common words. The adapter makes these from the raw events it stored, and
  * the gateway checks them against this schema before it logs them.
  * kind: "message", "edit", "delete", "reaction_added", "reaction_removed", "join", "leave", "update" (a change to a message that
- * is not its text), "system" (a notice from the platform, such as a pin; its text says what happened), or another plain word.
+ * is not its text), "system" (a notice from the platform, such as a pin; its text says what happened), "interaction" (someone
+ * used a button or a menu; its text says which), "form" (someone submitted a form of the bot's, or one did not open; its
+ * text gives the values or the error), "form_opened" (a button opened a stored form; only logged, as its submission comes
+ * as a "form"), or another plain word.
  */
 export const Happening = Schema.Struct({
   kind: Schema.NonEmptyString,
@@ -69,6 +72,25 @@ export const Happening = Schema.Struct({
 });
 export type Happening = typeof Happening.Type;
 
+/**
+ * What a form opened for: the button that opened it, as common words. The adapter keeps it under an ID of its own, so
+ * the form's submission, which on some platforms carries only that ID, gets its place and message back.
+ */
+export interface FormOpening {
+  /** The form's name, as pots form add stored it. */
+  readonly form: string;
+  /** What followed form:<name>: in the button's ID. */
+  readonly extra?: string;
+  readonly place?: Address;
+  readonly thread?: Address;
+  /** The message with the button. */
+  readonly message?: Address;
+  /** Who clicked. */
+  readonly person?: Address;
+  /** What the adapter needs back with the submission, in its platform's terms. */
+  readonly data?: unknown;
+}
+
 /** What the gateway gives an adapter. */
 export interface ChannelSink {
   /**
@@ -84,6 +106,12 @@ export interface ChannelSink {
   places(): Promise<Address[]>;
   /** When the gateway last ran, in Unix ms. Undefined on the first start. */
   lastAlive(): number | undefined;
+  /** The form stored with pots form add under this name, as the bot gave it: a JSON object, which the adapter checks. */
+  form(name: string): Promise<Record<string, unknown> | undefined>;
+  /** Keep what a form opened for, under an ID the adapter made, before the form opens. The same ID again replaces it. */
+  formOpened(id: string, opening: FormOpening): Promise<void>;
+  /** What a form opened for, by the adapter's ID, also after a restart; undefined when unknown. */
+  formOpening(id: string): Promise<FormOpening | undefined>;
   log(message: string, data?: Record<string, unknown>): void;
 }
 

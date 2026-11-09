@@ -2,6 +2,24 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
+## Unreleased
+
+The bot can show people web pages, ask with buttons and forms, and take secrets on a page, also when its computer has no public address.
+
+### Added
+- **Pages.** The bot writes web pages in `pages/<name>/` of its folder and gives people links to them (`pots page link`). A link is long and random, can be made for one person (`--for`), and works until the bot unlinks it or the page is deleted. Answers from a page (the kit has choices, text, comments and approve or reject) wake the bot once per submission, with the version of the page the person saw. A page that nobody opened, linked or changed for 30 days is deleted; pages in `pages/keep/` stay.
+- **A password page.** `pots page secret` gives a link, for one person, to a page of Pots' own where they type secrets once. The values go into a file in the secrets folder, never into the log, a wake or a trace. The link stops working after the submission, or after an hour. Link previews do not use it up.
+- **A public address with no setup.** The page server listens on this computer only. With no `publicUrl` in `~/.pots/settings.json`, the first page link starts a Cloudflare Quick Tunnel, and Pots downloads a pinned, checksum-checked `cloudflared` when none is installed. Its address changes when Pots restarts, and the bot tells people what that means. With a `publicUrl`, for example a Tailscale Funnel address that the bot set up with you, links use that address.
+- **Forms from buttons on Slack and Discord.** `pots form add` stores a form. A button with `form:<name>` opens it at once, within the platform's 3 seconds, and the submitted values wake the bot.
+- **Skills come with Pots.** The Slack, Discord and Telegram guides are now skills (`slack-channel`, `discord-channel`, `telegram-channel`), each with a new section on buttons, forms, tables and clicks, and there is a new `pages` skill. Every bot sees them. A skill of yours with the same name is used instead.
+
+### Changed
+- **Clicks wake the bot at once.** A click on one of the bot's buttons or menus, a command of the bot, or a submitted form wakes it straight away, not through the judge and without waiting for more messages. This also holds on a message the log does not have, such as a Slack ephemeral message.
+- **Pots answers Telegram button presses**, so the button stops spinning at once. The bot no longer calls `answerCallbackQuery` itself.
+- **Platform errors say what was wrong.** When Slack, Discord or Telegram refuses a call, the bot sees the platform's details, for example which block of a Slack message is invalid. They never hold a token.
+- **`pots status` has a `pages:` line** with the page server's port and the public address.
+- **`ask-secret` writes its file atomically.**
+
 ## 0.6.1 (2026-11-08)
 
 Pots is safer on a Linux computer that more than one user shares, and stops cleanly on Windows.
@@ -45,8 +63,8 @@ Pots runs on pi 1.5.0.
 Pots works in Discord and Telegram too, and an AI agent can set it up for you: you only sign in to your model.
 
 ### Added
-- **Discord.** The bot connects a Discord app itself, by [docs/channels/discord.md](docs/channels/discord.md). It receives over Discord's Gateway, so the computer needs no public address, stores every event before it is acknowledged, and reads what came while it was down, also in threads. A reply quotes the message in its channel or thread. With `call` it opens threads, posts files and uses any other part of Discord's API, and it answers slash commands and buttons.
-- **Telegram.** The bot connects a Telegram bot itself, by [docs/channels/telegram.md](docs/channels/telegram.md), with long polling, so the computer needs no public address. It sends rich messages with headings, lists and tables, and plainer ones where a chat does not take those. A topic is a thread, and a reply to the bot counts as a mention. Telegram keeps what came while the bot was down for 24 hours; it cannot read older history.
+- **Discord.** The bot connects a Discord app itself, by [the guide that is now its skill](skills/discord-channel/SKILL.md). It receives over Discord's Gateway, so the computer needs no public address, stores every event before it is acknowledged, and reads what came while it was down, also in threads. A reply quotes the message in its channel or thread. With `call` it opens threads, posts files and uses any other part of Discord's API, and it answers slash commands and buttons.
+- **Telegram.** The bot connects a Telegram bot itself, by [the guide that is now its skill](skills/telegram-channel/SKILL.md), with long polling, so the computer needs no public address. It sends rich messages with headings, lists and tables, and plainer ones where a chat does not take those. A topic is a thread, and a reply to the bot counts as a mention. Telegram keeps what came while the bot was down for 24 hours; it cannot read older history.
 - **`pots login`** signs in with a subscription, or adds an API key (also TypeSafe's, for the Jev judge) or a local model server, for every bot on the computer. `pots login --list` shows the models and judges that can be used now, and never a secret.
 - **Text limits.** A text over a platform's limit fails at once with the limit and the length, and the bot sends it in parts: 12,000 characters on Slack, 2,000 on Discord and 32,768 on Telegram. Nothing is cut.
 - **System messages.** A platform's notices, such as a pin, a new channel name, a thread that started or a Telegram group that became a supergroup, are `system` events in the log, with what happened in words, and the wake shows them. They used to be logged as messages of the person who caused them.

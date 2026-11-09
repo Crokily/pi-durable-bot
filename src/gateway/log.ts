@@ -102,9 +102,9 @@ CREATE TABLE IF NOT EXISTS gw_state (
 /** What the agent is told about these tables. Keep in sync with SCHEMA. */
 export const LOG_SCHEMA = `Times are Unix ms. Columns that hold an address (place, thread, message, person, to_address) hold the address strings you pass to send, react and pb.
 - gw_events(id, channel, kind, at, place, thread, message, person, from_me, mentions_me, text, raw, wake)
-  Everything that happened, in order: kind is message, edit, delete, reaction_added, reaction_removed, join, leave, update (a change to a message that is not its text, for example a link preview), system (a notice from the platform, such as a pin, a new channel name or a thread that started; its text says what happened), command, interaction, or another word the channel uses.
-  text: the message text for message and edit, the emoji for reactions, what happened for system. from_me = 1: done by you (for update: a change to your own message). raw: the platform's data (JSON), for details and for call.
-  wake: how the gateway handled the event: self (yours, no notice), log (only logged), mention, dm, relevant (the judge saw a need), judge_no (the judge saw none), heard (no judge set), steer. NULL: not decided yet.
+  Everything that happened, in order: kind is message, edit, delete, reaction_added, reaction_removed, join, leave, update (a change to a message that is not its text, for example a link preview), system (a notice from the platform, such as a pin, a new channel name or a thread that started; its text says what happened), command, interaction (someone used a button or a menu), form (someone submitted a form of yours, or one did not open), form_opened (a button opened a form of yours; its submission comes as form), or another word the channel uses.
+  text: the message text for message and edit, the emoji for reactions, what happened for system, interaction, form and form_opened. from_me = 1: done by you (for update: a change to your own message). raw: the platform's data (JSON), for details and for call.
+  wake: how the gateway handled the event: self (yours, no notice), log (only logged), mention, dm, relevant (the judge saw a need), judge_no (the judge saw none), heard (no judge set), interaction (your button, menu, command or form was used), steer. NULL: not decided yet.
 - gw_messages(address, channel, place, thread, person, from_me, mentions_me, text, mentions, files, at, edited_at, deleted_at, send_id, raw)
   One row per message with its current text. thread: the thread the message is in; a message that starts a thread has its own address there.
   deleted_at is set for deleted messages; the text stays. mentions and files are JSON.
@@ -112,6 +112,7 @@ export const LOG_SCHEMA = `Times are Unix ms. Columns that hold an address (plac
 - gw_people(address, channel, name, real_name)
 - gw_outbox(send_id, to_address, text, state, message, created_at, sent_at): what you sent with send.
 - gw_inbox(channel, event_id, received_at, raw, state, error): the raw events as received.
+- gw_forms(name, form, updated_at): the forms stored with pots form add; form is the platform's JSON.
 - gw_spans(span_id, trace_id, parent_id, name, start_at, end_at, status, error, attributes, links): what the gateway did, the last 7 days. One trace per wake: name wake (attributes reason, place, events, submission), its sends (name send, attributes send, to, result). pots trace shows them.
 Text search: LIKE, for example text LIKE '%invoice%'.`;
 
@@ -409,8 +410,9 @@ async function applyOne(tx: SqlExecutor, channel: string, eventId: string, h: Ha
     }
   }
 
-  // Own events never notify the bot. Deletes are only logged. Everything else waits for the waker's decision.
-  const wake = h.fromMe ? "self" : h.kind === "delete" ? "log" : null;
+  // Own events never notify the bot. Deletes are only logged, and so is a click that opened a form: its submission is
+  // the event that says something. Everything else waits for the waker's decision.
+  const wake = h.fromMe ? "self" : h.kind === "delete" || h.kind === "form_opened" ? "log" : null;
   const event = await tx.get<{ id: number }>(
     `INSERT INTO gw_events (channel, inbox_event, kind, at, place, thread, message, person, from_me, mentions_me, text, raw, wake)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,

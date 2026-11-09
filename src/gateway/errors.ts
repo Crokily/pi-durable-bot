@@ -41,6 +41,9 @@ export class BadName extends Data.TaggedError("BadName")<{ readonly message: str
 /** A routine that cannot be added as given: its schedule, what it does or its timeout. */
 export class BadRoutine extends Data.TaggedError("BadRoutine")<{ readonly message: string }> {}
 
+/** A form that cannot be stored as given: not a Slack modal view or a Discord modal's data. */
+export class BadForm extends Data.TaggedError("BadForm")<{ readonly message: string }> {}
+
 /** The bot is not ready to be woken yet. */
 export class NoWakeTarget extends Data.TaggedError("NoWakeTarget")<{ readonly message: string }> {}
 

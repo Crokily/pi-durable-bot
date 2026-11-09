@@ -1,5 +1,9 @@
+import { fileURLToPath } from "node:url";
 import type { Skill } from "@earendil-works/pi-coding-agent";
 import { piModule } from "./models.ts";
+
+/** The skills that come with Pots: skills/ of this package, next to src/ or dist/. */
+export const PACKAGE_SKILLS = fileURLToPath(new URL("../../skills", import.meta.url));
 
 type BuildSections = (input: {
   customPrompt: string;
@@ -12,6 +16,8 @@ type BuildSections = (input: {
  * pi's context files and skills, found and written the way the pi CLI does: AGENTS.md (or AGENTS.override.md, CLAUDE.md)
  * from pi's agent folder and from the working directory up to the root, and skills from ~/.pi/agent/skills,
  * ~/.agents/skills, the .pi/skills and .agents/skills folders, pi's settings and pi packages. Shared with the pi CLI.
+ * Then the skills that come with Pots (PACKAGE_SKILLS), for every bot: pi takes the first skill of a name, so a
+ * person's own skill of the same name is used instead, and pi's collision warning goes to the log.
  */
 export interface PiResources {
   /** Scan again; then projectContext() and skills() give what is on disk now. */
@@ -32,7 +38,15 @@ export async function openResources(cwd: string, log: (message: string, data?: R
   ]);
   // Only what a pi session puts in its system prompt; pi's extensions, prompt templates and themes are for its terminal.
   const settingsManager = SettingsManager.create(cwd, getAgentDir());
-  const loader = new Loader({ cwd, agentDir: getAgentDir(), settingsManager, noExtensions: true, noPromptTemplates: true, noThemes: true });
+  const loader = new Loader({
+    cwd,
+    agentDir: getAgentDir(),
+    settingsManager,
+    additionalSkillPaths: [PACKAGE_SKILLS],
+    noExtensions: true,
+    noPromptTemplates: true,
+    noThemes: true,
+  });
   let sections: Record<string, string> = {};
   let warnings = "";
   const load = async () => {

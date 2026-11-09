@@ -165,7 +165,44 @@ const routine = Command.make("routine").pipe(
   Command.withSubcommands([routineAdd, routineList, routineRemove]),
 );
 
-export const agentCommands = [send, react, call, wake, routine, context, turnPage, children] as const;
+const formAdd = Command.make(
+  "add",
+  {
+    name: Argument.String("name").pipe(Argument.withDescription('A short name: letters, digits, "-" and "_". A form with this name is replaced.')),
+    form: Argument.String("form").pipe(
+      Argument.withDescription('The form as JSON, or "-" to read it from standard input: a Slack view of type modal, or a Discord modal\'s data (title, components).'),
+    ),
+    bot,
+  },
+  (input) =>
+    Effect.gen(function* () {
+      const id = yield* resolveBot(input.bot);
+      const form = yield* Effect.try({ try: () => JSON.parse(textOrStdin(input.form)) as unknown, catch: () => userError("the form must be JSON") });
+      yield* printResult(yield* control(id, "POST", "/forms/add", { name: input.name, form }));
+    }),
+).pipe(Command.withDescription("Store a form. A button whose ID is form:<name> or form:<name>:<extra> opens it at once; the submission wakes the bot."));
+
+const formList = Command.make("list", { bot }, (input) =>
+  Effect.gen(function* () {
+    const id = yield* resolveBot(input.bot);
+    const result = (yield* control(id, "GET", "/forms")) as { text: string };
+    yield* printResult(result.text);
+  }),
+).pipe(Command.withDescription("List the stored forms."));
+
+const formRemove = Command.make("remove", { name: Argument.String("name"), bot }, (input) =>
+  Effect.gen(function* () {
+    const id = yield* resolveBot(input.bot);
+    yield* printResult(yield* control(id, "POST", "/forms/remove", { name: input.name }));
+  }),
+).pipe(Command.withDescription("Remove a form. A button for it then acts as any other button."));
+
+const form = Command.make("form").pipe(
+  Command.withDescription("Forms (Slack and Discord) that a button opens at once, in the platform's own format."),
+  Command.withSubcommands([formAdd, formList, formRemove]),
+);
+
+export const agentCommands = [send, react, call, wake, routine, form, context, turnPage, children] as const;
 
 function duration(text: string) {
   const match = /^(\d+(?:\.\d+)?)(s|m|h|d)$/.exec(text.trim());

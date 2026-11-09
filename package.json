@@ -25,7 +25,8 @@
   },
   "files": [
     "dist",
-    "docs/channels",
+    "skills",
+    "kit",
     "docs/for-agents.md",
     "README.md",
     "CHANGELOG.md",

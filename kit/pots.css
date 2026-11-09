@@ -1,0 +1,473 @@
+/*
+ * Pots page kit: a plain, readable look for pages that bots write. Phone first, light and dark. Plain HTML looks right
+ * without classes; the few classes are listed in the pages skill (skills/pages/SKILL.md).
+ */
+
+:root {
+  color-scheme: light dark;
+  --pots-bg: #f7f7f5;
+  --pots-surface: #ffffff;
+  --pots-text: #1d1d1f;
+  --pots-muted: #5f6368;
+  --pots-border: #dcdcd7;
+  --pots-accent: #1f7a70;
+  --pots-accent-text: #ffffff;
+  --pots-accent-soft: #e3f1ee;
+  --pots-good: #1e7d3a;
+  --pots-good-soft: #e5f4e9;
+  --pots-bad: #b3261e;
+  --pots-bad-soft: #fbe9e7;
+  --pots-warn-soft: #fff4d6;
+  --pots-code-bg: #efefeb;
+  --pots-radius: 10px;
+  --pots-font: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
+  --pots-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --pots-bg: #141516;
+    --pots-surface: #1d1f21;
+    --pots-text: #e8e8e6;
+    --pots-muted: #a2a6ab;
+    --pots-border: #34373a;
+    --pots-accent: #4fb3a5;
+    --pots-accent-text: #0c1a18;
+    --pots-accent-soft: #1b3330;
+    --pots-good: #6cc58a;
+    --pots-good-soft: #18301f;
+    --pots-bad: #f08a80;
+    --pots-bad-soft: #3a1f1c;
+    --pots-warn-soft: #3a3118;
+    --pots-code-bg: #26292c;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  padding: 16px;
+  background: var(--pots-bg);
+  color: var(--pots-text);
+  font: 17px/1.55 var(--pots-font);
+  overflow-wrap: break-word;
+}
+
+main,
+.pots-page {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding-bottom: 48px;
+}
+
+@media (min-width: 720px) {
+  body {
+    padding: 32px 24px;
+  }
+}
+
+/* ---- Text ---- */
+
+h1,
+h2,
+h3,
+h4 {
+  line-height: 1.25;
+  margin: 1.6em 0 0.5em;
+}
+h1 {
+  font-size: 1.7rem;
+  margin-top: 0.4em;
+}
+h2 {
+  font-size: 1.3rem;
+}
+h3 {
+  font-size: 1.1rem;
+}
+p,
+ul,
+ol,
+blockquote,
+pre,
+table,
+figure {
+  margin: 0 0 1em;
+}
+ul,
+ol {
+  padding-left: 1.4em;
+}
+li + li {
+  margin-top: 0.25em;
+}
+a {
+  color: var(--pots-accent);
+  text-underline-offset: 2px;
+}
+hr {
+  border: 0;
+  border-top: 1px solid var(--pots-border);
+  margin: 2em 0;
+}
+img,
+svg,
+video,
+canvas {
+  max-width: 100%;
+  height: auto;
+}
+blockquote {
+  margin-left: 0;
+  padding: 0.2em 0 0.2em 1em;
+  border-left: 3px solid var(--pots-border);
+  color: var(--pots-muted);
+}
+code,
+kbd,
+pre {
+  font-family: var(--pots-mono);
+  font-size: 0.9em;
+}
+code {
+  background: var(--pots-code-bg);
+  padding: 0.1em 0.35em;
+  border-radius: 5px;
+}
+pre {
+  background: var(--pots-code-bg);
+  padding: 12px 14px;
+  border-radius: var(--pots-radius);
+  overflow-x: auto;
+}
+pre code {
+  background: none;
+  padding: 0;
+}
+small,
+.pots-muted {
+  color: var(--pots-muted);
+}
+
+/* ---- Tables: they scroll sideways on a phone instead of squeezing ---- */
+
+table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.95em;
+}
+th,
+td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--pots-border);
+  text-align: left;
+  vertical-align: top;
+}
+th {
+  font-weight: 600;
+  white-space: nowrap;
+}
+td.pots-num,
+th.pots-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Blocks ---- */
+
+.pots-card {
+  background: var(--pots-surface);
+  border: 1px solid var(--pots-border);
+  border-radius: var(--pots-radius);
+  padding: 16px;
+  margin: 0 0 16px;
+}
+.pots-note {
+  background: var(--pots-accent-soft);
+  border-radius: var(--pots-radius);
+  padding: 12px 16px;
+  margin: 0 0 16px;
+}
+.pots-note.pots-warn {
+  background: var(--pots-warn-soft);
+}
+.pots-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.pots-row > * {
+  flex: 1 1 12rem;
+}
+.pots-badge {
+  display: inline-block;
+  padding: 0.1em 0.6em;
+  border-radius: 999px;
+  background: var(--pots-code-bg);
+  font-size: 0.85em;
+}
+.pots-badge.pots-good {
+  background: var(--pots-good-soft);
+  color: var(--pots-good);
+}
+.pots-badge.pots-bad {
+  background: var(--pots-bad-soft);
+  color: var(--pots-bad);
+}
+
+/* ---- Forms ---- */
+
+form[data-pots] [data-pots-question],
+fieldset {
+  background: var(--pots-surface);
+  border: 1px solid var(--pots-border);
+  border-radius: var(--pots-radius);
+  padding: 14px 16px 16px;
+  margin: 0 0 16px;
+  min-width: 0;
+}
+fieldset [data-pots-question],
+[data-pots-question] fieldset {
+  border: 0;
+  padding: 0;
+  background: none;
+}
+legend {
+  float: left;
+  width: 100%;
+  padding: 0;
+  margin: 0 0 10px;
+  font-weight: 600;
+}
+legend + * {
+  clear: both;
+}
+[data-pots-question] > h2:first-child,
+[data-pots-question] > h3:first-child,
+[data-pots-question] > h4:first-child {
+  margin-top: 0;
+}
+
+label {
+  display: block;
+  font-weight: 600;
+}
+label + label {
+  margin-top: 8px;
+}
+
+/* A choice: the whole row is the tap target. */
+label:has(> input[type="radio"]),
+label:has(> input[type="checkbox"]),
+.pots-choice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 10px 14px;
+  border: 1px solid var(--pots-border);
+  border-radius: var(--pots-radius);
+  background: var(--pots-bg);
+  font-weight: 400;
+  cursor: pointer;
+}
+label:has(> input[type="radio"]:checked),
+label:has(> input[type="checkbox"]:checked) {
+  border-color: var(--pots-accent);
+  background: var(--pots-accent-soft);
+}
+label:has(> input:focus-visible) {
+  outline: 2px solid var(--pots-accent);
+  outline-offset: 2px;
+}
+input[type="radio"],
+input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  flex: none;
+  accent-color: var(--pots-accent);
+}
+
+/* Approve or reject: two buttons side by side. */
+.pots-approve {
+  display: flex;
+  gap: 10px;
+  margin: 8px 0;
+}
+.pots-approve label {
+  flex: 1 1 0;
+  justify-content: center;
+  margin: 0;
+  font-weight: 600;
+}
+.pots-approve label:has(input[value="approve"]:checked) {
+  border-color: var(--pots-good);
+  background: var(--pots-good-soft);
+  color: var(--pots-good);
+}
+.pots-approve label:has(input[value="reject"]:checked) {
+  border-color: var(--pots-bad);
+  background: var(--pots-bad-soft);
+  color: var(--pots-bad);
+}
+
+input:not([type="radio"], [type="checkbox"], [type="submit"], [type="button"], [type="range"], [type="color"]),
+select,
+textarea {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 10px 12px;
+  /* 16px or more, so phones do not zoom in on the field. */
+  font: 400 17px/1.4 var(--pots-font);
+  color: var(--pots-text);
+  background: var(--pots-bg);
+  border: 1px solid var(--pots-border);
+  border-radius: 8px;
+}
+textarea {
+  min-height: 6em;
+  resize: vertical;
+}
+input:focus,
+select:focus,
+textarea:focus {
+  outline: 2px solid var(--pots-accent);
+  outline-offset: 1px;
+  border-color: var(--pots-accent);
+}
+
+/* A comment on a section: closed until someone wants to write one. */
+details.pots-comment {
+  margin-top: 10px;
+}
+details.pots-comment > summary {
+  display: inline-block;
+  cursor: pointer;
+  color: var(--pots-accent);
+  font-weight: 600;
+  padding: 6px 0;
+  list-style: none;
+}
+details.pots-comment > summary::-webkit-details-marker {
+  display: none;
+}
+details.pots-comment > summary::before {
+  content: "+ ";
+}
+details.pots-comment[open] > summary::before {
+  content: "− ";
+}
+
+button,
+input[type="submit"],
+input[type="button"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  padding: 10px 22px;
+  border: 1px solid transparent;
+  border-radius: var(--pots-radius);
+  background: var(--pots-accent);
+  color: var(--pots-accent-text);
+  font: 600 17px/1.2 var(--pots-font);
+  cursor: pointer;
+}
+form button[type="submit"],
+form button:not([type]),
+form input[type="submit"] {
+  width: 100%;
+  margin-top: 8px;
+}
+@media (min-width: 720px) {
+  form button[type="submit"],
+  form button:not([type]),
+  form input[type="submit"] {
+    width: auto;
+  }
+}
+button.pots-secondary {
+  background: transparent;
+  color: var(--pots-accent);
+  border-color: var(--pots-border);
+}
+button:disabled,
+input:disabled,
+select:disabled,
+textarea:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* What happened to the answers, written by pots.js. */
+[data-pots-status] {
+  margin: 12px 0 0;
+  font-weight: 600;
+}
+[data-pots-status]:empty {
+  display: none;
+}
+[data-pots-status][data-state="done"] {
+  color: var(--pots-good);
+}
+[data-pots-status][data-state="failed"] {
+  color: var(--pots-bad);
+}
+[data-pots-status][data-state="retrying"],
+[data-pots-status][data-state="sending"] {
+  color: var(--pots-muted);
+}
+form[data-pots-state="done"] [data-pots-question],
+form[data-pots-state="gone"] [data-pots-question] {
+  opacity: 0.75;
+}
+
+/* "This page has changed", from pots.js. */
+.pots-banner {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 16px;
+  padding: 10px 16px;
+  background: var(--pots-warn-soft);
+  border: 1px solid var(--pots-border);
+  border-radius: var(--pots-radius);
+}
+.pots-banner button {
+  min-height: 40px;
+  padding: 6px 16px;
+}
+
+[data-pots-error]::before {
+  content: "Could not load this part of the page.";
+  display: block;
+  color: var(--pots-bad);
+}
+
+@media print {
+  body {
+    background: none;
+  }
+  form button,
+  .pots-banner {
+    display: none;
+  }
+}

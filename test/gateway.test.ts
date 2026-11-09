@@ -1,4 +1,7 @@
+import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
@@ -20,8 +23,8 @@ async function until(check: () => boolean): Promise<void> {
   }
 }
 
-async function openGateway() {
-  const sql = await openDatabase(":memory:");
+async function openGateway(file = ":memory:") {
+  const sql = await openDatabase(file);
   const prints: string[] = [];
   const gateway = await Gateway.open(sql, {
     bot: "coworker",
@@ -133,6 +136,48 @@ describe("Gateway", () => {
     expect(await sql.all("SELECT address, text FROM gw_messages")).toEqual([{ address: "mem:#general/e1", text: "from before" }]);
     await gateway.stop();
     await sql.close();
+  });
+
+  it("keeps the forms and what each opened form is for across a restart", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pots-forms-"));
+    try {
+      const view = { type: "modal", title: { type: "plain_text", text: "Deploy" }, blocks: [] };
+      const modal = { title: "Ask", custom_id: "ask", components: [{ type: 18, label: "Question", component: { type: 4, custom_id: "q", style: 1 } }] };
+      const opening = { form: "deploy", extra: "prod", place: "mem:#general", message: "mem:#general/m1", person: "mem:@alice", data: { private_metadata: "theirs" } };
+      const first = await openGateway(join(dir, "bot.sqlite"));
+      const channel = new MemoryChannel();
+      await first.gateway.start(target, [channel]);
+      expect(await first.gateway.forms.add("deploy", { ...view, blocks: [{ type: "divider" }] })).toMatchObject({ replaced: false, form: { name: "deploy" } });
+      expect(await first.gateway.forms.add("deploy", view)).toMatchObject({ replaced: true });
+      expect(await first.gateway.forms.add("ask", modal)).toMatchObject({ replaced: false, form: { name: "ask", form: modal } });
+      await expect(first.gateway.forms.add("bad name", view)).rejects.toThrow('bad form name "bad name"');
+      // The gateway keeps a form as it is: the adapter whose button opens it checks it.
+      expect(await first.gateway.forms.add("blocks", { blocks: [] })).toMatchObject({ replaced: false });
+      await expect(first.gateway.forms.add("list", [view])).rejects.toThrow("a form is a JSON object");
+      await channel.sink!.formOpened("opening-1", opening);
+      await first.gateway.stop();
+      await first.sql.close();
+
+      const second = await openGateway(join(dir, "bot.sqlite"));
+      const again = new MemoryChannel();
+      await second.gateway.start(target, [again]);
+      expect((await second.gateway.forms.list()).map((form) => [form.name, form.form])).toEqual([
+        ["ask", modal],
+        ["blocks", { blocks: [] }],
+        ["deploy", view],
+      ]);
+      expect(await again.sink!.form("deploy")).toEqual(view);
+      expect(await again.sink!.form("nope")).toBeUndefined();
+      expect(await again.sink!.formOpening("opening-1")).toEqual(opening);
+      expect(await again.sink!.formOpening("opening-2")).toBeUndefined();
+      expect(await second.gateway.forms.remove("deploy")).toBe(true);
+      expect(await second.gateway.forms.remove("deploy")).toBe(false);
+      expect(await again.sink!.form("deploy")).toBeUndefined();
+      await second.gateway.stop();
+      await second.sql.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("rejects with the messages the agent knows", async () => {

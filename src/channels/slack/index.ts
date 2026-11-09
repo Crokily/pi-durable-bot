@@ -12,12 +12,14 @@ import type {
   ChannelEnv,
   ChannelSink,
   FileInfo,
+  FormOpening,
   Happening,
   PersonInfo,
   PlaceInfo,
   SentMessage,
 } from "../../core/channel.ts";
 import { expandHome, readSecrets } from "../../core/env-file.ts";
+import { noForm, parseFormId } from "../../core/forms.ts";
 import { GatewaySlackAdapter, SEND_EVENT_TYPE } from "./sdk.ts";
 
 // Addresses (only this file parses them):
@@ -25,12 +27,41 @@ import { GatewaySlackAdapter, SEND_EVENT_TYPE } from "./sdk.ts";
 //   message  <id>:#<channel ID>/<ts>          slack:#C0123/1793080260.811919  (a thread is its first message)
 //   person   <id>:@<user ID>                  slack:@U0123
 
-/** What the inbox stores for this channel. */
+/**
+ * What the inbox stores for this channel. An interaction has the time it came (at; older stored ones have none). A
+ * click on a form: button has what became of the form: opened (with the opening's ID) or missing (why). A form's
+ * submission or close has the opening it belongs to, read when it came. form-failed: a form that Slack did not open.
+ */
 type Raw =
   | { source: "socket"; envelope: { event_id?: string; event_time?: number; event?: SlackRawEvent } }
-  | { source: "socket"; type: "interactive" | "slash_commands"; body: Record<string, any> }
+  | { source: "socket"; type: "interactive" | "slash_commands"; body: Record<string, any>; at?: number; form?: FormClick; opening?: FormOpening }
   | { source: "history"; channel: string; message: SlackMessage }
-  | { source: "sent"; channel: string; message: SlackMessage };
+  | { source: "sent"; channel: string; message: SlackMessage }
+  | { source: "form-failed"; at: number; body: Record<string, any>; form: FormClick; error: string };
+
+/** A stored interaction or slash command. */
+type Interaction = Extract<Raw, { source: "socket"; body: unknown }>;
+
+/** A click on a button whose action_id is form:<name> or form:<name>:<extra>, and what became of the form. */
+interface FormClick {
+  name: string;
+  extra?: string;
+  action_id: string;
+  /** The opening's ID, also in the view's private_metadata. */
+  opened?: string;
+  /** Why no form opened. */
+  missing?: string;
+}
+
+/** What an opening keeps for Slack: the button, and the view's own private_metadata, which the opening's ID took the place of. */
+interface OpeningData {
+  action_id?: string;
+  label?: string;
+  private_metadata?: string;
+}
+
+/** The private_metadata of a view this channel opened from a stored form. */
+const OPENING_PREFIX = "pots-form:";
 
 type SlackMessage = SlackEvent & {
   subtype?: string;
@@ -117,7 +148,11 @@ class SlackChannel implements ChannelAdapter {
         return;
       }
       const id = stored.trigger_id ?? createHash("sha256").update(JSON.stringify(stored)).digest("hex").slice(0, 32);
-      await sink.receive(`${type}:${id}`, { source: "socket", type: type as "interactive" | "slash_commands", body: stored } satisfies Raw);
+      const raw: Raw = { source: "socket", type: type as "interactive" | "slash_commands", body: stored, at: Date.now() };
+      const open = type === "interactive" ? await this.#prepareForm(sink, raw) : undefined;
+      await sink.receive(`${type}:${id}`, raw);
+      // Slack takes a form only within 3 seconds of the click, so it opens now, while the click is acked.
+      open?.();
     };
     sdk.onSocketError = (error) => sink.log("event not stored, Slack will deliver it again", { error: String(error) });
     // Chat holds the adapter and its in-memory state, and the adapter keeps it. No handlers: the SDK only translates.
@@ -131,6 +166,68 @@ class SlackChannel implements ChannelAdapter {
 
   async stop(): Promise<void> {
     await this.#sdk?.disconnect().catch(() => {});
+  }
+
+  // ---- Forms ----
+
+  /**
+   * Before an interaction is stored. A click on a form: button: when the form is stored, keep its opening under an ID
+   * made from the click's trigger_id (so a click Slack delivers again has the same one), and return what opens it; the
+   * view's private_metadata becomes that ID. A form's submission or close: the opening it belongs to.
+   */
+  async #prepareForm(sink: ChannelSink, raw: Interaction): Promise<(() => void) | undefined> {
+    const body = raw.body;
+    if (body.type === "view_submission" || body.type === "view_closed") {
+      const metadata = body.view?.private_metadata;
+      if (typeof metadata === "string" && metadata.startsWith(OPENING_PREFIX)) {
+        const opening = await sink.formOpening(metadata.slice(OPENING_PREFIX.length));
+        if (opening) raw.opening = opening;
+      }
+      return undefined;
+    }
+    if (body.type !== "block_actions") return undefined;
+    const action = (body.actions as Record<string, any>[] | undefined)?.find((each) => parseFormId(each.action_id));
+    const parsed = action && parseFormId(action.action_id);
+    if (!action || !parsed) return undefined;
+    const click: FormClick = { name: parsed.name, ...(parsed.extra !== undefined ? { extra: parsed.extra } : {}), action_id: action.action_id };
+    raw.form = click;
+    const view = await sink.form(parsed.name);
+    const mismatch =
+      view === undefined ? noForm(parsed.name) : view.type !== "modal" ? `the form ${parsed.name} is not a Slack view of type modal` : undefined;
+    if (mismatch || typeof body.trigger_id !== "string") {
+      click.missing = mismatch ?? "Slack gave no trigger_id with the click";
+      return undefined;
+    }
+    const { private_metadata: own, ...rest } = view as Record<string, unknown>;
+    const id = createHash("sha256").update(`${this.id}:${body.trigger_id}`).digest("base64url").slice(0, 24);
+    click.opened = id;
+    const where = this.#whereOf(body);
+    const data: OpeningData = { action_id: action.action_id, ...(action.text?.text !== undefined ? { label: action.text.text } : {}), ...(typeof own === "string" ? { private_metadata: own } : {}) };
+    await sink.formOpened(id, {
+      form: parsed.name,
+      ...(parsed.extra !== undefined ? { extra: parsed.extra } : {}),
+      ...where,
+      ...(body.user?.id ? { person: this.person(body.user.id) } : {}),
+      data,
+    });
+    return () => {
+      const opened = this.#client.apiCall("views.open", { trigger_id: body.trigger_id, view: { ...rest, private_metadata: `${OPENING_PREFIX}${id}` } });
+      void opened.catch(async (error: unknown) => {
+        const text = slackError(error).message;
+        sink.log("form not opened", { form: parsed.name, error: text });
+        const failed: Raw = { source: "form-failed", at: Date.now(), body, form: click, error: text };
+        await sink.receive(`form-failed:${id}`, failed).catch((stored: unknown) => sink.log("form failure not stored", { form: parsed.name, error: String(stored) }));
+      });
+    };
+  }
+
+  /** The place, thread and message of a click on a message. */
+  #whereOf(body: Record<string, any>): { place?: Address; thread?: Address; message?: Address } {
+    const channel: string | undefined = body.channel?.id ?? body.container?.channel_id ?? body.channel_id;
+    if (!channel) return {};
+    const ts: string | undefined = body.message?.ts ?? body.container?.message_ts;
+    const threadTs: string | undefined = body.message?.thread_ts ?? body.container?.thread_ts;
+    return { place: this.place(channel), ...(threadTs ? { thread: this.message(channel, threadTs) } : {}), ...(ts ? { message: this.message(channel, ts) } : {}) };
   }
 
   owns(address: Address): boolean {
@@ -173,7 +270,11 @@ class SlackChannel implements ChannelAdapter {
     if (raw.source === "history" || raw.source === "sent") {
       return [await this.#messageHappening({ ...raw.message, channel: raw.channel })];
     }
-    if ("body" in raw) return [await this.#interaction(raw.type, raw.body)];
+    if (raw.source === "form-failed") return [await this.#formFailed(raw)];
+    // The options of an external select come at every keystroke, and Slack wants them in the ack, which the bot cannot
+    // give. Not an event.
+    if ("body" in raw && raw.body.type === "block_suggestion") return [];
+    if ("body" in raw) return [await this.#interaction(raw)];
     const event = raw.envelope.event;
     if (!event) return [];
     // An event without a time of its own (member_joined_channel) has the time Slack sent it, on the envelope.
@@ -327,22 +428,158 @@ class SlackChannel implements ChannelAdapter {
     };
   }
 
-  /** A slash command or an interaction (a button, a shortcut): someone used the app. */
-  async #interaction(type: "interactive" | "slash_commands", body: Record<string, any>): Promise<Happening> {
-    const channel: string | undefined = body.channel?.id ?? body.channel_id;
+  /**
+   * A slash command or an interaction: someone used the app. A button or a menu (block_actions) says which, with its
+   * label and value; a click that opened a stored form is only logged (form_opened), as its submission says more. A form's
+   * submission (view_submission) is a "form" event with the values, in the place and on the message of the button that
+   * opened it.
+   */
+  async #interaction(raw: Interaction): Promise<Happening> {
+    const { type, body } = raw;
+    const at = raw.at ?? Date.now();
     const user: string | undefined = body.user?.id ?? body.user_id;
-    const message: string | undefined = body.message?.ts ?? body.container?.message_ts;
-    const text = type === "slash_commands" ? `${body.command ?? ""} ${body.text ?? ""}`.trim() : (body.type as string | undefined);
+    const person = user ? { person: await this.#personInfo(user) } : {};
+    if (type === "slash_commands") {
+      const channel: string | undefined = body.channel_id;
+      return {
+        kind: "command",
+        at,
+        ...(channel ? { place: await this.#placeInfo(channel) } : {}),
+        ...person,
+        fromMe: false,
+        text: `${body.command ?? ""} ${body.text ?? ""}`.trim(),
+        raw: body,
+      };
+    }
+    if (body.type === "view_submission" || body.type === "view_closed") {
+      const opening = raw.opening;
+      const where = opening ? await this.#openingPlace(opening) : {};
+      return {
+        kind: body.type === "view_submission" ? "form" : "interaction",
+        at,
+        ...where,
+        ...person,
+        fromMe: false,
+        text: this.#viewText(body, opening),
+        raw: { ...body, ...(opening ? { pots_form: opening } : {}) },
+      };
+    }
+    const where = this.#whereOf(body);
+    const place = where.place ? { place: await this.#placeInfo(this.#channelOf(where.place)) } : {};
+    const actions = ((body.actions as Record<string, any>[] | undefined) ?? []).map((action) => this.#actionText(action));
+    const form = raw.form;
+    let text = actions.length ? actions.join("; ") : [body.type, body.callback_id].filter(Boolean).join(" ");
+    if (form?.opened) text = `opened form ${form.name} for them: ${text}`;
+    else if (form?.missing) text = `${text}, and no form opened: ${form.missing}`;
     return {
-      kind: type === "slash_commands" ? "command" : "interaction",
-      at: Date.now(),
-      ...(channel ? { place: await this.#placeInfo(channel) } : {}),
-      ...(channel && message ? { message: this.message(channel, message) } : {}),
-      ...(user ? { person: await this.#personInfo(user) } : {}),
+      kind: form?.opened ? "form_opened" : "interaction",
+      at,
+      ...place,
+      ...(where.thread ? { thread: where.thread } : {}),
+      ...(where.message ? { message: where.message } : {}),
+      ...person,
       fromMe: false,
-      ...(text ? { text } : {}),
+      text,
       raw: body,
     };
+  }
+
+  /** A form that Slack did not open, with Slack's answer: a "form" event, so it reaches the bot at once. */
+  async #formFailed(raw: Extract<Raw, { source: "form-failed" }>): Promise<Happening> {
+    const where = this.#whereOf(raw.body);
+    const user: string | undefined = raw.body.user?.id;
+    const action = ((raw.body.actions as Record<string, any>[] | undefined) ?? []).find((each) => each.action_id === raw.form.action_id);
+    return {
+      kind: "form",
+      at: raw.at,
+      ...(where.place ? { place: await this.#placeInfo(this.#channelOf(where.place)) } : {}),
+      ...(where.thread ? { thread: where.thread } : {}),
+      ...(where.message ? { message: where.message } : {}),
+      ...(user ? { person: await this.#personInfo(user) } : {}),
+      fromMe: false,
+      text: `the form ${raw.form.name} did not open after they ${action ? this.#actionText(action) : `clicked ${raw.form.action_id}`}. Slack said: ${raw.error}`,
+      raw: { ...raw.body, pots_form_error: raw.error },
+    };
+  }
+
+  /** The place, thread and message of the button that opened a form. */
+  async #openingPlace(opening: FormOpening): Promise<Partial<Pick<Happening, "place" | "thread" | "message">>> {
+    const ours = (address: Address | undefined) => (address && this.owns(address) ? address : undefined);
+    const place = ours(opening.place);
+    return {
+      ...(place ? { place: await this.#placeInfo(this.#channelOf(place)) } : {}),
+      ...(ours(opening.thread) ? { thread: opening.thread! } : {}),
+      ...(ours(opening.message) ? { message: opening.message! } : {}),
+    };
+  }
+
+  #channelOf(place: Address): string {
+    const parsed = this.#parse(place);
+    if (!("channel" in parsed)) throw new Error(`not a place: ${place}`);
+    return parsed.channel;
+  }
+
+  /** A button or a menu as words: what was clicked or chosen, with its action_id. */
+  #actionText(action: Record<string, any>): string {
+    if (action.type === "button") {
+      const label = action.text?.text;
+      return `clicked button${label !== undefined ? ` "${label}"` : ""} (action_id ${action.action_id}${action.value !== undefined ? `, value ${action.value}` : ""})`;
+    }
+    return `chose in ${action.type ?? "an element"} ${action.action_id}: ${this.#valueText(action)}`;
+  }
+
+  /**
+   * What a form's submission holds, one field a line (its action_id, with its block_id when two blocks share it, and
+   * the input's label), or that it was closed.
+   */
+  #viewText(body: Record<string, any>, opening: FormOpening | undefined): string {
+    const view = body.view ?? {};
+    const data = (opening?.data ?? {}) as OpeningData;
+    const about = opening
+      ? `form ${opening.form} (${[data.label !== undefined ? `button "${data.label}"` : undefined, data.action_id ? `action_id ${data.action_id}` : undefined, opening.extra !== undefined ? `extra: ${opening.extra}` : undefined]
+          .filter(Boolean)
+          .join(", ")})`
+      : `a form${view.callback_id ? ` with callback_id ${view.callback_id}` : ""} (view ${view.id ?? "?"})`;
+    const lines = [body.type === "view_closed" ? `closed ${about} without submitting it` : `submitted ${about}`];
+    if (body.type === "view_submission") {
+      const labels = new Map<string, string>();
+      for (const block of (view.blocks as Record<string, any>[] | undefined) ?? []) {
+        if (block.block_id && block.label?.text !== undefined) labels.set(block.block_id, block.label.text);
+      }
+      const values = (view.state?.values ?? {}) as Record<string, Record<string, Record<string, any>>>;
+      const uses = new Map<string, number>();
+      for (const actions of Object.values(values)) for (const actionId of Object.keys(actions)) uses.set(actionId, (uses.get(actionId) ?? 0) + 1);
+      for (const [blockId, actions] of Object.entries(values)) {
+        for (const [actionId, value] of Object.entries(actions)) {
+          const id = (uses.get(actionId) ?? 0) > 1 ? `${blockId}.${actionId}` : actionId;
+          const label = labels.get(blockId);
+          lines.push(`${id}${label !== undefined ? ` ("${label}")` : ""}: ${this.#valueText(value).replace(/\r?\n/g, "\n  ")}`);
+        }
+      }
+    }
+    const metadata = opening ? data.private_metadata : view.private_metadata;
+    if (metadata) lines.push(`private_metadata: ${metadata}`);
+    return lines.join("\n");
+  }
+
+  /** What a Slack input or menu holds, as text: a value, chosen options with their labels, people, places, a date. */
+  #valueText(value: Record<string, any>): string {
+    const none = "(none)";
+    const list = (items: string[] | null | undefined, each: (item: string) => string) => (items ?? []).map(each).join(", ") || none;
+    if (value.selected_option !== undefined) return optionText(value.selected_option);
+    if (value.selected_options !== undefined) return (value.selected_options ?? []).map(optionText).join(", ") || none;
+    if (value.selected_user !== undefined) return value.selected_user ? this.person(value.selected_user) : none;
+    if (value.selected_users !== undefined) return list(value.selected_users, (user) => this.person(user));
+    for (const key of ["selected_conversation", "selected_channel"]) if (value[key] !== undefined) return value[key] ? this.place(value[key]) : none;
+    for (const key of ["selected_conversations", "selected_channels"]) if (value[key] !== undefined) return list(value[key], (channel) => this.place(channel));
+    if (value.selected_date_time !== undefined) return value.selected_date_time ? new Date(value.selected_date_time * 1000).toISOString() : none;
+    if (value.selected_date !== undefined) return value.selected_date ?? none;
+    if (value.selected_time !== undefined) return value.selected_time ? `${value.selected_time}${value.timezone ? ` (${value.timezone})` : ""}` : none;
+    if (value.rich_text_value !== undefined) return richText(value.rich_text_value) || "(empty)";
+    if (value.files !== undefined) return ((value.files as { name?: string; id?: string }[] | null) ?? []).map((file) => file.name ?? file.id ?? "?").join(", ") || none;
+    if ("value" in value) return value.value === null || value.value === undefined || value.value === "" ? "(empty)" : String(value.value);
+    const { type: _type, action_id: _action, block_id: _block, action_ts: _ts, ...rest } = value;
+    return JSON.stringify(rest);
   }
 
   #mentions(message: SlackMessage): Address[] {
@@ -467,7 +704,11 @@ class SlackChannel implements ChannelAdapter {
   }
 
   /** Post the text as Markdown. A text over Slack's limit is refused, never cut. */
-  async send(to: Address, text: string, sendId: string): Promise<SentMessage> {
+  send(to: Address, text: string, sendId: string): Promise<SentMessage> {
+    return explained(this.#send(to, text, sendId));
+  }
+
+  async #send(to: Address, text: string, sendId: string): Promise<SentMessage> {
     const markdown = this.#outgoing(text);
     const refused = refusal(markdown);
     if (refused) throw new Error(refused);
@@ -521,7 +762,11 @@ class SlackChannel implements ChannelAdapter {
       .replace(new RegExp(`<${prefix}:#([A-Z0-9]+)>`, "g"), "<#$1>");
   }
 
-  async react(message: Address, emoji: string, remove: boolean): Promise<void> {
+  react(message: Address, emoji: string, remove: boolean): Promise<void> {
+    return explained(this.#react(message, emoji, remove));
+  }
+
+  async #react(message: Address, emoji: string, remove: boolean): Promise<void> {
     const parsed = this.#parse(message);
     if (!("channel" in parsed) || !parsed.ts) throw new Error(`not a message address: ${message}`);
     const name = reactionName(emoji);
@@ -559,7 +804,11 @@ class SlackChannel implements ChannelAdapter {
    * Any Slack Web API method with the bot token, for example chat.update or files.uploadV2.
    * Methods the Slack SDK implements as helpers (files.uploadV2) run through the helper; a "file" given as a path is read.
    */
-  async call(method: string, params: Record<string, unknown>): Promise<unknown> {
+  call(method: string, params: Record<string, unknown>): Promise<unknown> {
+    return explained(this.#call(method, params));
+  }
+
+  async #call(method: string, params: Record<string, unknown>): Promise<unknown> {
     const client = this.#client;
     const parts = method.split(".");
     let owner: any = client;
@@ -575,6 +824,61 @@ class SlackChannel implements ChannelAdapter {
     if (typeof helper === "function") return helper.call(owner, args);
     return client.apiCall(method, args);
   }
+}
+
+/**
+ * A Slack error with what Slack answered: for a refused call, its error code and its details, such as which block of a
+ * message is wrong (response_metadata.messages) or which scope is missing. Slack's answer holds no token.
+ */
+function slackError(error: unknown): Error {
+  const data = (error as { data?: unknown } | undefined)?.data;
+  if (!(error instanceof Error) || !data || typeof data !== "object") return error instanceof Error ? error : new Error(String(error));
+  const { ok: _ok, ...answer } = data as Record<string, unknown>;
+  // The Slack SDK adds an empty response_metadata when Slack sent none.
+  if (answer.response_metadata && typeof answer.response_metadata === "object" && Object.keys(answer.response_metadata).length === 0) delete answer.response_metadata;
+  return new Error(`${error.message}. Slack's answer: ${JSON.stringify(answer)}`, { cause: error });
+}
+
+/** The work's result, or its failure with what Slack answered. */
+async function explained<T>(work: Promise<T>): Promise<T> {
+  try {
+    return await work;
+  } catch (error) {
+    throw slackError(error);
+  }
+}
+
+/** A chosen option as text: its label and its value. */
+function optionText(option: { text?: { text?: string }; value?: string } | null | undefined): string {
+  if (!option) return "(none)";
+  const label = option.text?.text;
+  return label !== undefined ? `"${label}" (value ${option.value ?? ""})` : `value ${option.value ?? ""}`;
+}
+
+/** The text of a rich text input's value: its words, a line for each section, mentions and links as Slack names them. */
+function richText(value: unknown): string {
+  const lines: string[] = [];
+  let line = "";
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) return node.forEach(walk);
+    if (!node || typeof node !== "object") return;
+    const item = node as Record<string, any>;
+    if (typeof item.text === "string" && (item.type === "text" || item.type === "link")) line += item.text;
+    else if (item.type === "link" && typeof item.url === "string") line += item.url;
+    else if (item.type === "user" && item.user_id) line += `<@${item.user_id}>`;
+    else if (item.type === "channel" && item.channel_id) line += `<#${item.channel_id}>`;
+    else if (item.type === "emoji" && item.name) line += `:${item.name}:`;
+    if (Array.isArray(item.elements)) {
+      walk(item.elements);
+      if (item.type !== "rich_text") {
+        lines.push(line);
+        line = "";
+      }
+    }
+  };
+  walk(value);
+  if (line) lines.push(line);
+  return lines.filter((each) => each !== "").join("\n");
 }
 
 function authorOf(message: SlackMessage): string | undefined {

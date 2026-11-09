@@ -62,7 +62,8 @@ describe("pots", { timeout: 120_000 }, () => {
     expect(lines[0]).toBe(`home: ${gateway.home}`);
     expect(lines[1]).toMatch(/^gateway: running \(process \d+\)$/);
     expect(lines[2]).toMatch(/^service: /);
-    expect(lines.slice(3)).toEqual(["coworker: Coworker, fake/coworker, idle, channels test, terminal"]);
+    expect(lines[3]).toMatch(/^pages: port \d+, no public address yet \(quick-tunnel: it starts at the first pots page link\)$/);
+    expect(lines.slice(4)).toEqual(["coworker: Coworker, fake/coworker, idle, channels test, terminal"]);
     expect(await pots("bot", "list")).toBe("coworker\tCoworker\tfake/coworker\tidle\n");
   });
 
@@ -138,6 +139,8 @@ describe("pots", { timeout: 120_000 }, () => {
       [fromFlag.id, "other"],
     ]);
     expect(await fails("wake", "--from", "two words")).toBe('ERROR\n  bad --from "two words": use letters, digits, "-" and "_", at most 64 characters');
+    // Only the page server's wakes may say that an answer came from a page.
+    expect(await fails("wake", "--from", "pages")).toContain("--from pages is kept for the answers that come from your pages");
     for (const item of list) await pots("wake", "--cancel", String(item.id));
   });
 
@@ -187,6 +190,28 @@ describe("pots", { timeout: 120_000 }, () => {
     expect(await pots("routine", "remove", "backup")).toBe("Removed routine backup.\n");
     expect(await pots("routine", "remove", "standup")).toBe("Removed routine standup.\n");
     expect(plain(await pots("routine", "list"))).toBe(`No routines added.\n${fallback}`);
+  });
+
+  it("stores, lists, replaces and removes forms as the bot gives them", async () => {
+    const plain = (text: string) => text.replace(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \w+ \([^)]*\)/g, "<time>");
+    const view = { type: "modal", title: { type: "plain_text", text: "Deploy" }, blocks: [{ type: "input", label: { type: "plain_text", text: "Why" }, element: { type: "plain_text_input", action_id: "why" } }] };
+    const modal = { title: "Ask", custom_id: "ask", components: [{ type: 18, label: "Question", component: { type: 4, custom_id: "q", style: 1 } }] };
+    expect(await pots("form", "list")).toBe("No forms stored.\n");
+    expect(await pots("form", "add", "deploy", JSON.stringify(view))).toBe("Added form deploy. A button with the ID form:deploy or form:deploy:<extra> opens it.\n");
+    const piped = await gateway.run(["form", "add", "ask", "-"], { input: JSON.stringify(modal) });
+    expect(piped).toMatchObject({ status: 0, stdout: "Added form ask. A button with the ID form:ask or form:ask:<extra> opens it.\n" });
+    expect(await pots("form", "add", "deploy", JSON.stringify(view))).toMatch(/^Replaced form deploy\. /);
+    expect(plain(await pots("form", "list"))).toBe("ask: updated <time>\ndeploy: updated <time>\n");
+
+    expect(await fails("form", "add", "x", "{not json")).toBe("ERROR\n  the form must be JSON");
+    expect(await fails("form", "add", "x", "[1, 2]")).toBe(
+      "ERROR\n  a form is a JSON object, in the platform's own format (the channel's skill says which)",
+    );
+    expect(await fails("form", "add", "a:b", JSON.stringify(view))).toBe('ERROR\n  bad form name "a:b": use letters, digits, "-" and "_", at most 64 characters');
+    expect(await fails("form", "remove", "nope")).toBe('ERROR\n  there is no form "nope"');
+    expect(await pots("form", "remove", "deploy")).toBe("Removed form deploy.\n");
+    expect(await pots("form", "remove", "ask")).toBe("Removed form ask.\n");
+    expect(await pots("form", "list")).toBe("No forms stored.\n");
   });
 
   it("shows the context and turns the page", async () => {

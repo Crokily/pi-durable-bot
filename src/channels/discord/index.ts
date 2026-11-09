@@ -7,7 +7,7 @@ import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { setTimeout as sleep } from "node:timers/promises";
 import { DiscordFormatConverter } from "@chat-adapter/discord";
 import { convertEmojiPlaceholders, defaultEmojiResolver } from "chat";
-import { Client, DiscordAPIError, Events, GatewayIntentBits, MessageType, type REST, type RequestMethod } from "discord.js";
+import { Client, DiscordAPIError, Events, GatewayIntentBits, HTTPError, MessageType, type REST, type RequestMethod } from "discord.js";
 import type {
   Address,
   ChannelAdapter,
@@ -21,6 +21,7 @@ import type {
   SentMessage,
 } from "../../core/channel.ts";
 import { expandHome, readSecrets } from "../../core/env-file.ts";
+import { noForm, parseFormId } from "../../core/forms.ts";
 
 // Addresses (only this file parses them):
 //   place               <id>:#<channel ID>                              discord:#1100  (a server channel or a DM)
@@ -36,12 +37,27 @@ import { expandHome, readSecrets } from "../../core/env-file.ts";
 /**
  * What the inbox stores for this channel. `at` is when the gateway event came, for events that carry no time. `parent`
  * is set when the event's channel is a thread: the channel the thread is in, known when the event came, so the event
- * gets the same addresses also when the thread cannot be looked up later.
+ * gets the same addresses also when the thread cannot be looked up later. A click on a form: button has what became of
+ * the form (`form`). form-failed: a form that Discord did not open, with its answer.
  */
 type Raw =
-  | { source: "gateway"; at: number; t: string; d: any; parent?: string }
+  | { source: "gateway"; at: number; t: string; d: any; parent?: string; form?: FormClick }
   | { source: "history"; message: ApiMessage; parent?: string }
-  | { source: "sent"; sendId: string; message: ApiMessage; parent?: string };
+  | { source: "sent"; sendId: string; message: ApiMessage; parent?: string }
+  | { source: "form-failed"; at: number; d: any; parent?: string; form: FormClick; error: string };
+
+/**
+ * A click on a component whose custom_id is form:<name> or form:<name>:<extra>, and what became of the form: the form
+ * to open (its data, with the click's custom_id as its own, so the submission carries it back), or why none opens.
+ */
+interface FormClick {
+  name: string;
+  extra?: string;
+  /** Only until the click is answered; not stored. */
+  modal?: Record<string, unknown>;
+  opened?: boolean;
+  missing?: string;
+}
 
 /** An address taken apart: a place (channel), a message in it or in one of its threads, or a person. */
 type Parsed = { channel: string; thread?: string; message?: string } | { user: string };
@@ -322,7 +338,8 @@ export class DiscordChannel implements ChannelAdapter {
       const eventId = t === "MESSAGE_UPDATE" && d.edited_timestamp ? `${t}:${d.id}:${d.edited_timestamp}` : `${t}:${this.#session}:${packet.s}`;
       const parent = this.#parentOf(d.channel_id);
       const raw: Raw = { source: "gateway", at: Date.now(), t, d, ...(parent ? { parent } : {}) };
-      this.#store(sink, eventId, raw, t === "INTERACTION_CREATE" ? () => void this.#acknowledge(sink, d) : undefined);
+      if (t !== "INTERACTION_CREATE") return this.#store(sink, eventId, raw);
+      this.#store(sink, eventId, raw, () => void this.#acknowledge(sink, raw), () => this.#prepareForm(sink, raw));
     } catch (error) {
       sink.log("gateway event not handled", { type: t, error: String(error) });
     }
@@ -331,14 +348,15 @@ export class DiscordChannel implements ChannelAdapter {
   /**
    * Store an event after the ones before it. Discord does not send an event again, so one that fails is tried again,
    * later each time, until it is stored; once the channel stops, only once more. The events after it wait, so the order
-   * stays.
+   * stays. prepare runs first, in turn, and may add to the raw event; a failure there is logged and the event stored.
    */
-  #store(sink: ChannelSink, eventId: string, raw: Raw, then?: () => void): void {
+  #store(sink: ChannelSink, eventId: string, raw: Raw, then?: () => void, prepare?: () => Promise<void>): void {
     const { signal } = this.#running;
     this.#storing = this.#storing.then(async () => {
+      await prepare?.().catch((error: unknown) => sink.log("interaction not prepared", { event: eventId, error: String(error) }));
       for (let attempt = 1; ; attempt++) {
         try {
-          await sink.receive(eventId, raw);
+          await sink.receive(eventId, stored(raw));
           then?.();
           return;
         } catch (error) {
@@ -361,17 +379,57 @@ export class DiscordChannel implements ChannelAdapter {
   }
 
   /**
-   * Discord shows the person an error unless an interaction is answered within 3 seconds, so once it is stored it is
-   * answered with "later": a command shows that the bot is thinking, a button shows nothing. The bot answers it with
-   * call, as docs/channels/discord.md says.
+   * Before a click is stored: when its custom_id is form:<name> or form:<name>:<extra> and the stored form is a
+   * Discord modal's data (a title and components, no type), the modal to open, with the click's custom_id as its own, so its submission says which form and
+   * extra it is, and comes with the message of the button.
    */
-  async #acknowledge(sink: ChannelSink, interaction: { id: string; token: string; type: number; message?: unknown }): Promise<void> {
+  async #prepareForm(sink: ChannelSink, raw: Extract<Raw, { source: "gateway" }>): Promise<void> {
+    const d = raw.d;
+    if (d.type !== 3) return;
+    const parsed = parseFormId(d.data?.custom_id);
+    if (!parsed) return;
+    const form = await sink.form(parsed.name);
+    const mismatch =
+      form === undefined
+        ? noForm(parsed.name)
+        : form.type !== undefined || form.title === undefined || !Array.isArray(form.components)
+          ? `the form ${parsed.name} is not a Discord modal's data (a title and components)`
+          : undefined;
+    raw.form = {
+      name: parsed.name,
+      ...(parsed.extra !== undefined ? { extra: parsed.extra } : {}),
+      ...(mismatch ? { missing: mismatch } : { opened: true, modal: { ...(form as Record<string, unknown>), custom_id: d.data.custom_id } }),
+    };
+  }
+
+  /**
+   * Discord shows the person an error unless an interaction is answered within 3 seconds, and takes one first answer
+   * only. Once it is stored: a click on a form: button whose form is stored gets the form (a modal); anything else gets
+   * "later": a command shows that the bot is thinking, a button shows nothing. The bot answers a command with call, as
+   * the discord-channel skill says. A modal that Discord refuses is told to the bot with Discord's answer, and the click
+   * gets "later" instead, so the person sees no error.
+   */
+  async #acknowledge(sink: ChannelSink, raw: Extract<Raw, { source: "gateway" }>): Promise<void> {
+    const interaction = raw.d as { id: string; token: string; type: number; message?: unknown };
+    const answer = (body: unknown) => this.#rest.post(`/interactions/${interaction.id}/${interaction.token}/callback`, { body, auth: false });
+    if (!this.#client) return;
+    const modal = raw.form?.modal;
+    if (modal) {
+      try {
+        await answer({ type: 9, data: modal });
+        return;
+      } catch (error) {
+        const text = discordError(error).message;
+        sink.log("form not opened", { form: raw.form!.name, error: text });
+        const { modal: _modal, opened: _opened, ...form } = raw.form!;
+        const failed: Raw = { source: "form-failed", at: Date.now(), d: raw.d, ...(raw.parent ? { parent: raw.parent } : {}), form, error: text };
+        this.#store(sink, `form-failed:${interaction.id}`, failed);
+      }
+    }
     // 2 a command, 3 a button or menu, 5 a form; 4 (autocomplete) cannot wait.
     const type = interaction.type === 2 ? 5 : interaction.type === 3 ? 6 : interaction.type === 5 ? (interaction.message ? 6 : 5) : undefined;
-    if (!type || !this.#client) return;
-    await this.#rest
-      .post(`/interactions/${interaction.id}/${interaction.token}/callback`, { body: { type }, auth: false })
-      .catch((error) => sink.log("interaction not acknowledged", { error: String(error) }));
+    if (!type) return;
+    await answer({ type }).catch((error: unknown) => sink.log("interaction not acknowledged", { error: discordError(error).message }));
   }
 
   owns(address: Address): boolean {
@@ -434,6 +492,7 @@ export class DiscordChannel implements ChannelAdapter {
     // A system message read again by a backfill would be a second event: system messages are not kept as messages.
     if (raw.source === "history") return !WRITTEN.has(raw.message.type ?? MessageType.Default) ? [] : this.#message("message", raw.message, Date.now(), parent);
     if (raw.source === "sent") return this.#message("message", raw.message, Date.now(), parent, raw.sendId);
+    if (raw.source === "form-failed") return [await this.#formFailed(raw)];
     const { t, d, at } = raw;
     switch (t) {
       case "MESSAGE_CREATE":
@@ -490,8 +549,11 @@ export class DiscordChannel implements ChannelAdapter {
         return [{ kind: "leave", at, ...this.#meAsPerson(), fromMe: false, text: `removed from the server ${name ? `"${name}" ` : ""}(ID ${d.id})`, raw: d }];
       }
       case "INTERACTION_CREATE":
+        // Autocomplete comes at every keystroke in a command's option and wants choices within 3 seconds, which the bot
+        // cannot give; the command itself comes when it is sent. Not an event.
+        if (d.type === 4) return [];
         // An interaction names its channel's parent itself.
-        return [await this.#interaction(d, at, parent ?? (THREADS.has(d.channel?.type) ? d.channel.parent_id : undefined))];
+        return [await this.#interaction(d, at, parent ?? (THREADS.has(d.channel?.type) ? d.channel.parent_id : undefined), raw.form)];
       default:
         return [];
     }
@@ -605,10 +667,15 @@ export class DiscordChannel implements ChannelAdapter {
     };
   }
 
-  /** Someone used a command, a button, a menu or a form of the app. */
-  async #interaction(d: any, at: number, parent: string | undefined): Promise<Happening> {
+  /**
+   * Someone used a command, a button or a menu of the app, or submitted a form. A button or a menu says which, with its
+   * label from the message; a click that opened a stored form is only logged (form_opened), as its submission says
+   * more. A form's submission is a "form" event with the values, on the message of the button that opened it.
+   */
+  async #interaction(d: any, at: number, parent: string | undefined, form?: FormClick): Promise<Happening> {
     const where = d.channel_id ? await this.#locate(d.channel_id, d.channel?.type, parent) : undefined;
     const user = d.member?.user ?? d.user;
+    let kind = "interaction";
     let text: string | undefined;
     if (d.type === 2) {
       const parts = [`/${d.data?.name ?? "?"}`];
@@ -622,9 +689,18 @@ export class DiscordChannel implements ChannelAdapter {
       };
       walk(d.data?.options);
       text = parts.join(" ");
+    } else if (d.type === 3) {
+      text = this.#componentText(d);
+      if (form?.opened) {
+        kind = "form_opened";
+        text = `opened form ${form.name} for them: ${text}`;
+      } else if (form?.missing) text = `${text}, and no form opened: ${form.missing}`;
+    } else if (d.type === 5) {
+      kind = "form";
+      text = this.#submissionText(d);
     } else if (d.data?.custom_id) text = d.data.custom_id;
     return {
-      kind: "interaction",
+      kind,
       at,
       ...(where ? { place: await this.#placeInfo(where.place, d.guild_id) } : {}),
       ...(where && d.message?.id ? { message: this.#messageAt(where, d.message.id) } : {}),
@@ -634,6 +710,64 @@ export class DiscordChannel implements ChannelAdapter {
       ...(text ? { text } : {}),
       raw: d,
     };
+  }
+
+  /** A form that Discord did not open, with Discord's answer: a "form" event, so it reaches the bot at once. */
+  async #formFailed(raw: Extract<Raw, { source: "form-failed" }>): Promise<Happening> {
+    const d = raw.d;
+    const happening = await this.#interaction(d, raw.at, raw.parent ?? (THREADS.has(d.channel?.type) ? d.channel.parent_id : undefined));
+    return { ...happening, kind: "form", text: `the form ${raw.form.name} did not open after they ${this.#componentText(d)}. Discord said: ${raw.error}`, raw: { ...d, pots_form_error: raw.error } };
+  }
+
+  /** A button or a menu as words: what was clicked or chosen, with its label from the message, and its custom_id. */
+  #componentText(d: any): string {
+    const id: string = d.data?.custom_id ?? "?";
+    const component = findComponent(d.message?.components, id);
+    if (d.data?.component_type === 2 || (d.data?.values === undefined && component?.type === 2)) {
+      return `clicked button${typeof component?.label === "string" ? ` "${component.label}"` : ""} (custom_id ${id})`;
+    }
+    const values = (d.data?.values as string[] | undefined) ?? [];
+    return `chose in menu ${id}: ${values.map((value) => this.#choiceText(value, d.data, component)).join(", ") || "(none)"}`;
+  }
+
+  /** One chosen value of a menu or a form's field: an option with its label, a person, a role, a channel or a file. */
+  #choiceText(value: string, data: any, component: Record<string, any> | undefined): string {
+    const resolved = data?.resolved ?? {};
+    if (resolved.users?.[value] || resolved.members?.[value]) return this.person(value);
+    if (resolved.roles?.[value]) return `role @${resolved.roles[value].name ?? value} (${value})`;
+    if (resolved.channels?.[value]) return this.place(value);
+    const file = resolved.attachments?.[value] as { filename?: string; url?: string } | undefined;
+    if (file) return `file ${file.filename ?? value}${file.url ? ` (${file.url})` : ""}`;
+    const option = (component?.options as { label?: string; value?: string }[] | undefined)?.find((each) => each.value === value);
+    return option?.label !== undefined ? `"${option.label}" (value ${value})` : `value ${value}`;
+  }
+
+  /**
+   * A form's submission as words: which form (from its custom_id, form:<name>:<extra> for a stored one), then one field a
+   * line, by its custom_id.
+   */
+  #submissionText(d: any): string {
+    const id: string = d.data?.custom_id ?? "?";
+    const parsed = parseFormId(id);
+    const lines = [parsed ? `submitted form ${parsed.name} (custom_id ${id}${parsed.extra !== undefined ? `, extra: ${parsed.extra}` : ""})` : `submitted a form (custom_id ${id})`];
+    const fields: string[] = [];
+    const walk = (node: unknown): void => {
+      if (Array.isArray(node)) return node.forEach(walk);
+      if (!node || typeof node !== "object") return;
+      const item = node as Record<string, any>;
+      if (typeof item.custom_id === "string" && (item.value !== undefined || item.values !== undefined)) {
+        const value =
+          item.value !== undefined
+            ? String(item.value) || "(empty)"
+            : (item.values as string[]).map((each) => this.#choiceText(each, d.data, undefined)).join(", ") || "(none)";
+        fields.push(`${item.custom_id}: ${value.replace(/\r?\n/g, "\n  ")}`);
+        return;
+      }
+      walk(item.components);
+      walk(item.component);
+    };
+    walk(d.data?.components);
+    return [...lines, ...fields].join("\n");
   }
 
   #meAsPerson(): { person?: PersonInfo } {
@@ -864,7 +998,11 @@ export class DiscordChannel implements ChannelAdapter {
    * already sent with that nonce in the last few minutes instead of making a new one, so a resend after a crash does
    * not post twice. A text over Discord's limit is refused, never cut.
    */
-  async send(to: Address, text: string, sendId: string): Promise<SentMessage> {
+  send(to: Address, text: string, sendId: string): Promise<SentMessage> {
+    return explained(this.#send(to, text, sendId));
+  }
+
+  async #send(to: Address, text: string, sendId: string): Promise<SentMessage> {
     const content = outgoing(this.id, text);
     const refused = refusal(content);
     if (refused) throw new Error(refused);
@@ -925,7 +1063,11 @@ export class DiscordChannel implements ChannelAdapter {
    * React with a Unicode emoji, a custom emoji as name:id or <:name:id>, or a name such as :thumbsup:. Adding a
    * reaction that is there, or removing one that is not, changes nothing and is not an error.
    */
-  async react(message: Address, emoji: string, remove: boolean): Promise<void> {
+  react(message: Address, emoji: string, remove: boolean): Promise<void> {
+    return explained(this.#react(message, emoji, remove));
+  }
+
+  async #react(message: Address, emoji: string, remove: boolean): Promise<void> {
     const parsed = this.#parse(message);
     if (!("channel" in parsed) || !parsed.message) throw new Error(`not a message address: ${message}`);
     // A forum post's first message is in the post's thread.
@@ -952,7 +1094,11 @@ export class DiscordChannel implements ChannelAdapter {
    * "POST /channels/123/threads". params are the query for GET and DELETE, and the JSON body for the others. A "file"
    * param that is a local path is uploaded with the body.
    */
-  async call(method: string, params: Record<string, unknown>): Promise<unknown> {
+  call(method: string, params: Record<string, unknown>): Promise<unknown> {
+    return explained(this.#call(method, params));
+  }
+
+  async #call(method: string, params: Record<string, unknown>): Promise<unknown> {
     const match = /^(GET|POST|PUT|PATCH|DELETE) (\/\S+)$/.exec(method.trim());
     if (!match) throw new Error(`call takes "<GET|POST|PUT|PATCH|DELETE> /<path>", for example "POST /channels/123/threads"; not ${JSON.stringify(method)}`);
     const verb = match[1]!;
@@ -968,6 +1114,47 @@ export class DiscordChannel implements ChannelAdapter {
     }
     // An answer with no content (204).
     return result instanceof ArrayBuffer ? null : result;
+  }
+}
+
+/** The raw event as stored: a form to open is not kept, as pots form list has it. */
+function stored(raw: Raw): Raw {
+  if (raw.source !== "gateway" || !raw.form?.modal) return raw;
+  const { modal: _modal, ...form } = raw.form;
+  return { ...raw, form };
+}
+
+/** The component with this custom_id in a message's components, at any depth. */
+function findComponent(components: unknown, id: string): Record<string, any> | undefined {
+  if (Array.isArray(components)) {
+    for (const each of components) {
+      const found = findComponent(each, id);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  if (!components || typeof components !== "object") return undefined;
+  const item = components as Record<string, any>;
+  if (item.custom_id === id) return item;
+  return findComponent(item.components, id) ?? findComponent(item.accessory, id) ?? findComponent(item.component, id);
+}
+
+/**
+ * A Discord error with what Discord answered: the HTTP status, Discord's error code, its message and the fields it
+ * refused. Never the request's URL, which for an interaction's answer holds its token.
+ */
+function discordError(error: unknown): Error {
+  if (error instanceof DiscordAPIError) return new Error(`Discord answered ${error.status}, code ${error.code}: ${error.message}`, { cause: error });
+  if (error instanceof HTTPError) return new Error(`Discord answered ${error.status} ${error.message}`, { cause: error });
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+/** The work's result, or its failure with what Discord answered. */
+async function explained<T>(work: Promise<T>): Promise<T> {
+  try {
+    return await work;
+  } catch (error) {
+    throw discordError(error);
   }
 }
 

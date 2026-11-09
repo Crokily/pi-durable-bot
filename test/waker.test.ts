@@ -386,7 +386,31 @@ describe("answers to the bot", () => {
     text,
   });
 
-  it.effect("a click on the bot's own message wakes it at once, not through the judge, and the wake says which button and who", () => {
+  it.effect("a click wakes the bot at once, not through the judge, also on a message the log does not have, and the wake says which button and who", () => {
+    const judge = saysNo();
+    return withCore({ judge }, (recorder) =>
+      Effect.gen(function* () {
+        yield* connect;
+        const waker = yield* Waker;
+        waker.setTarget(recorder.target());
+        // An ephemeral message, such as Slack's chat.postEphemeral, is never logged as a message: only its click comes.
+        const ephemeral = "mem:#general/m-ephemeral";
+        yield* waker.add(yield* logHappening(used("interaction", ephemeral, 'clicked button "Test" (action_id deploy:test, value test)')));
+        yield* settleUntil(() => recorder.wakes.length === 1);
+        assert.deepStrictEqual(
+          recorder.wakes.map(({ wake, at }) => ({ reason: wake.reason, at, message: wake.events[0]!.message })),
+          [{ reason: "interaction", at: 0, message: ephemeral }],
+        );
+        assert.strictEqual(judge.asked, 0);
+        const text = renderPlaceWake(recorder.wakes[0]!.wake, { used: 1000, window: 200_000, compactAt: 180_000 });
+        assert.include(text, "[wake] someone used a button, a menu, a command or a form of yours");
+        assert.include(text, `interaction, alice (mem:@alice), message ${ephemeral}`);
+        assert.include(text, 'Text: clicked button "Test" (action_id deploy:test, value test)');
+      }),
+    );
+  });
+
+  it.effect("a command wakes the bot at once too; a reaction on the bot's own message waits for people to stop, and the judge decides", () => {
     const judge = saysNo();
     return withCore({ judge }, (recorder) =>
       Effect.gen(function* () {
@@ -395,38 +419,23 @@ describe("answers to the bot", () => {
         waker.setTarget(recorder.target());
         const asked = message("general", "Where to?", { fromMe: true });
         yield* logHappening(asked);
-        yield* waker.add(yield* logHappening(used("interaction", asked.message!, 'clicked button "Test" (action_id deploy:test, value test)')));
-        yield* settleUntil(() => recorder.wakes.length === 1);
-        assert.deepStrictEqual(
-          recorder.wakes.map(({ wake, at }) => ({ reason: wake.reason, at, message: wake.events[0]!.message })),
-          [{ reason: "interaction", at: 0, message: asked.message }],
-        );
-        assert.strictEqual(judge.asked, 0);
-        const text = renderPlaceWake(recorder.wakes[0]!.wake, { used: 1000, window: 200_000, compactAt: 180_000 });
-        assert.include(text, "[wake] someone used a button or a menu on your message, or submitted your form");
-        assert.include(text, `interaction, alice (mem:@alice), message ${asked.message}`);
-        assert.include(text, 'Text: clicked button "Test" (action_id deploy:test, value test)');
-      }),
-    );
-  });
-
-  it.effect("a click on someone else's message waits for people to stop, and the judge decides", () => {
-    const judge = saysNo();
-    return withCore({ judge }, (recorder) =>
-      Effect.gen(function* () {
-        yield* connect;
-        const waker = yield* Waker;
-        waker.setTarget(recorder.target());
-        const theirs = message("general", "Vote here", { person: "bob" });
-        yield* logHappening(theirs);
-        const event = yield* logHappening(used("interaction", theirs.message!, 'clicked button "Yes" (action_id vote:yes)'));
-        yield* waker.add(event);
+        const reaction = yield* logHappening({ ...used("reaction_added", asked.message!, ":eyes:") });
+        yield* waker.add(reaction);
         yield* settle;
         assert.strictEqual(recorder.wakes.length, 0);
         yield* advance(3_000);
         assert.strictEqual(judge.asked, 1);
         assert.strictEqual(recorder.wakes.length, 0);
-        assert.deepStrictEqual(yield* decisions([event.id]), ["decided"]);
+        assert.deepStrictEqual(yield* decisions([reaction.id]), ["decided"]);
+
+        const { message: _message, ...command } = used("command", "", "/pots status");
+        yield* waker.add(yield* logHappening(command));
+        yield* settleUntil(() => recorder.wakes.length === 1);
+        assert.deepStrictEqual(
+          recorder.wakes.map(({ wake, at }) => ({ reason: wake.reason, at, text: wake.events[0]!.text })),
+          [{ reason: "interaction", at: 3_000, text: "/pots status" }],
+        );
+        assert.strictEqual(judge.asked, 1);
       }),
     );
   });

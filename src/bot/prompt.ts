@@ -444,7 +444,7 @@ export function renderPlaceWake(wake: PlaceWake, status: ContextStatus, me?: Per
       why = "no mention. You have no judge set, so every message comes to you";
       break;
     case "interaction":
-      why = "someone used a button or a menu on your message, or submitted your form";
+      why = "someone used a button, a menu, a command or a form of yours";
       break;
   }
   const place = wake.place;

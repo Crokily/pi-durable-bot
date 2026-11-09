@@ -270,6 +270,30 @@ describe("buttons and forms", () => {
     expect(fake.called("views.open")).toEqual([]);
   });
 
+  it("gives a click on an ephemeral message its message from the container, and makes no event of an external select's options request", async () => {
+    const { fake, channel, events } = await connect();
+    // Slack sends no message with a click on an ephemeral message, and keeps no such message in the history.
+    const { message: _message, ...ephemeral } = click([button("deploy:test", "Test environment", "test")]);
+    const clicked = fake.send("interactive", { ...ephemeral, container: { type: "message", message_ts: "1793080299.000300", channel_id: GENERAL.id, is_ephemeral: true } });
+    // Slack asks for the options of an external select as the person types, and wants them in the ack.
+    const typed = fake.send("interactive", {
+      type: "block_suggestion",
+      user: { id: ALICE.id, username: "alice", team_id: "T0LAB" },
+      container: { type: "message", message_ts: TS, channel_id: GENERAL.id, is_ephemeral: false },
+      api_app_id: "A0TEST",
+      action_id: "repo",
+      block_id: "choices",
+      value: "pots",
+      team: { id: "T0LAB", domain: "lab" },
+      channel: { id: GENERAL.id, name: "general" },
+    });
+    await until(() => fake.acked(clicked) && fake.acked(typed));
+    expect(await channel.translate(events[0]!.raw)).toMatchObject([
+      { kind: "interaction", place: { address: "slack:#C0GENERAL" }, message: "slack:#C0GENERAL/1793080299.000300", text: 'clicked button "Test environment" (action_id deploy:test, value test)' },
+    ]);
+    expect(await channel.translate(events[1]!.raw)).toEqual([]);
+  });
+
   it("opens a stored form at once with the click's trigger, and its submission gets its place and message back after a restart", async () => {
     const { fake, channel, events, store, dir } = await connect();
     store.forms.set("deploy", VIEW);

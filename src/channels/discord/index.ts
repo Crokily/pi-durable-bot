@@ -544,6 +544,9 @@ export class DiscordChannel implements ChannelAdapter {
         return [{ kind: "leave", at, ...this.#meAsPerson(), fromMe: false, text: `removed from the server ${name ? `"${name}" ` : ""}(ID ${d.id})`, raw: d }];
       }
       case "INTERACTION_CREATE":
+        // Autocomplete comes at every keystroke in a command's option and wants choices within 3 seconds, which the bot
+        // cannot give; the command itself comes when it is sent. Not an event.
+        if (d.type === 4) return [];
         // An interaction names its channel's parent itself.
         return [await this.#interaction(d, at, parent ?? (THREADS.has(d.channel?.type) ? d.channel.parent_id : undefined), raw.form)];
       default:

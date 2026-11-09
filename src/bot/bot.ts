@@ -27,6 +27,8 @@ import { renderForms } from "../gateway/forms.ts";
 import { Gateway, type TimersHandle } from "../gateway/gateway.ts";
 import { describeSchedule, describeWork, type RoutineInput, renderRoutines } from "../gateway/routines.ts";
 import type { DueTimer } from "../gateway/timers.ts";
+import type { PageHost } from "../pages/host.ts";
+import { BotPages, secretCrashTests } from "../pages/store.ts";
 import { ControlServer } from "./control.ts";
 import { type BotDefinition, type BotPaths, botPaths } from "./definition.ts";
 import { describeMachine } from "./machine.ts";
@@ -74,6 +76,8 @@ export interface BotEnvironment {
   potsCommand: string;
   /** pi's model layer, shared by all bots of the process. */
   models: Models;
+  /** The gateway's page server, which every bot shares. */
+  pages: PageHost;
 }
 
 /** What the agent is told about the computer it runs on. Checked once per process, from when the gateway loads. */
@@ -98,6 +102,8 @@ export class Bot implements WakeTarget {
   readonly #gateway: Gateway;
   readonly #timers: TimersHandle;
   readonly #agent: Agent;
+  /** The bot's pages and links, served by the gateway's page server. */
+  readonly #pages: BotPages;
   /** The notes of what the memory passes changed, which the next wake that goes out takes. */
   readonly #notes: MemoryNote[];
   /** Undefined when bot.json says "judge": "off". */
@@ -126,6 +132,7 @@ export class Bot implements WakeTarget {
     gateway: Gateway;
     timers: TimersHandle;
     agent: Agent;
+    pages: BotPages;
     judge: Judge | undefined;
     notes: MemoryNote[];
   }) {
@@ -138,6 +145,7 @@ export class Bot implements WakeTarget {
     this.#gateway = init.gateway;
     this.#timers = init.timers;
     this.#agent = init.agent;
+    this.#pages = init.pages;
     this.#notes = init.notes;
     this.#judge = init.judge;
     this.#control = new ControlServer(init.paths.socket, this.#routes());
@@ -228,6 +236,18 @@ export class Bot implements WakeTarget {
       print,
     });
     const timers = gateway.timers;
+    // A page's answers and a password page's submission wake the bot now, as pots wake does, once per request ID.
+    const pages = await BotPages.open({
+      id,
+      dir: paths.dir,
+      sql,
+      secretsDir: SECRETS_DIR,
+      name: () => current().name,
+      wake: (note, requestId) => timers.add(Date.now(), note, { source: "pages", requestId }),
+      print,
+    });
+    // Crash tests: between the steps of a password page's submission. The next start must finish the sequence.
+    Object.assign(pages.crashTests, secretCrashTests(paths.dir, print));
     const machine = await MACHINE;
     const facts = (): PromptFacts => ({
       id,
@@ -351,7 +371,7 @@ export class Bot implements WakeTarget {
     });
     opened(agent);
 
-    bot = new Bot({ id, paths, definition, env, print, sql, gateway, timers, agent, judge, notes });
+    bot = new Bot({ id, paths, definition, env, print, sql, gateway, timers, agent, pages, judge, notes });
     // Crash tests: with one of these files in the bot folder, the process dies at that point, once.
     const crashTest = (file: string, message: string, key: string) => (id: string) => {
       if (!existsSync(file)) return;
@@ -387,7 +407,10 @@ export class Bot implements WakeTarget {
         await timers.add(Date.now(), await readFile(paths.firstWake, "utf8"));
         unlinkSync(paths.firstWake);
       }
+      await pages.resume();
       await bot.#control.start();
+      env.pages.register(pages);
+      pages.startCleanup();
     } catch (error) {
       await timers.stop();
       await gateway.stop();
@@ -403,7 +426,9 @@ export class Bot implements WakeTarget {
    * until the agent has stopped, so an action is never refused while the agent still works.
    */
   async stop(): Promise<void> {
+    this.#env.pages.unregister(this.id);
     try {
+      await this.#pages.stopCleanup();
       await this.#control.stop();
       await this.#gateway.pauseWakes();
       await this.#agent.close();
@@ -593,6 +618,7 @@ export class Bot implements WakeTarget {
       if (typeof value !== "string") throw new Error(`"${name}" is required`);
       return value;
     };
+    const optional = (value: unknown) => (typeof value === "string" && value ? value : undefined);
     return {
       "POST /send": async (body: Record<string, unknown>) =>
         this.send(text(body.to, "to"), text(body.text, "text"), typeof body.id === "string" && body.id ? body.id : `cli:${randomUUID()}`),
@@ -666,6 +692,17 @@ export class Bot implements WakeTarget {
         }
         return this.#agent.stopChild(text(body.id, "id"));
       },
+      "POST /page/link": async (body: Record<string, unknown>) => this.#env.pages.link(this.#pages, text(body.page, "page"), optional(body.for)),
+      "POST /page/unlink": async (body: Record<string, unknown>) => this.#env.pages.unlink(this.#pages, text(body.link, "link")),
+      "GET /page/list": async () => this.#env.pages.list(this.#pages),
+      "POST /page/secret": async (body: Record<string, unknown>) =>
+        this.#env.pages.secret(this.#pages, {
+          file: text(body.file, "file"),
+          keys: Array.isArray(body.keys) ? body.keys.map(String) : [],
+          ...(optional(body.text) ? { text: optional(body.text)! } : {}),
+          ...(optional(body.for) ? { person: optional(body.for)! } : {}),
+        }),
+      "GET /page/server": async () => this.#env.pages.status(),
       "GET /status": async () => ({
         id: this.id,
         name: this.#definition.name,

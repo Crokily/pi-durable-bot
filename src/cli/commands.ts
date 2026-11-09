@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Console, Effect, Layer, Runtime } from "effect";
+import { Console, Effect, Layer, Option, Runtime } from "effect";
 import { Command, Flag } from "effect/cli";
 import { POTS_HOME, runningGateway } from "../core/home.ts";
 import { agentCommands } from "./agent.ts";
@@ -11,6 +11,7 @@ import { control, listBots, userError } from "./control.ts";
 import { initCommand } from "./init.ts";
 import { loginCommand } from "./login.ts";
 import { mcpCommand } from "./mcp.ts";
+import { pageCommand } from "./pages.ts";
 import * as ServiceLayer from "./service.ts";
 import { traceCommand } from "./trace.ts";
 
@@ -45,6 +46,7 @@ const status = Command.make("status", {}, () =>
     yield* Console.log(`home: ${POTS_HOME}`);
     yield* Console.log(`gateway: ${pid === undefined ? "not running" : `running (process ${pid})`}`);
     yield* Console.log(`service: ${service.installed() ? `installed (${service.kind})` : "not installed"}`);
+    yield* Console.log(yield* pageServerLine(pid !== undefined));
     for (const id of listBots()) {
       const line = yield* control(id, "GET", "/status").pipe(
         Effect.map((result) => {
@@ -59,6 +61,27 @@ const status = Command.make("status", {}, () =>
     }
   }),
 ).pipe(Command.withDescription("Show the gateway, the service and each bot."));
+
+/** The page server's line: asked of the first bot that answers, since the gateway has no endpoint of its own. */
+const pageServerLine = (gatewayRuns: boolean) =>
+  Effect.gen(function* () {
+    const { describePageServer } = yield* Effect.promise(() => import("../pages/host.ts"));
+    const { readSettings } = yield* Effect.promise(() => import("../pages/settings.ts"));
+    const kept = yield* Effect.sync(() => {
+      try {
+        return readSettings().pagePort;
+      } catch {
+        return undefined;
+      }
+    });
+    if (gatewayRuns) {
+      for (const id of listBots()) {
+        const status = yield* control(id, "GET", "/page/server").pipe(Effect.option);
+        if (Option.isSome(status)) return describePageServer(status.value as Parameters<typeof describePageServer>[0], kept);
+      }
+    }
+    return describePageServer(undefined, kept);
+  });
 
 const serviceInstall = Command.make(
   "install",
@@ -108,7 +131,7 @@ const service = Command.make("service").pipe(
 
 const pots = Command.make("pots").pipe(
   Command.withDescription("Pots (pi-durable-bot): AI coworkers that live on this computer and work in your chat apps."),
-  Command.withSubcommands([initCommand, loginCommand, mcpCommand, chatCommand, start, status, service, botCommand, traceCommand, ...agentCommands]),
+  Command.withSubcommands([initCommand, loginCommand, mcpCommand, chatCommand, start, status, service, botCommand, traceCommand, ...agentCommands, pageCommand]),
 );
 
 /** Resolves once stdout and stderr have written all they were given. On macOS a pipe takes writes asynchronously. */

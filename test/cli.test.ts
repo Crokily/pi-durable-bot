@@ -62,7 +62,8 @@ describe("pots", { timeout: 120_000 }, () => {
     expect(lines[0]).toBe(`home: ${gateway.home}`);
     expect(lines[1]).toMatch(/^gateway: running \(process \d+\)$/);
     expect(lines[2]).toMatch(/^service: /);
-    expect(lines.slice(3)).toEqual(["coworker: Coworker, fake/coworker, idle, channels test, terminal"]);
+    expect(lines[3]).toMatch(/^pages: port \d+, no public address yet \(quick-tunnel: it starts at the first pots page link\)$/);
+    expect(lines.slice(4)).toEqual(["coworker: Coworker, fake/coworker, idle, channels test, terminal"]);
     expect(await pots("bot", "list")).toBe("coworker\tCoworker\tfake/coworker\tidle\n");
   });
 

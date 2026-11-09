@@ -4,19 +4,22 @@
 
 # pi-durable-bot (Pots)
 
-**The open-source AI coworker that acts on its own.**
+**The open-source Grok Bot alternative: an AI coworker that acts on its own.**
 
 It reads every channel, email and event you give it, decides what matters,<br>
 does the work on its own computer, and speaks up when it should.
 
-[Demo](#see-it-work) · [Quick start](#quick-start) · [How it decides](#how-it-decides-to-act) · [Open and yours](#open-and-yours) · [How it works](#how-it-works)
+[Demo](#see-it-work) · [Compare](#open-and-yours) · [Quick start](#quick-start) · [How it decides](#how-it-decides-to-act) · [How it works](#how-it-works)
 
+[![Star pi-durable-bot on GitHub](https://img.shields.io/github/stars/Crokily/pi-durable-bot?style=social&label=Star)](https://github.com/Crokily/pi-durable-bot/stargazers)
 [![npm](https://img.shields.io/npm/v/pi-durable-bot?style=flat-square&color=1F7A70)](https://www.npmjs.com/package/pi-durable-bot)
 [![Platforms: macOS, Linux, Windows](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-1F7A70?style=flat-square)](#quick-start)
 [![License: MIT](https://img.shields.io/badge/license-MIT-1F7A70?style=flat-square)](LICENSE)
 [![Built on pi-durable](https://img.shields.io/badge/built%20on-pi--durable-1F7A70?style=flat-square)](https://github.com/earendil-works/pi)
 [![Chat SDK](https://img.shields.io/badge/channels-Chat%20SDK-1F7A70?style=flat-square)](https://chat-sdk.dev)
 [![Node 24+](https://img.shields.io/badge/node-24%2B-1F7A70?style=flat-square)](https://nodejs.org)
+
+⭐ If Pots is useful to you, a star helps other people find it.
 
 </div>
 
@@ -28,6 +31,27 @@ does the work on its own computer, and speaks up when it should.
 </p>
 
 Grok Bot, dots and Claude Tag showed what an AI teammate can be. pi-durable-bot gives you the same kind of coworker as open source: it runs on your machine, with the model you choose, in the places your team already talks.
+
+## Open and yours
+
+Grok Bot, OpenAI dots, Claude Duet, Claude Tag and Meta Muse are closed products. They run on someone else's computer, with someone else's model, inside the apps they chose. pi-durable-bot is MIT-licensed and runs where you put it.
+
+| | pi-durable-bot | Grok Bot (xAI) | dots (OpenAI) | Claude Duet (Anthropic) | Claude Tag (Anthropic) | Muse (Meta) |
+|---|---|---|---|---|---|---|
+| **Source code** | Open, MIT | Closed | Closed | Closed | Closed | Closed |
+| **Where it runs** | Your server, your VM, your office box | xAI's cloud | OpenAI's cloud | Anthropic's cloud | Anthropic's cloud | Meta's cloud |
+| **Model** | Any: your subscription login, 40+ providers, or a local model | Grok | OpenAI's | Claude | Claude | Meta's |
+| **Where you talk to it** | Slack, Discord, Telegram, and any channel with a [Chat SDK](https://chat-sdk.dev) adapter | Mac and iOS apps; Slack for team bots | ChatGPT, Slack, Teams | Its own app | Slack | Web, mobile app, WhatsApp |
+| **Your data** | Stays on your machine, in each bot's folder | Sent to xAI | Sent to OpenAI | Sent to Anthropic | Sent to Anthropic | Sent to Meta |
+| **Custom work** | Anything. Change the code, add tools, connect your own systems | What the vendor allows | What the vendor allows | What the vendor allows | What the vendor allows | What the vendor allows |
+
+<sub>The other products as their makers described them in public, November 2026; they may have changed since. Grok Bot, dots, Claude Duet, Claude Tag and Muse are products of xAI, OpenAI, Anthropic and Meta. pi-durable-bot is not affiliated with any of them.</sub>
+
+**Any model.** Log in once with a subscription you already pay for, use an API key from any of the 40+ providers [pi](https://github.com/earendil-works/pi) supports, point it at any OpenAI-compatible endpoint (vLLM, SGLang, a proxy), or run a local model with Ollama, LM Studio or llama.cpp. The bot uses pi's own model layer, so every model pi can use, the bot can use. With a local model for the agent and the judge, nothing leaves your machine. You are not locked to one model vendor.
+
+**Any channel.** The core speaks in five plain words: channel, place, thread, message, person. Platform details stay inside one adapter per platform. Slack, Discord and Telegram work today; Teams or email is one more adapter, not a rewrite. One bot can be in many channels and stays the same person everywhere.
+
+**Your business.** Give it your own tools, data and workflows. It can run several bots on one machine, each with its own name, persona, responsibilities and memory. A bot can even edit its own definition, or create a new bot.
 
 ## Not a bot. A coworker.
 
@@ -82,6 +106,14 @@ It works like a [pi](https://github.com/earendil-works/pi) session: it reads `AG
 
 When it speaks, it speaks like a teammate: in the right channel or thread, in its own words, with the file attached. It can reply in a thread, start a new message, DM a person, add a reaction, edit its own message, or call any other platform API.
 
+### 🪟 Its own pages
+
+Some things do not fit in a chat message. For a plan, a report or a dashboard, the bot writes a web page and sends a link. A page can ask, too: people choose, comment, fill in, approve or reject on it, and each answer wakes the bot at once.
+
+- **Buttons and forms in the chat.** On Slack and Discord the bot sends the platform's own buttons, menus and forms; on Telegram, inline buttons. A click wakes it within a second, and a form opens at once.
+- **A password page for secrets.** When the bot needs an API key from you, it sends a one-time link to a page of Pots' own. You type the key there. It goes into a file in the secrets folder, never into the chat, the log or a trace.
+- **No public address needed.** The first link starts a Cloudflare Quick Tunnel, so pages work from a laptop behind a home router. For a fixed address, the bot sets up Tailscale Funnel with you, or uses your own domain.
+
 ### ⏰ Its own schedule
 
 It promises to come back, and it does. A timed wake (`pots wake`) wakes it once, at a time it chooses. A **routine** (`pots routine`) repeats: every 30 minutes, say, or on a cron schedule in the computer's time zone. Both live in the same database as everything else, so they survive restarts. It can also add normal cron jobs on its machine.
@@ -108,25 +140,6 @@ When the context gets full, the bot decides when to **turn the page**: it writes
 ### 🛟 Durable by design
 
 Built on [pi-durable](https://github.com/earendil-works/pi), every step is journaled. Kill the process in the middle of a task and it continues after restart. Every incoming event is written to disk before it is acknowledged. Every outgoing message carries a send ID, and after a crash the bot checks whether the message already went out before it sends again.
-
-## Open and yours
-
-Grok Bot, dots, Muse and Claude Duet are closed products. They run on someone else's computer, with someone else's model, inside the apps they chose. pi-durable-bot is MIT-licensed and runs where you put it.
-
-| | Closed AI coworkers | pi-durable-bot |
-|---|---|---|
-| Source code | Closed | Open, MIT |
-| Where it runs | The vendor's cloud | Your server, your VM, your office box |
-| Model | The vendor's | Your subscription login, any of 40+ providers, or a local model |
-| Your data | Sent to the vendor | Stays on your machine, in each bot's folder |
-| Channels | The ones the vendor supports | Any channel with a [Chat SDK](https://chat-sdk.dev) adapter |
-| Custom work | What the vendor allows | Anything. Change the code, add tools, connect your own systems |
-
-**Any model.** Log in once with a subscription you already pay for, use an API key from any of the 40+ providers [pi](https://github.com/earendil-works/pi) supports, point it at any OpenAI-compatible endpoint (vLLM, SGLang, a proxy), or run a local model with Ollama, LM Studio or llama.cpp. The bot uses pi's own model layer, so every model pi can use, the bot can use. With a local model for the agent and the judge, nothing leaves your machine. You are not locked to one model vendor.
-
-**Any channel.** The core speaks in five plain words: channel, place, thread, message, person. Platform details stay inside one adapter per platform. Slack, Discord and Telegram work today; Teams or email is one more adapter, not a rewrite. One bot can be in many channels and stays the same person everywhere.
-
-**Your business.** Give it your own tools, data and workflows. It can run several bots on one machine, each with its own name, persona, responsibilities and memory. A bot can even edit its own definition, or create a new bot.
 
 ## Quick start
 
@@ -318,6 +331,7 @@ pi-durable-bot runs every day as a teammate in a real workspace. What works toda
 - [x] A judge you choose: the bot's own model, Jev or another classifier, a local llama.cpp model, or none
 - [x] `AGENTS.md`, Agent Skills and images as in a pi session
 - [x] MCP servers and code mode, through pi's own MCP support
+- [x] Pages, buttons, forms and a password page, with a public address that needs no setup
 - [ ] More adapters: Teams, email
 - [ ] `pots init` in a web page, for people who do not use a terminal
 
@@ -333,6 +347,16 @@ npm run tla               # the TLA+ models of the inbox, outbox and waker (need
 ```
 
 `npm run build` writes the JavaScript that the npm package ships to `dist/`. Set `POTS_HOME` to try things without touching `~/.pots/`. With `OTEL_EXPORTER_OTLP_ENDPOINT` set, the gateway also sends its traces to any OpenTelemetry tool (Jaeger, Grafana Tempo, Honeycomb). Tests, the TLA+ models and traces in detail: [docs/development.md](docs/development.md). Coding agents: read [AGENTS.md](AGENTS.md). Agents that set Pots up for someone: read [docs/for-agents.md](docs/for-agents.md).
+
+## Star history
+
+<a href="https://www.star-history.com/#Crokily/pi-durable-bot&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Crokily/pi-durable-bot&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Crokily/pi-durable-bot&type=Date" />
+    <img alt="Star history of pi-durable-bot" src="https://api.star-history.com/svg?repos=Crokily/pi-durable-bot&type=Date" width="100%" />
+  </picture>
+</a>
 
 ## Built on
 

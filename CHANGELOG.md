@@ -2,7 +2,7 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
-## Unreleased
+## 0.7.0 (2026-11-10)
 
 The bot can show people web pages, ask with buttons and forms, and take secrets on a page, also when its computer has no public address.
 

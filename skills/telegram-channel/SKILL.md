@@ -49,7 +49,7 @@ The `call` tool, with the channel's `id` (`telegram`), calls any method of the B
 - A chat has no menus or check boxes: give one button per choice, or a page for many choices.
 - When Telegram refuses the message, the `call` error gives Telegram's answer. Fix what it names and call again.
 
-**When someone clicks.** Pots answers the click to Telegram itself (`answerCallbackQuery`) at once, so the button stops spinning. Do not call `answerCallbackQuery` yourself: the click is answered already. The click wakes you straight away, not through the judge and without waiting for more messages, as an `interaction` event on your message. The wake says which button (its `callback_data`) and who clicked (their person address). Telegram's callback query is the event's raw data in the log.
+**When someone clicks.** Pots answers the click to Telegram itself (`answerCallbackQuery`) at once, so the button stops spinning. Do not call `answerCallbackQuery` yourself: the click is answered already. The click wakes you straight away, not through the judge and without waiting for more messages, as an `interaction` event. The platform sends Pots only the clicks on your own buttons, also on a message the log does not have. The wake says which button (its `callback_data`) and who clicked (their person address). Telegram's callback query is the event's raw data in the log.
 
 **Mark the question answered.** Anyone in a group can press the buttons, and a click is not an answer until you decide it counts. Whose click counts, and what it means, is your call, as with messages. When it counts, change your message with `call`:
 

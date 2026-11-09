@@ -14,7 +14,7 @@ The bot can show people web pages, ask with buttons and forms, and take secrets 
 - **Skills come with Pots.** The Slack, Discord and Telegram guides are now skills (`slack-channel`, `discord-channel`, `telegram-channel`), each with a new section on buttons, forms, tables and clicks, and there is a new `pages` skill. Every bot sees them. A skill of yours with the same name is used instead.
 
 ### Changed
-- **Clicks wake the bot at once.** A click on the bot's own message, or a submitted form, wakes it straight away, not through the judge and without waiting for more messages.
+- **Clicks wake the bot at once.** A click on one of the bot's buttons or menus, a command of the bot, or a submitted form wakes it straight away, not through the judge and without waiting for more messages. This also holds on a message the log does not have, such as a Slack ephemeral message.
 - **Pots answers Telegram button presses**, so the button stops spinning at once. The bot no longer calls `answerCallbackQuery` itself.
 - **Platform errors say what was wrong.** When Slack, Discord or Telegram refuses a call, the bot sees the platform's details, for example which block of a Slack message is invalid. They never hold a token.
 - **`pots status` has a `pages:` line** with the page server's port and the public address.

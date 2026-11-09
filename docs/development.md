@@ -51,6 +51,7 @@ Dependencies are pinned to exact versions; Dependabot (`.github/dependabot.yml`)
 | `crash-before-child-report`, `crash-after-child-report` | just before, or just after, a child's end was handed to the main agent, before its reporter task ended |
 | `crash-after-child-stop` | right after a stop marked a child stopped, before the child's work ended |
 | `crash-before-memory-pass` | right before a memory pass forks the main conversation |
+| `crash-before-secret-write` | after a password-page link was claimed, before its file was written |
 | `crash-after-secret-write`, `crash-after-secret-used` | right after a password page wrote its file, or marked its link used, before the bot's wake was set |
 
 After the restart the bot must send once, be woken once, and make the memory pass, a stopped child must do nothing more, and a password page's submission must end with its link used and one wake.

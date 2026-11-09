@@ -33,7 +33,7 @@ Never ask for a secret in a chat message, and never write your own page for one.
 
 Each page is a folder in your bot folder: `pages/<name>/`, with `index.html` and any other files it uses (images, scripts, data). Its name is the folder's name, such as `deploy-plan`. A page in `pages/keep/<name>/` is a kept page, named `keep/<name>`: cleanup never deletes it (see Cleanup).
 
-Change the files at any time. The link stays the same: people reload and see the new version. To take a page off the internet, delete its folder, or unlink its links.
+Change the files at any time, in place. The link stays the same: people reload and see the new version. Do not replace the folder with a new one of the same name (for example by deleting and writing it again, or by moving another folder there): Pots then sees a different page, and every link of the old one stops working for good. To take a page off the internet, delete its folder, or unlink its links.
 
 ## Links
 

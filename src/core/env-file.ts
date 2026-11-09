@@ -1,4 +1,5 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
 
@@ -21,7 +22,10 @@ export function readSecrets(path: string, keys: readonly string[]): Record<strin
   return values;
 }
 
-/** Set KEY=value lines in a file readable only by this user: keys already there are replaced, other lines are kept. */
+/**
+ * Set KEY=value lines in a file readable only by this user: keys already there are replaced, other lines are kept.
+ * Written whole: to a part file next to it first, then renamed, so a crash leaves the old file or the new one.
+ */
 export function writeSecrets(path: string, values: Record<string, string>): void {
   const file = expandHome(path);
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
@@ -31,6 +35,13 @@ export function writeSecrets(path: string, values: Record<string, string>): void
     return !(key && key in values);
   });
   const text = [...kept, ...Object.entries(values).map(([key, value]) => `${key}=${value}`)].join("\n");
-  writeFileSync(file, `${text}\n`, { mode: 0o600 });
-  chmodSync(file, 0o600);
+  const part = `${file}.${randomBytes(6).toString("hex")}.part`;
+  try {
+    writeFileSync(part, `${text}\n`, { mode: 0o600 });
+    chmodSync(part, 0o600);
+    renameSync(part, file);
+  } catch (error) {
+    rmSync(part, { force: true });
+    throw error;
+  }
 }

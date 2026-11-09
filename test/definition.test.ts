@@ -17,7 +17,7 @@ afterEach(async () => {
   expect(gateway.output.filter((line) => /failed|unhandled/i.test(String(line.message)))).toEqual([]);
 });
 
-const status = async () => (await gateway.run(["status"])).stdout.trim().split("\n").slice(3);
+const status = async () => (await gateway.run(["status"])).stdout.trim().split("\n").slice(4);
 
 /** The system prompt of the agent's last model request. */
 const lastPrompt = () => agentRequests(model).at(-1)!.system;

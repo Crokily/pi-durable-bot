@@ -7,6 +7,8 @@ import { Bot } from "./bot/bot.ts";
 import { ControlServer } from "./bot/control.ts";
 import { BOT_ID, botPaths, readDefinition } from "./bot/definition.ts";
 import { BIN_DIR, BOTS_DIR, gatewayPipe, PID_FILE, POTS_HOME, runningGateway } from "./core/home.ts";
+import { PageHost } from "./pages/host.ts";
+import { SETTINGS_FILE } from "./pages/settings.ts";
 
 // The gateway: runs every bot folder in ~/.pots/bots. A folder with a bot.json is a bot. Checks the folders every few
 // seconds, so a new folder starts a bot, a removed one stops it, and a changed bot.json applies while running.
@@ -44,6 +46,9 @@ export async function runGateway(): Promise<void> {
   const potsCommand = writePotsCommand();
   const log = print(undefined);
   const models = await openModels();
+  // One page server for every bot, on its kept port; a port that is taken is reported, and the bots run without it.
+  const pages = new PageHost({ home: POTS_HOME, settingsFile: SETTINGS_FILE, binDir: BIN_DIR, print: log });
+  await pages.start();
   const running = new Map<string, { bot: Bot; text: string }>();
   /** Bots whose bot.json could not be read (the error) or used (the bot.json text and when it failed). */
   const invalid = new Map<string, string>();
@@ -91,7 +96,7 @@ export async function runGateway(): Promise<void> {
           await current.bot.applyDefinition(read.definition);
           current.text = read.text;
         } else {
-          const bot = await Bot.start(id, paths.dir, read.definition, { botsDir: BOTS_DIR, potsCommand, models }, print(id));
+          const bot = await Bot.start(id, paths.dir, read.definition, { botsDir: BOTS_DIR, potsCommand, models, pages }, print(id));
           running.set(id, { bot, text: read.text });
         }
         failed.delete(id);
@@ -121,6 +126,7 @@ export async function runGateway(): Promise<void> {
     const deadline = setTimeout(() => process.exit(1), 25_000);
     await scanning;
     await Promise.allSettled([...running.values()].map((entry) => entry.bot.stop()));
+    await pages.stop().catch((error: unknown) => log("page server stop failed", { error: String(error) }));
     clearTimeout(deadline);
     if (runningGateway() === process.pid) await unlink(PID_FILE).catch(() => {});
     process.exit(0);

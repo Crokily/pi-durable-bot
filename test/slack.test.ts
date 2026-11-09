@@ -5,7 +5,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { createChannel } from "../src/channels/slack/index.ts";
 import { GatewaySlackAdapter } from "../src/channels/slack/sdk.ts";
-import type { ChannelAdapter, ChannelSink, Happening } from "../src/core/channel.ts";
+import type { ChannelAdapter, ChannelSink, FormOpening, Happening } from "../src/core/channel.ts";
 import { APP_TOKEN, BOT_TOKEN, FakeSlack, VERIFICATION_TOKEN } from "./support/slack.ts";
 
 // The Slack channel against a fake Slack on this computer (test/support/slack.ts): its Web API, Socket Mode and file
@@ -24,11 +24,25 @@ function message(fields: Record<string, unknown> = {}) {
   return { type: "message", channel: GENERAL.id, user: ALICE.id, text: "hello", ts: TS, event_ts: TS, channel_type: "channel", team: "T0LAB", ...fields };
 }
 
+/**
+ * What the gateway keeps for forms: the stored forms by name, and the openings by ID. A test gives the same one to a
+ * channel made after a restart.
+ */
+interface FormStore {
+  forms: Map<string, unknown>;
+  openings: Map<string, FormOpening>;
+}
+
+const formStore = (): FormStore => ({ forms: new Map(), openings: new Map() });
+
 /** A sink like the gateway's: it drops a known event ID, and keeps raws as JSON, as the inbox does. */
 /** fail: the receive of this event ID fails while it returns true. newest: the newest logged message of each place. */
-function memorySink(options: { lastAlive?: number; newest?: Record<string, string>; threads?: Record<string, string[]>; fail?: (id: string) => boolean } = {}) {
+function memorySink(
+  options: { lastAlive?: number; newest?: Record<string, string>; threads?: Record<string, string[]>; fail?: (id: string) => boolean; store?: FormStore } = {},
+) {
   const events: { id: string; raw: any }[] = [];
   const logs: string[] = [];
+  const store = options.store ?? formStore();
   const sink: ChannelSink = {
     receive: async (id, raw) => {
       if (options.fail?.(id)) throw new Error("database is locked");
@@ -38,9 +52,12 @@ function memorySink(options: { lastAlive?: number; newest?: Record<string, strin
     threads: async (place) => options.threads?.[place] ?? [],
     places: async () => Object.keys(options.newest ?? {}),
     lastAlive: () => options.lastAlive,
+    form: async (name) => structuredClone(store.forms.get(name)),
+    formOpened: async (id, opening) => void store.openings.set(id, structuredClone(opening)),
+    formOpening: async (id) => structuredClone(store.openings.get(id)),
     log: (text, data) => logs.push(`${text} ${JSON.stringify(data ?? {})}`),
   };
-  return { sink, events, logs };
+  return { sink, events, logs, store };
 }
 
 async function until(check: () => boolean, ms = 5000): Promise<void> {
@@ -75,7 +92,7 @@ async function setUp() {
 /** A started channel on the fake Slack, and the sink it stores into. */
 async function connect(options: Parameters<typeof memorySink>[0] = {}) {
   const { fake, channel, dir } = await setUp();
-  const { sink, events, logs } = memorySink(options);
+  const { sink, events, logs, store } = memorySink(options);
   await channel.start(sink);
   /** Send events over the socket and wait until the channel stored `stored` more of them. */
   const deliver = async (sent: Record<string, unknown>[], stored = sent.length) => {
@@ -86,7 +103,7 @@ async function connect(options: Parameters<typeof memorySink>[0] = {}) {
   };
   /** One event over the socket, translated. */
   const receive = async (event: Record<string, unknown>): Promise<Happening[]> => channel.translate((await deliver([event]))[0]!.raw);
-  return { fake, channel, sink, events, logs, deliver, receive, dir };
+  return { fake, channel, sink, events, logs, deliver, receive, dir, store };
 }
 
 describe("receiving", () => {
@@ -152,7 +169,7 @@ describe("receiving", () => {
       channel: { id: GENERAL.id, name: "general" },
       container: { type: "message", message_ts: TS, channel_id: GENERAL.id },
       trigger_id: "13345224609.738474920.1",
-      actions: [{ action_id: "approve", type: "button", value: "yes" }],
+      actions: [{ action_id: "approve", block_id: "b1", type: "button", text: { type: "plain_text", text: "Approve", emoji: true }, value: "yes", action_ts: "1793080270.000200" }],
     });
     await until(() => fake.acked(command) && fake.acked(button));
     expect(events.map((event) => event.id)).toEqual(["slash_commands:13345224609.738474920.8088930838d88f008e0", "interactive:13345224609.738474920.1"]);
@@ -161,8 +178,219 @@ describe("receiving", () => {
       { kind: "command", place: { address: "slack:#C0GENERAL", name: "general" }, person: { address: "slack:@U0ALICE", name: "Alice" }, fromMe: false, text: "/pots status" },
     ]);
     expect(await channel.translate(events[1]!.raw)).toMatchObject([
-      { kind: "interaction", place: { address: "slack:#C0GENERAL" }, message: `slack:#C0GENERAL/${TS}`, person: { address: "slack:@U0ALICE" }, text: "block_actions" },
+      {
+        kind: "interaction",
+        place: { address: "slack:#C0GENERAL" },
+        message: `slack:#C0GENERAL/${TS}`,
+        person: { address: "slack:@U0ALICE" },
+        text: 'clicked button "Approve" (action_id approve, value yes)',
+      },
     ]);
+  });
+});
+
+/** A Slack modal as the bot stores it with pots form add, with its own private_metadata. */
+const VIEW = {
+  type: "modal",
+  callback_id: "deploy",
+  title: { type: "plain_text", text: "Deploy" },
+  submit: { type: "plain_text", text: "Deploy" },
+  private_metadata: "release 2.1",
+  blocks: [
+    {
+      type: "input",
+      block_id: "env_block",
+      label: { type: "plain_text", text: "Environment" },
+      element: {
+        type: "static_select",
+        action_id: "env",
+        options: [
+          { text: { type: "plain_text", text: "Test" }, value: "test" },
+          { text: { type: "plain_text", text: "Production" }, value: "prod" },
+        ],
+      },
+    },
+    { type: "input", block_id: "why_block", label: { type: "plain_text", text: "Why" }, element: { type: "plain_text_input", action_id: "why", multiline: true } },
+    { type: "input", block_id: "who_block", label: { type: "plain_text", text: "Reviewer" }, element: { type: "users_select", action_id: "who" } },
+  ],
+};
+
+let triggers = 0;
+
+/** A block_actions payload as Slack sends it for a button on the bot's message in #general. */
+function click(actions: Record<string, unknown>[]) {
+  return {
+    type: "block_actions",
+    user: { id: ALICE.id, username: "alice", name: "alice", team_id: "T0LAB" },
+    api_app_id: "A0TEST",
+    token: VERIFICATION_TOKEN,
+    container: { type: "message", message_ts: TS, channel_id: GENERAL.id, is_ephemeral: false },
+    trigger_id: `13345224609.738474920.${++triggers}`,
+    team: { id: "T0LAB", domain: "lab" },
+    enterprise: null,
+    is_enterprise_install: false,
+    channel: { id: GENERAL.id, name: "general" },
+    message: { type: "message", user: "UBOT", bot_id: "BBOT", app_id: "A0TEST", text: "Where to?", ts: TS, team: "T0LAB", blocks: [] },
+    state: { values: {} },
+    response_url: "https://hooks.slack.com/actions/T0LAB/1/2",
+    actions,
+  };
+}
+
+const button = (action_id: string, label: string, value?: string) => ({
+  action_id,
+  block_id: "choices",
+  text: { type: "plain_text", text: label, emoji: true },
+  ...(value !== undefined ? { value } : {}),
+  type: "button",
+  action_ts: "1793080270.000200",
+});
+
+describe("buttons and forms", () => {
+  it("says which button was clicked or what was chosen in a menu, and opens no form", async () => {
+    const { fake, channel, events } = await connect();
+    const sent = fake.send("interactive", click([button("deploy:test", "Test environment", "test")]));
+    const chosen = fake.send(
+      "interactive",
+      click([
+        {
+          action_id: "deploy:where",
+          block_id: "choices",
+          type: "static_select",
+          selected_option: { text: { type: "plain_text", text: "Production" }, value: "prod" },
+          action_ts: "1793080271.000200",
+        },
+      ]),
+    );
+    await until(() => fake.acked(sent) && fake.acked(chosen));
+    expect(await channel.translate(events[0]!.raw)).toMatchObject([
+      { kind: "interaction", message: `slack:#C0GENERAL/${TS}`, person: { address: "slack:@U0ALICE" }, text: 'clicked button "Test environment" (action_id deploy:test, value test)' },
+    ]);
+    expect(await channel.translate(events[1]!.raw)).toMatchObject([{ kind: "interaction", text: 'chose in static_select deploy:where: "Production" (value prod)' }]);
+    expect(fake.called("views.open")).toEqual([]);
+  });
+
+  it("opens a stored form at once with the click's trigger, and its submission gets its place and message back after a restart", async () => {
+    const { fake, channel, events, store, dir } = await connect();
+    store.forms.set("deploy", VIEW);
+    let views = 0;
+    fake.route("views.open", (params) => ({ view: { id: `V0VIEW${++views}`, team_id: "T0LAB", ...JSON.parse(params.view!) } }));
+    const payload = click([button("form:deploy:prod", "Fill in")]);
+    const envelope = fake.send("interactive", payload);
+    await until(() => fake.acked(envelope) && fake.called("views.open").length === 1);
+
+    const open = fake.called("views.open")[0]!;
+    expect(open.auth).toBe(`Bearer ${BOT_TOKEN}`);
+    expect(open.params.trigger_id).toBe(payload.trigger_id);
+    const { private_metadata: own, ...rest } = VIEW;
+    const view = JSON.parse(open.params.view!);
+    expect(view).toEqual({ ...rest, private_metadata: expect.stringMatching(/^pots-form:/) });
+    // The opening is kept before the form opens, under the ID in private_metadata, with the view's own value.
+    const id = view.private_metadata.slice("pots-form:".length);
+    expect(store.openings.get(id)).toEqual({
+      form: "deploy",
+      extra: "prod",
+      place: "slack:#C0GENERAL",
+      message: `slack:#C0GENERAL/${TS}`,
+      person: "slack:@U0ALICE",
+      data: { action_id: "form:deploy:prod", label: "Fill in", private_metadata: own },
+    });
+    expect(events[0]!.raw.form).toEqual({ name: "deploy", extra: "prod", action_id: "form:deploy:prod", opened: id });
+    // The click itself is only logged; the submission is what wakes the bot.
+    expect(await channel.translate(events[0]!.raw)).toMatchObject([
+      { kind: "form_opened", message: `slack:#C0GENERAL/${TS}`, text: 'opened form deploy for them: clicked button "Fill in" (action_id form:deploy:prod)' },
+    ]);
+
+    // The gateway restarts while the form is open: a new channel, with what the gateway keeps.
+    await channel.stop();
+    const again = createChannel({ id: "slack", type: "slack", secrets: join(dir, "slack.env") }, { botDir: dir, botName: "Pots", log: () => {} }, fake.api);
+    cleanup.push(() => again.stop());
+    const after = memorySink({ store });
+    await again.start(after.sink);
+    const submitted = fake.send("interactive", {
+      type: "view_submission",
+      team: { id: "T0LAB", domain: "lab" },
+      user: { id: ALICE.id, username: "alice", name: "alice", team_id: "T0LAB" },
+      api_app_id: "A0TEST",
+      trigger_id: "13345224609.738474920.900",
+      view: {
+        ...view,
+        id: "V0VIEW1",
+        team_id: "T0LAB",
+        state: {
+          values: {
+            env_block: { env: { type: "static_select", selected_option: { text: { type: "plain_text", text: "Production", emoji: true }, value: "prod" } } },
+            why_block: { why: { type: "plain_text_input", value: "the fix for login\nand the new logo" } },
+            who_block: { who: { type: "users_select", selected_user: BOB.id } },
+          },
+        },
+        hash: "1793080280.abcd",
+        root_view_id: "V0VIEW1",
+        app_id: "A0TEST",
+        bot_id: "BBOT",
+      },
+      response_urls: [],
+      is_enterprise_install: false,
+    });
+    await until(() => fake.acked(submitted));
+    // The ack has no response_action, so Slack closes the form.
+    expect(fake.acks.find((ack) => ack.envelope_id === submitted)!.payload ?? {}).toEqual({});
+    expect(after.events[0]!.raw.opening).toEqual(store.openings.get(id));
+    expect(await again.translate(after.events[0]!.raw)).toEqual([
+      expect.objectContaining({
+        kind: "form",
+        place: { address: "slack:#C0GENERAL", kind: "channel", name: "general" },
+        message: `slack:#C0GENERAL/${TS}`,
+        person: { address: "slack:@U0ALICE", name: "Alice", realName: "Alice Smith" },
+        fromMe: false,
+        text: [
+          'submitted form deploy (button "Fill in", action_id form:deploy:prod, extra: prod)',
+          'env ("Environment"): "Production" (value prod)',
+          'why ("Why"): the fix for login',
+          "  and the new logo",
+          'who ("Reviewer"): slack:@U0BOB',
+          `private_metadata: ${own}`,
+        ].join("\n"),
+      }),
+    ]);
+  });
+
+  it("acts as any other click when the form is not stored, or is not a Slack form, and says so", async () => {
+    const { fake, channel, events, store } = await connect();
+    store.forms.set("ask", { title: "Ask", custom_id: "ask", components: [] });
+    const missing = fake.send("interactive", click([button("form:nope:1", "Fill in")]));
+    const other = fake.send("interactive", click([button("form:ask", "Ask")]));
+    await until(() => fake.acked(missing) && fake.acked(other));
+    expect(fake.called("views.open")).toEqual([]);
+    expect(store.openings.size).toBe(0);
+    expect(await channel.translate(events[0]!.raw)).toMatchObject([
+      { kind: "interaction", text: 'clicked button "Fill in" (action_id form:nope:1), and no form opened: no form nope is stored (pots form list shows the forms)' },
+    ]);
+    expect(await channel.translate(events[1]!.raw)).toMatchObject([
+      { kind: "interaction", text: 'clicked button "Ask" (action_id form:ask), and no form opened: the form ask is a Discord form, and this is Slack' },
+    ]);
+  });
+
+  it("tells the bot at once, with Slack's answer and no token, when Slack does not open a form", async () => {
+    const { fake, channel, events, store, logs } = await connect();
+    store.forms.set("deploy", { ...VIEW, title: { type: "plain_text", text: "A title much longer than Slack takes" } });
+    fake.route("views.open", () => ({
+      ok: false,
+      error: "invalid_arguments",
+      response_metadata: { messages: ["[ERROR] must be less than 25 characters [json-pointer:/view/title/text]"] },
+    }));
+    const envelope = fake.send("interactive", click([button("form:deploy", "Fill in")]));
+    await until(() => fake.acked(envelope) && events.length === 2);
+    const [clicked, failed] = events;
+    expect(failed!.id).toBe(`form-failed:${clicked!.raw.form.opened}`);
+    const [happening] = await channel.translate(failed!.raw);
+    expect(happening).toMatchObject({ kind: "form", message: `slack:#C0GENERAL/${TS}`, person: { address: "slack:@U0ALICE" } });
+    expect(happening!.text).toBe(
+      'the form deploy did not open after they clicked button "Fill in" (action_id form:deploy). Slack said: An API error occurred: invalid_arguments. ' +
+        `Slack's answer: {"error":"invalid_arguments","response_metadata":{"messages":["[ERROR] must be less than 25 characters [json-pointer:/view/title/text]"]}}`,
+    );
+    const everything = JSON.stringify([events, logs, happening]);
+    for (const secret of [BOT_TOKEN, APP_TOKEN, VERIFICATION_TOKEN]) expect(everything).not.toContain(secret);
   });
 });
 
@@ -573,6 +801,23 @@ describe("sending", () => {
     expect(fake.called("files.getUploadURLExternal")[0]!.params).toEqual({ filename: "report.txt", length: "9" });
     expect(fake.uploads.get("F0UPLOAD1")).toBe("all green");
     expect(fake.called("files.completeUploadExternal")[0]!.params).toEqual({ files: JSON.stringify([{ id: "F0UPLOAD1", title: "Report" }]), channel_id: GENERAL.id, thread_ts: TS });
+  });
+
+  it("gives Slack's details when it refuses a call, a send or a reaction, and never a token", async () => {
+    const { fake, channel } = await connect();
+    const messages = ["[ERROR] must be more than 0 characters [json-pointer:/blocks/0/text/text]", "[ERROR] unsupported type: botton [json-pointer:/blocks/1/elements/0/type]"];
+    fake.route("chat.postMessage", () => ({ ok: false, error: "invalid_blocks", errors: messages, response_metadata: { messages } }));
+    const refused = await channel
+      .call("chat.postMessage", { channel: GENERAL.id, blocks: [{ type: "section", text: { type: "mrkdwn", text: "" } }] })
+      .then(() => undefined, (error: Error) => error.message);
+    expect(refused).toBe(`An API error occurred: invalid_blocks. Slack's answer: ${JSON.stringify({ error: "invalid_blocks", errors: messages, response_metadata: { messages } })}`);
+    const sent = await channel.send("slack:#C0GENERAL", "hello", "tool:1").then(() => undefined, (error: Error) => error.message);
+    expect(sent).toContain("invalid_blocks");
+    expect(sent).toContain("json-pointer:/blocks/0/text/text");
+    fake.route("reactions.add", () => ({ ok: false, error: "missing_scope", needed: "reactions:write", provided: "chat:write" }));
+    const reacted = await channel.react(`slack:#C0GENERAL/${TS}`, "eyes", false).then(() => undefined, (error: Error) => error.message);
+    expect(reacted).toBe(`An API error occurred: missing_scope. Slack's answer: {"error":"missing_scope","needed":"reactions:write","provided":"chat:write"}`);
+    for (const text of [refused, sent, reacted]) for (const secret of [BOT_TOKEN, APP_TOKEN]) expect(text).not.toContain(secret);
   });
 
   it("parses only its own addresses", async () => {

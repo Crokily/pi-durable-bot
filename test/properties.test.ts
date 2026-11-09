@@ -25,6 +25,9 @@ const sink: ChannelSink = {
   threads: async () => [],
   places: async () => [],
   lastAlive: () => undefined,
+  form: async () => undefined,
+  formOpened: async () => {},
+  formOpening: async () => undefined,
   log: () => {},
 };
 

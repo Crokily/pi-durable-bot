@@ -189,6 +189,28 @@ describe("pots", { timeout: 120_000 }, () => {
     expect(plain(await pots("routine", "list"))).toBe(`No routines added.\n${fallback}`);
   });
 
+  it("stores, lists, replaces and removes forms, in Slack's or Discord's own format", async () => {
+    const plain = (text: string) => text.replace(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \w+ \([^)]*\)/g, "<time>");
+    const view = { type: "modal", title: { type: "plain_text", text: "Deploy" }, blocks: [{ type: "input", label: { type: "plain_text", text: "Why" }, element: { type: "plain_text_input", action_id: "why" } }] };
+    const modal = { title: "Ask", custom_id: "ask", components: [{ type: 18, label: "Question", component: { type: 4, custom_id: "q", style: 1 } }] };
+    expect(await pots("form", "list")).toBe("No forms stored.\n");
+    expect(await pots("form", "add", "deploy", JSON.stringify(view))).toBe('Added form deploy (slack "Deploy"). A button with the ID form:deploy or form:deploy:<extra> opens it.\n');
+    const piped = await gateway.run(["form", "add", "ask", "-"], { input: JSON.stringify(modal) });
+    expect(piped).toMatchObject({ status: 0, stdout: 'Added form ask (discord "Ask"). A button with the ID form:ask or form:ask:<extra> opens it.\n' });
+    expect(await pots("form", "add", "deploy", JSON.stringify(view))).toMatch(/^Replaced form deploy /);
+    expect(plain(await pots("form", "list"))).toBe('ask: discord "Ask", updated <time>\ndeploy: slack "Deploy", updated <time>\n');
+
+    expect(await fails("form", "add", "x", "{not json")).toBe("ERROR\n  the form must be JSON");
+    expect(await fails("form", "add", "x", '{"blocks": []}')).toBe(
+      'ERROR\n  a form is a Slack view of type modal ({"type": "modal", "title": …, "blocks": […]}) or a Discord modal\'s data ({"title": …, "components": […]})',
+    );
+    expect(await fails("form", "add", "a:b", JSON.stringify(view))).toBe('ERROR\n  bad form name "a:b": use letters, digits, "-" and "_", at most 64 characters');
+    expect(await fails("form", "remove", "nope")).toBe('ERROR\n  there is no form "nope"');
+    expect(await pots("form", "remove", "deploy")).toBe("Removed form deploy.\n");
+    expect(await pots("form", "remove", "ask")).toBe("Removed form ask.\n");
+    expect(await pots("form", "list")).toBe("No forms stored.\n");
+  });
+
   it("shows the context and turns the page", async () => {
     const context = JSON.parse(await pots("context")) as { used: number; window: number; compactAt: number; cache: { requests: number }; text: string };
     expect(context.window).toBe(128_000);

@@ -8,6 +8,8 @@ import { FILE_WAIT_MS, MAX_FILE_BYTES } from "../src/gateway/files.ts";
 import { MessageLog } from "../src/gateway/log.ts";
 import { Waker } from "../src/gateway/waker.ts";
 import type { PlaceWake } from "../src/core/wake.ts";
+import type { Happening } from "../src/core/channel.ts";
+import { renderPlaceWake } from "../src/bot/prompt.ts";
 import { advance, FILES_DIR, logHappening, MemoryChannel, message, type Recorder, settle, withCore } from "./support/core.ts";
 
 // The waker on Effect's TestClock: the debounce and the judge's retries happen at exact times, without waiting.
@@ -362,6 +364,94 @@ describe("at once", () => {
         assert.deepStrictEqual(seen(recorder), [{ reason: "mention", texts: ["@bot from before the start"], at: 3_000 }]);
       }),
     ));
+});
+
+describe("answers to the bot", () => {
+  const connect = Effect.gen(function* () {
+    yield* (yield* Channels).connect([new MemoryChannel()], () => ({}) as ChannelSink);
+  });
+  /** A judge that says no, and counts how often it is asked. */
+  const saysNo = () => {
+    const judge = { asked: 0, judge: async () => ((judge.asked += 1), { related: 0, respond: 0 }) };
+    return judge;
+  };
+  /** Something someone did with a message of the place #general. */
+  const used = (kind: string, on: string, text: string): Happening => ({
+    kind,
+    at: 0,
+    place: { address: "mem:#general", name: "general", kind: "channel" },
+    message: on,
+    person: { address: "mem:@alice", name: "alice" },
+    fromMe: false,
+    text,
+  });
+
+  it.effect("a click on the bot's own message wakes it at once, not through the judge, and the wake says which button and who", () => {
+    const judge = saysNo();
+    return withCore({ judge }, (recorder) =>
+      Effect.gen(function* () {
+        yield* connect;
+        const waker = yield* Waker;
+        waker.setTarget(recorder.target());
+        const asked = message("general", "Where to?", { fromMe: true });
+        yield* logHappening(asked);
+        yield* waker.add(yield* logHappening(used("interaction", asked.message!, 'clicked button "Test" (action_id deploy:test, value test)')));
+        yield* settleUntil(() => recorder.wakes.length === 1);
+        assert.deepStrictEqual(
+          recorder.wakes.map(({ wake, at }) => ({ reason: wake.reason, at, message: wake.events[0]!.message })),
+          [{ reason: "interaction", at: 0, message: asked.message }],
+        );
+        assert.strictEqual(judge.asked, 0);
+        const text = renderPlaceWake(recorder.wakes[0]!.wake, { used: 1000, window: 200_000, compactAt: 180_000 });
+        assert.include(text, "[wake] someone used a button or a menu on your message, or submitted your form");
+        assert.include(text, `interaction, alice (mem:@alice), message ${asked.message}`);
+        assert.include(text, 'Text: clicked button "Test" (action_id deploy:test, value test)');
+      }),
+    );
+  });
+
+  it.effect("a click on someone else's message waits for people to stop, and the judge decides", () => {
+    const judge = saysNo();
+    return withCore({ judge }, (recorder) =>
+      Effect.gen(function* () {
+        yield* connect;
+        const waker = yield* Waker;
+        waker.setTarget(recorder.target());
+        const theirs = message("general", "Vote here", { person: "bob" });
+        yield* logHappening(theirs);
+        const event = yield* logHappening(used("interaction", theirs.message!, 'clicked button "Yes" (action_id vote:yes)'));
+        yield* waker.add(event);
+        yield* settle;
+        assert.strictEqual(recorder.wakes.length, 0);
+        yield* advance(3_000);
+        assert.strictEqual(judge.asked, 1);
+        assert.strictEqual(recorder.wakes.length, 0);
+        assert.deepStrictEqual(yield* decisions([event.id]), ["decided"]);
+      }),
+    );
+  });
+
+  it.effect("a form's submission wakes the bot at once, also when the log does not have the message; the click that opened it is only logged", () => {
+    const judge = saysNo();
+    return withCore({ judge }, (recorder, sql) =>
+      Effect.gen(function* () {
+        yield* connect;
+        const waker = yield* Waker;
+        waker.setTarget(recorder.target());
+        const opened = yield* logHappening(used("form_opened", "mem:#general/m-unknown", "opened form deploy for them: clicked button \"Fill in\""));
+        assert.strictEqual(opened, undefined);
+        const row = yield* Effect.promise(() => sql.get<{ wake: string }>("SELECT wake FROM gw_events WHERE kind = 'form_opened'"));
+        assert.strictEqual(row?.wake, "log");
+        yield* waker.add(yield* logHappening(used("form", "mem:#general/m-unknown", "submitted form deploy (extra: prod)\nwhy: the login fix")));
+        yield* settleUntil(() => recorder.wakes.length === 1);
+        assert.deepStrictEqual(
+          recorder.wakes.map(({ wake, at }) => ({ reason: wake.reason, at, text: wake.events[0]!.text })),
+          [{ reason: "interaction", at: 0, text: "submitted form deploy (extra: prod)\nwhy: the login fix" }],
+        );
+        assert.strictEqual(judge.asked, 0);
+      }),
+    );
+  });
 });
 
 describe("reasons", () => {

@@ -24,9 +24,17 @@ export interface WakerSettings {
 /** When the judge fails, it is asked again after these waits. */
 const JUDGE_RETRY_MS = [2_000, 8_000] as const;
 
-/** An event that ends its group's wait: it mentions the bot, or it is in a one-to-one DM. */
+/**
+ * Someone answered the bot itself: a button or a menu on a message the bot sent, or a form of the bot's (submitted, or
+ * one that did not open). The person waits for the bot, and the bot asked, so no judge.
+ */
+function answersMe(event: UndecidedEvent): boolean {
+  return event.kind === "form" || (event.kind === "interaction" && event.message_from_me === 1);
+}
+
+/** An event that ends its group's wait: it mentions the bot, it is in a one-to-one DM, or it answers the bot. */
 function atOnce(event: UndecidedEvent): boolean {
-  return event.mentions_me === 1 || event.place_kind === "dm";
+  return event.mentions_me === 1 || event.place_kind === "dm" || answersMe(event);
 }
 
 /** How long a group of events waits: until debounceMs after the last event, but never past debounceMaxMs after the first. */
@@ -50,9 +58,10 @@ interface Batch {
 
 /**
  * Decides when new events wake the bot. Per place, it waits until people stop (debounce); an event that mentions the
- * bot, or one in a DM, ends the wait at once when its channel runs. Then:
+ * bot, one in a DM, or one that answers the bot (a button or a menu on its message, its form) ends the wait at once when
+ * its channel runs. Then:
  * 1. the bot works on this place now → steer;
- * 2. an event @-mentions the bot, or the place is a one-to-one DM → wake;
+ * 2. an event @-mentions the bot, the place is a one-to-one DM, or an event answers the bot → wake;
  * 3. otherwise the judge decides; with no judge, every event wakes the bot.
  * A wake gives each event with its text, the start of its thread and its files. Their downloads start when the events
  * come; once the wake would go out, it waits for them at most FILE_WAIT_MS (see files.ts). The groups of a place are
@@ -133,6 +142,7 @@ export class Waker extends Context.Service<
           if (bot.isWorkingOn(place.address)) return yield* deliver("steer", "steer");
           if (place.kind === "dm") return yield* deliver("dm", "dm");
           if (events.some((event) => event.mentions_me)) return yield* deliver("mention", "mention");
+          if (events.some(answersMe)) return yield* deliver("interaction", "interaction");
 
           const judge = config.judge();
           if (!judge) return yield* deliver("heard", "heard");
@@ -293,10 +303,10 @@ export class Waker extends Context.Service<
             batch.events.push(event);
             batch.ids.add(event.id);
             if (Option.isSome(span)) batch.spans.push(span.value);
-            // A mention or a DM: someone waits for the bot, so the group is decided now, with this event in it. What
-            // comes after starts the next group, and reaches the bot while it works on the place (steer). Before the
-            // event's channel runs, as for events from before a start, the group waits as others do, so its files can be
-            // saved.
+            // A mention, a DM or an answer to the bot: someone waits for the bot, so the group is decided now, with this
+            // event in it. What comes after starts the next group, and reaches the bot while it works on the place
+            // (steer). Before the event's channel runs, as for events from before a start, the group waits as others do,
+            // so its files can be saved.
             if (atOnce(event) && channels.running(event.channel)) {
               yield* FiberMap.remove(timers, key);
               return yield* flush(key);

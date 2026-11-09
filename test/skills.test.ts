@@ -21,9 +21,10 @@ afterAll(() => rmSync(work, { recursive: true, force: true }));
 const NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 function frontMatter(file: string): Record<string, string> {
-  const match = /^---\n([\s\S]*?)\n---\n/.exec(readFileSync(file, "utf8"));
+  // A Windows checkout can have CRLF line ends.
+  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/.exec(readFileSync(file, "utf8"));
   if (!match) throw new Error(`${file} has no front matter`);
-  return Object.fromEntries(match[1]!.split("\n").map((line) => [line.slice(0, line.indexOf(":")), line.slice(line.indexOf(":") + 1).trim()]));
+  return Object.fromEntries(match[1]!.split(/\r?\n/).map((line) => [line.slice(0, line.indexOf(":")), line.slice(line.indexOf(":") + 1).trim()]));
 }
 
 interface Loaded {

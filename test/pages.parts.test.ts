@@ -62,7 +62,8 @@ describe("opening a page file", () => {
   });
 
   it("refuses a file, or a folder above it, swapped for a link between the check and the open", async () => {
-    const root = realpathSync(temp());
+    // The native realpath, as the server's: on Windows the other one keeps short names such as RUNNER~1.
+    const root = realpathSync.native(temp());
     const outside = temp();
     writeFileSync(join(outside, "secret.txt"), "outside-secret");
     mkdirSync(join(outside, "sub"));
@@ -113,7 +114,7 @@ describe("opening a page file", () => {
     writeFileSync(join(bot, "pages", "report", "x.html"), "the other page");
     if (!linkOrSkip(() => symlinkSync(join(bot, "pages", "report", "x.html"), join(bot, "pages", "Report", "x.html"), "file"))) return;
     const folder = await pageFolder(bot, "Report");
-    expect(folder).toBe(join(realpathSync(bot), "pages", "Report"));
+    expect(folder).toBe(join(realpathSync.native(bot), "pages", "Report"));
     expect(await openFile(folder!, ["x.html"], false, true)).toBeUndefined();
     expect(await pageFolder(bot, "REPORT")).toBeUndefined();
   });

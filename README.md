@@ -358,6 +358,8 @@ npm run tla               # the TLA+ models of the inbox, outbox and waker (need
   </picture>
 </a>
 
+[![As seen on Open Source Alternatives](https://www.opensourcealternatives.to/badge-osa.svg)](https://www.opensourcealternatives.to)
+
 ## Built on
 
 - [pi-durable](https://github.com/earendil-works/pi) for the durable agent runtime

@@ -18,6 +18,8 @@ import type { BotPages, OpenedLink } from "./store.ts";
 export const MAX_BODY = 64 * 1024;
 /** The cache of a file: the browser may keep it, but asks again each time, and no shared cache keeps it. */
 const FILE_CACHE = "private, no-cache";
+/** The Server-Timing name of a page's version, as the kit reads it. */
+export const VERSION_TIMING = "pots-version";
 const TOKEN = "[A-Za-z0-9_-]{16,128}";
 const PAGE_PATH = new RegExp(`^/p/(${TOKEN})(/.*)?$`);
 const SECRET_PATH = new RegExp(`^/s/(${TOKEN})/?$`);
@@ -104,10 +106,16 @@ export class PageRequests {
     const folder = await pageFolder(bot.dir, link.page);
     const segments = pathSegments(sub);
     if (!folder || !segments) return text(response, 404, "Not found.");
+    // An HTML file says the page's version in a header, bound to this response, which the kit reads: a version read
+    // later could be of a page that changed meanwhile. The version is looked at before and after the open; when the
+    // page changed between them, no header goes, and the kit asks __pots/info.
+    const before = await bot.version(link.page);
     const resolved = await openFile(folder, segments, sub === "" || sub.endsWith("/"), true);
     if (!resolved) return text(response, 404, "Not found.");
     if (resolved.kind === "folder") return redirect(response, `${sub.split("/").pop()}/${query}`);
-    await sendFile(request, response, resolved);
+    if (!contentType(resolved.path).startsWith("text/html")) return sendFile(request, response, resolved);
+    const after = await bot.version(link.page);
+    await sendFile(request, response, resolved, before !== undefined && before === after ? after : undefined);
   }
 
   async #kit(request: IncomingMessage, response: ServerResponse, sub: string): Promise<void> {
@@ -230,8 +238,10 @@ function redirect(response: ServerResponse, location: string): void {
 /**
  * An open file, read from its descriptor only, with a validator so the browser can ask whether it changed, and one
  * byte range when asked (video needs it). The descriptor is closed when the file is sent, or at once when no body goes.
+ * With a page version (an HTML file of a page): the version in a Server-Timing header, and no validator and no cache,
+ * so the browser always gets the header with the file, never a kept copy with an older one.
  */
-async function sendFile(request: IncomingMessage, response: ServerResponse, file: Extract<Resolved, { kind: "file" }>): Promise<void> {
+async function sendFile(request: IncomingMessage, response: ServerResponse, file: Extract<Resolved, { kind: "file" }>, version?: string): Promise<void> {
   const { size, handle } = file;
   const etag = `W/"${size.toString(16)}-${Math.floor(file.mtimeMs).toString(16)}"`;
   const headers: Record<string, string | number> = {
@@ -241,12 +251,19 @@ async function sendFile(request: IncomingMessage, response: ServerResponse, file
     "last-modified": new Date(file.mtimeMs).toUTCString(),
     "accept-ranges": "bytes",
   };
+  const html = contentType(file.path).startsWith("text/html");
+  if (html) {
+    headers["cache-control"] = "no-store";
+    delete headers.etag;
+    delete headers["last-modified"];
+    if (version !== undefined) headers["server-timing"] = `${VERSION_TIMING};desc="${version}"`;
+  }
   const done = async (status: number, extra: Record<string, string | number> = {}) => {
     await handle.close().catch(() => {});
     response.writeHead(status, { ...headers, ...extra });
     response.end();
   };
-  if (request.headers["if-none-match"] === etag) return done(304);
+  if (!html && request.headers["if-none-match"] === etag) return done(304);
   let start = 0;
   let end = size - 1;
   let status = 200;

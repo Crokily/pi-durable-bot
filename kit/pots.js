@@ -149,8 +149,23 @@
   }
 
   /**
-   * The page's version from __pots/info, read once, when the page loads: answers carry the version of the page the
-   * person sees, so a version read later, after the page may have changed, would be wrong. A network failure or a
+   * The page's version as Pots sent it with this HTML file: the description of its "pots-version" Server-Timing entry,
+   * which the browser keeps with the page's own load (performance.getEntriesByType("navigation")). null when there is
+   * none: a browser without Server-Timing, or a page that changed while Pots sent it.
+   */
+  function servedVersion(entries) {
+    var navigation = entries && entries[0];
+    var timings = (navigation && navigation.serverTiming) || [];
+    for (var i = 0; i < timings.length; i++) {
+      if (timings[i] && timings[i].name === "pots-version" && timings[i].description) return String(timings[i].description);
+    }
+    return null;
+  }
+
+  /**
+   * When the HTML file came without its version: the page's version from __pots/info, read once, when the kit starts.
+   * Answers carry the version of the page the person sees, so a version read later, after the page may have changed,
+   * would be wrong. A network failure or a
    * server error is not tried again (VERSION_DELAYS is empty: a later read could see a newer page); it rejects with
    * {status} (0 when there was no answer).
    *
@@ -261,6 +276,7 @@
     questionAnswer: questionAnswer,
     answersFrom: answersFrom,
     retryable: retryable,
+    servedVersion: servedVersion,
     readVersion: readVersion,
     deliver: deliver,
   };
@@ -269,13 +285,17 @@
 
   var base = pageBase(location.pathname) || new URL("./", location.href).pathname;
   /**
-   * The version of the page as it was loaded: read once, when the kit starts, and kept, also when it failed. A later
-   * read could see a newer page than the one on screen.
+   * The version of the page as it was loaded: the one Pots sent with the HTML file, or else read once, as soon as the
+   * kit runs, and kept, also when it failed. A later read could see a newer page than the one on screen.
    */
   var loaded = null;
   function loadVersion() {
     if (!loaded) {
-      loaded = readVersion(base, { fetch: function (url, init) { return fetch(url, init); }, sleep: sleep });
+      var served = null;
+      try {
+        served = servedVersion(performance.getEntriesByType("navigation"));
+      } catch (error) {}
+      loaded = served ? Promise.resolve(served) : readVersion(base, { fetch: function (url, init) { return fetch(url, init); }, sleep: sleep });
       loaded.then(null, function () {});
     }
     return loaded;
@@ -596,12 +616,12 @@
       if (event.target && event.target.closest && event.target.closest("form")) dirty = true;
     });
     var refresh = document.body.getAttribute("data-pots-refresh");
-    // The version of the page on screen, read now, for answers sent later.
-    loadVersion();
     loadSources();
     if (refresh !== null) watch(Number(refresh) || 5);
   }
 
+  // The version of the page on screen, for answers sent later: now, not when the document is ready, which can be later.
+  loadVersion();
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start);
   else start();
 })(typeof globalThis !== "undefined" ? globalThis : this);

@@ -194,6 +194,22 @@ describe("pages", { timeout: 120_000 }, () => {
     expect((await info()).version).not.toBe(second.version);
   });
 
+  it("sends the page's version with each HTML file, never from a kept copy, and keeps other files cacheable", async () => {
+    const version = async () => (JSON.parse((await http("GET", `${pathOf(demo.url)}__pots/info`)).body) as { version: string }).version;
+    const page = await http("GET", pathOf(demo.url));
+    expect(page.headers["server-timing"]).toBe(`pots-version;desc="${await version()}"`);
+    expect(page.headers["cache-control"]).toBe("no-store");
+    expect(page.headers.etag).toBeUndefined();
+    const css = await http("GET", `${pathOf(demo.url)}style.css`);
+    expect(css.headers["server-timing"]).toBeUndefined();
+    expect(css.headers.etag).toBeDefined();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    writeFileSync(join(gateway.botDir, "pages", "demo", "style.css"), "h1 { color: teal }");
+    const again = await http("GET", pathOf(demo.url));
+    expect(again.headers["server-timing"]).toBe(`pots-version;desc="${await version()}"`);
+    expect(again.headers["server-timing"]).not.toBe(page.headers["server-timing"]);
+  });
+
   it("wakes the bot once per submission, also for a retry and for posts at the same time", async () => {
     const submit = (body: unknown) => http("POST", `${pathOf(demo.url)}__pots/submit`, { body: typeof body === "string" ? body : JSON.stringify(body) });
     const version = (JSON.parse((await http("GET", `${pathOf(demo.url)}__pots/info`)).body) as { version: string }).version;

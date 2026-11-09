@@ -134,6 +134,16 @@ describe("the page kit", () => {
     expect(gone.calls).toHaveLength(1);
   });
 
+  it("takes the version Pots sent with the HTML file, from the page's own load entry", () => {
+    const load = (serverTiming: unknown) => [{ entryType: "navigation", serverTiming }];
+    expect(kit.servedVersion(load([{ name: "cache", description: "hit" }, { name: "pots-version", description: "0a1b2c3d4e5f6a7b" }]))).toBe("0a1b2c3d4e5f6a7b");
+    // A browser without Server-Timing, or a page that changed while Pots sent it: the kit asks __pots/info.
+    expect(kit.servedVersion(load([]))).toBeNull();
+    expect(kit.servedVersion(load(undefined))).toBeNull();
+    expect(kit.servedVersion([])).toBeNull();
+    expect(kit.servedVersion(undefined)).toBeNull();
+  });
+
   it("reads the page's version once, when it loads, and never again later", async () => {
     /** A fake __pots/info: each read takes the next result, a version, a status or "throw" (no connection). */
     const info = (results: (string | number | "throw")[]) => {

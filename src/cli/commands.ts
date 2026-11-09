@@ -15,8 +15,9 @@ import * as ServiceLayer from "./service.ts";
 import { traceCommand } from "./trace.ts";
 
 // pots: one command for people and for the bots. People set up and run bots (init, chat, service, status); bots and
-// their scripts act in their channels (send, react, call, wake, routine, context, turn-page, children). Each command loads only
-// what it uses: the agent's scripts run pots often, and only pots start needs the gateway and the agent.
+// their scripts act in their channels (send, react, call, wake, routine, form, context, turn-page, children). Each
+// command loads only what it uses: the agent's scripts run pots often, and only pots start needs the gateway and the
+// agent.
 
 const { version } = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { version: string };
 

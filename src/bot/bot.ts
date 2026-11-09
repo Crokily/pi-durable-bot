@@ -23,6 +23,7 @@ import type { Judge } from "../core/judge.ts";
 import { formatTime } from "../core/time.ts";
 import type { Delivered, PlaceWake, WakeTarget } from "../core/wake.ts";
 import type { Print, RunCommand } from "../gateway/config.ts";
+import { renderForms } from "../gateway/forms.ts";
 import { Gateway, type TimersHandle } from "../gateway/gateway.ts";
 import { describeSchedule, describeWork, type RoutineInput, renderRoutines } from "../gateway/routines.ts";
 import type { DueTimer } from "../gateway/timers.ts";
@@ -632,6 +633,21 @@ export class Bot implements WakeTarget {
         const name = text(body.name, "name");
         if (!(await this.#timers.removeRoutine(name))) throw new Error(`there is no routine ${JSON.stringify(name)}`);
         return `Removed routine ${name}.`;
+      },
+      "GET /forms": async () => {
+        const forms = await this.#gateway.forms.list();
+        return { forms, text: renderForms(forms) };
+      },
+      "POST /forms/add": async (body: Record<string, unknown>) => {
+        const name = text(body.name, "name");
+        if (body.form === undefined) throw new Error('"form" is required');
+        const { form, replaced } = await this.#gateway.forms.add(name, body.form);
+        return `${replaced ? "Replaced" : "Added"} form ${form.name} (${form.platform}${form.title !== undefined ? ` "${form.title}"` : ""}). A button with the ID form:${form.name} or form:${form.name}:<extra> opens it.`;
+      },
+      "POST /forms/remove": async (body: Record<string, unknown>) => {
+        const name = text(body.name, "name");
+        if (!(await this.#gateway.forms.remove(name))) throw new Error(`there is no form ${JSON.stringify(name)}`);
+        return `Removed form ${name}.`;
       },
       "GET /context": async () => {
         const [status, cache] = await Promise.all([this.#agent.contextStatus(), this.#agent.cacheUse()]);

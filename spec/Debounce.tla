@@ -2,14 +2,15 @@
 (***************************************************************************)
 (* The grouping of src/gateway/waker.ts. Per place, the waker waits until  *)
 (* Quiet after the last event, but never longer than Max after the first,  *)
-(* then decides on the whole group at once. An event that mentions the bot *)
-(* or is in a DM ends the wait when it comes, with itself in the group.    *)
+(* then decides on the whole group at once. An event that mentions the bot,*)
+(* is in a DM, or answers the bot (a button or a menu on its message, its  *)
+(* form) ends the wait when it comes, with itself in the group.            *)
 (* Time is in whole seconds.                                               *)
 (*                                                                         *)
 (* Assumptions: a timer fires when it is due (a busy process can fire it a *)
-(* little later; the model does not show that delay). The channel of a     *)
-(* mention or a DM runs: before it does, the event waits as others do,     *)
-(* which Arrive models.                                                    *)
+(* little later; the model does not show that delay). The channel of such *)
+(* an event runs: before it does, the event waits as others do, which      *)
+(* Arrive models.                                                          *)
 (***************************************************************************)
 EXTENDS Naturals
 
@@ -31,7 +32,7 @@ VARIABLES
     now,
     arrived,   \* events so far, in all places
     group,     \* per place: the events that wait (n = 0: none)
-    lastWake,  \* per place: the last group the waker decided on (n = 0: none yet); atOnce: a mention or a DM ended it
+    lastWake,  \* per place: the last group the waker decided on (n = 0: none yet); atOnce: a mention, a DM or an answer ended it
     decided    \* events in decided groups, in all places
 
 vars == <<now, arrived, group, lastWake, decided>>
@@ -56,8 +57,8 @@ Arrive(p) ==
     /\ group' = [group EXCEPT ![p] = IF Waiting(p) THEN [@ EXCEPT !.last = now, !.n = @ + 1] ELSE [first |-> now, last |-> now, n |-> 1]]
     /\ UNCHANGED <<now, lastWake, decided>>
 
-\* Waker.add, for an event that mentions the bot or is in a DM: it joins the waiting group, or starts one, and the
-\* whole group is decided now.
+\* Waker.add, for an event that mentions the bot, is in a DM, or answers the bot (a button or a menu on its message,
+\* its form): it joins the waiting group, or starts one, and the whole group is decided now.
 ArriveAtOnce(p) ==
     /\ arrived < MaxEvents
     /\ now <= LastArrival
@@ -93,7 +94,7 @@ Spec == Init /\ [][Next]_vars /\ WF_vars(Tick) /\ \A p \in Places : WF_vars(Flus
 WaitLimits == \A p \in Places : Waiting(p) => now - group[p].first <= Max /\ now - group[p].last <= Quiet
 
 \* A group is decided Quiet after its last event, or Max after its first, whichever comes first, and never before; a
-\* group that a mention or a DM ended, when that event came.
+\* group that a mention, a DM or an answer ended, when that event came.
 WakeTiming ==
     \A p \in Places : lastWake[p].n > 0 =>
         lastWake[p].at = IF lastWake[p].atOnce THEN lastWake[p].last ELSE Min(lastWake[p].last + Quiet, lastWake[p].first + Max)

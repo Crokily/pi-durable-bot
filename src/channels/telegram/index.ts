@@ -199,6 +199,7 @@ class TelegramChannel implements ChannelAdapter {
       try {
         for (const update of updates) {
           await sink.receive(`update:${update.update_id}`, update);
+          if (update.callback_query) this.#answerCallback(sink, update.callback_query.id);
           offset = update.update_id + 1;
         }
         failures = 0;
@@ -207,6 +208,18 @@ class TelegramChannel implements ChannelAdapter {
         await pause("update not stored; Telegram gives it again with the next poll", error);
       }
     }
+  }
+
+  /**
+   * Answer a button press as soon as it is stored, with no text: until it is answered, Telegram shows the button
+   * loading. A press is answered once; Telegram refuses a second answer, so the bot shows a result with call instead
+   * (editMessageText, editMessageReplyMarkup or sendMessage). A press given again after a crash is answered again, and
+   * Telegram refusing that is only logged.
+   */
+  #answerCallback(sink: ChannelSink, id: string): void {
+    void this.#api("answerCallbackQuery", { callback_query_id: id }).catch((error: unknown) =>
+      sink.log("button press not answered", { error: error instanceof Error ? error.message : String(error) }),
+    );
   }
 
   /** The Bot API cannot read history. What was missed comes with the first polls, from up to 24 hours back. */
@@ -438,18 +451,26 @@ class TelegramChannel implements ChannelAdapter {
     };
   }
 
-  /** A press on a button under a message (an inline keyboard). The bot answers it with call answerCallbackQuery. */
+  /**
+   * A press on a button under a message (an inline keyboard), already answered when it was stored. The text names the
+   * button: its label, found in the message's keyboard, and its callback_data.
+   */
   #interaction(query: NonNullable<Update["callback_query"]>): Happening {
     const m = query.message;
     if (m) this.#learnTopics(m);
+    const thread = m ? this.#threadOf(m) : undefined;
+    const keyboard = (m as { reply_markup?: { inline_keyboard?: { text?: string; callback_data?: string }[][] } } | undefined)?.reply_markup?.inline_keyboard;
+    const label = query.data === undefined ? undefined : keyboard?.flat().find((button) => button.callback_data === query.data)?.text;
+    const button = `button${label !== undefined ? ` "${label}"` : ""} (callback_data ${query.data ?? "none"})`;
     return {
       kind: "interaction",
       // A button press carries no time.
       at: Date.now(),
       ...(m ? { place: this.#place(m.chat), message: this.message(String(m.chat.id), m.message_id) } : {}),
+      ...(thread ? { thread } : {}),
       person: this.#person(query.from),
       fromMe: false,
-      ...(query.data ? { text: query.data } : {}),
+      text: `clicked ${button}`,
       raw: query,
     };
   }

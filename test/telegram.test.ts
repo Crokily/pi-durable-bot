@@ -27,7 +27,17 @@ afterEach(async () => {
 });
 
 function sink(receive: ChannelSink["receive"] = async () => {}, logs: string[] = []): ChannelSink {
-  return { receive, newestMessage: async () => undefined, threads: async () => [], places: async () => [], lastAlive: () => undefined, log: (message) => logs.push(message) };
+  return {
+    receive,
+    newestMessage: async () => undefined,
+    threads: async () => [],
+    places: async () => [],
+    lastAlive: () => undefined,
+    form: async () => undefined,
+    formOpened: async () => {},
+    formOpening: async () => undefined,
+    log: (message) => logs.push(message),
+  };
 }
 
 const methods = (name: string) => telegram.calls.filter((call) => call.method === name);
@@ -72,6 +82,45 @@ describe("receiving", () => {
     const started = Date.now();
     await channel.stop();
     expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it("answers a button press as soon as it is stored, with no text, and names the button", { timeout: 10_000 }, async () => {
+    const stored: { id: string; raw: unknown }[] = [];
+    /** How many answers Telegram had when the press was stored. */
+    let answersBefore = -1;
+    const team = { id: -100200, title: "Team", type: "supergroup" };
+    const keyboard = { inline_keyboard: [[{ text: "Test", callback_data: "deploy:test" }, { text: "Production", callback_data: "deploy:prod" }]] };
+    const press = {
+      update_id: 1030,
+      callback_query: {
+        id: "4382bfdwdsb323b2d9",
+        from: { id: 111, is_bot: false, first_name: "Alice", last_name: "Smith", username: "alice", language_code: "en" },
+        message: { message_id: 40, from: BOT, chat: team, date: 1793080400, text: "Where to?", reply_markup: keyboard },
+        chat_instance: "-8212831289223871",
+        data: "deploy:prod",
+      },
+    };
+    telegram.push(press);
+    await channel.start(
+      sink(async (id, raw) => {
+        answersBefore = methods("answerCallbackQuery").length;
+        stored.push({ id, raw: JSON.parse(JSON.stringify(raw)) });
+      }),
+    );
+    await vi.waitFor(() => expect(methods("answerCallbackQuery")).toHaveLength(1), { timeout: 5_000 });
+    expect(stored.map((event) => event.id)).toEqual(["update:1030"]);
+    expect(answersBefore).toBe(0);
+    expect(methods("answerCallbackQuery")).toEqual([{ method: "answerCallbackQuery", params: { callback_query_id: "4382bfdwdsb323b2d9" }, files: {} }]);
+    expect(await channel.translate(stored[0]!.raw)).toEqual([
+      expect.objectContaining({
+        kind: "interaction",
+        place: { address: "telegram:#-100200", kind: "channel", name: "Team" },
+        message: "telegram:#-100200/40",
+        person: { address: "telegram:@111", name: "alice", realName: "Alice Smith" },
+        fromMe: false,
+        text: 'clicked button "Production" (callback_data deploy:prod)',
+      }),
+    ]);
   });
 
   it("says so when another process polls with the same token", { timeout: 10_000 }, async () => {
@@ -338,6 +387,19 @@ describe("sending", () => {
       expect.objectContaining({ kind: "message", message: "telegram:#111/30", fromMe: true, text: "the chart", files: [expect.objectContaining({ url: "telegram-file:AgAC-large", size: 700 })] }),
     ]);
     expect(await channel.translate(calls[3]!.raw)).toEqual([expect.objectContaining({ kind: "edit", message: "telegram:#111/30", fromMe: true, text: "the new chart" })]);
+  });
+
+  it("gives Telegram's description when it refuses a call, a send or a reaction, and never the token", async () => {
+    await channel.start(sink());
+    telegram.script("sendMessage", { ok: false, error_code: 400, description: "Bad Request: BUTTON_DATA_INVALID" });
+    const refused = await channel
+      .call("sendMessage", { chat_id: -100200, text: "Where to?", reply_markup: { inline_keyboard: [[{ text: "Test", callback_data: "x".repeat(65) }]] } })
+      .then(() => undefined, (error: Error) => error.message);
+    expect(refused).toBe("Telegram sendMessage: Bad Request: BUTTON_DATA_INVALID");
+    telegram.script("setMessageReaction", { ok: false, error_code: 400, description: "Bad Request: message to react not found" });
+    const reacted = await channel.react("telegram:#-100200/99", "👀", false).then(() => undefined, (error: Error) => error.message);
+    expect(reacted).toBe("Telegram setMessageReaction: Bad Request: message to react not found");
+    for (const text of [refused, reacted]) expect(text).not.toContain(TOKEN);
   });
 
   it("calls any method, and uploads a file parameter given as a local path", async () => {

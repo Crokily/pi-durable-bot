@@ -7,6 +7,7 @@ import { Channels, platform } from "./channels.ts";
 import { GatewayConfig, type GatewayOptions } from "./config.ts";
 import type { LogError } from "./errors.ts";
 import { Attachments } from "./files.ts";
+import { Forms, type StoredForm } from "./forms.ts";
 import { Inbox } from "./inbox.ts";
 import { MessageLog } from "./log.ts";
 import { Outbox, type OutboxHooks, type SendResult } from "./outbox.ts";
@@ -29,11 +30,11 @@ export function gatewayLayer(sql: Sql, options: GatewayOptions) {
   const files = Attachments.layer.pipe(Layer.provideMerge(base));
   const waker = Waker.layer.pipe(Layer.provideMerge(files));
   const inbox = Inbox.layer.pipe(Layer.provideMerge(waker));
-  const core = Layer.mergeAll(Outbox.layer, Timers.layer(sql)).pipe(Layer.provideMerge(inbox));
+  const core = Layer.mergeAll(Outbox.layer, Timers.layer(sql), Forms.layer(sql)).pipe(Layer.provideMerge(inbox));
   return Background.layer.pipe(Layer.provideMerge(core));
 }
 
-type Core = Attachments | Channels | GatewayConfig | Inbox | MessageLog | Outbox | Telemetry | Timers | WakeSpans | Waker;
+type Core = Attachments | Channels | Forms | GatewayConfig | Inbox | MessageLog | Outbox | Telemetry | Timers | WakeSpans | Waker;
 type Services = Core | Background;
 
 /** Tasks of the gateway that run in the background, and effects started by adapters' callbacks. Both stop with it. */
@@ -69,6 +70,7 @@ export class Gateway {
   #started = false;
   #stopping: Promise<void> | undefined;
   readonly timers: TimersHandle;
+  readonly forms: FormsHandle;
   /** pi's telemetry on the gateway's tracer, for the agent: its spans join the gateway's traces. */
   readonly telemetry: PiTelemetry;
 
@@ -93,6 +95,7 @@ export class Gateway {
     this.#background = services.background;
     this.#print = print;
     this.timers = new TimersHandle((effect) => this.#run(effect));
+    this.forms = new FormsHandle((effect) => this.#run(effect));
   }
 
   /** Open the gateway's tables on the bot's connection. */
@@ -279,6 +282,9 @@ export class Gateway {
       threads: (place) => this.#background.run(MessageLog.use((log) => log.threads(place))),
       places: () => this.#background.run(MessageLog.use((log) => log.places(adapter.id))),
       lastAlive: () => this.#lastAlive,
+      form: (name) => this.#background.run(Forms.use((forms) => forms.get(name))),
+      formOpened: (id, opening) => this.#background.run(Forms.use((forms) => forms.opened(adapter.id, id, opening))),
+      formOpening: (id) => this.#background.run(Forms.use((forms) => forms.opening(id))),
       log: (message, data) => this.#print(`${adapter.id}: ${message}`, data),
     };
   }
@@ -334,5 +340,26 @@ export class TimersHandle {
 
   routines(): Promise<RoutineListing> {
     return this.#run(Timers.use((timers) => timers.routines));
+  }
+}
+
+/** The forms the bot stored with pots form add, in promises. */
+export class FormsHandle {
+  readonly #run: <A, E>(effect: Effect.Effect<A, E, Services>) => Promise<A>;
+
+  constructor(run: <A, E>(effect: Effect.Effect<A, E, Services>) => Promise<A>) {
+    this.#run = run;
+  }
+
+  add(name: string, form: unknown): Promise<{ form: StoredForm; replaced: boolean }> {
+    return this.#run(Forms.use((forms) => forms.add(name, form)));
+  }
+
+  remove(name: string): Promise<boolean> {
+    return this.#run(Forms.use((forms) => forms.remove(name)));
+  }
+
+  list(): Promise<StoredForm[]> {
+    return this.#run(Forms.use((forms) => forms.list));
   }
 }

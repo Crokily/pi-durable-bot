@@ -104,7 +104,7 @@ export const LOG_SCHEMA = `Times are Unix ms. Columns that hold an address (plac
 - gw_events(id, channel, kind, at, place, thread, message, person, from_me, mentions_me, text, raw, wake)
   Everything that happened, in order: kind is message, edit, delete, reaction_added, reaction_removed, join, leave, update (a change to a message that is not its text, for example a link preview), system (a notice from the platform, such as a pin, a new channel name or a thread that started; its text says what happened), command, interaction (someone used a button or a menu), form (someone submitted a form of yours, or one did not open), form_opened (a button opened a form of yours; its submission comes as form), or another word the channel uses.
   text: the message text for message and edit, the emoji for reactions, what happened for system, interaction, form and form_opened. from_me = 1: done by you (for update: a change to your own message). raw: the platform's data (JSON), for details and for call.
-  wake: how the gateway handled the event: self (yours, no notice), log (only logged), mention, dm, relevant (the judge saw a need), judge_no (the judge saw none), heard (no judge set), interaction (a button or a menu on your message, or your form), steer. NULL: not decided yet.
+  wake: how the gateway handled the event: self (yours, no notice), log (only logged), mention, dm, relevant (the judge saw a need), judge_no (the judge saw none), heard (no judge set), interaction (your button, menu, command or form was used), steer. NULL: not decided yet.
 - gw_messages(address, channel, place, thread, person, from_me, mentions_me, text, mentions, files, at, edited_at, deleted_at, send_id, raw)
   One row per message with its current text. thread: the thread the message is in; a message that starts a thread has its own address there.
   deleted_at is set for deleted messages; the text stays. mentions and files are JSON.
@@ -134,8 +134,6 @@ export interface UndecidedEvent {
   text: string | null;
   /** The files of the message the event is about, as JSON, from gw_messages. */
   files: string | null;
-  /** 1 when the message the event is about is the bot's own, from gw_messages; null when the log does not have it. */
-  message_from_me: number | null;
 }
 
 export interface LoggedMessage {
@@ -354,7 +352,7 @@ const decide = (sql: SqlExecutor, ids: readonly number[], wake: string) =>
   sql.run("UPDATE gw_events SET wake = ? WHERE id IN (SELECT value FROM json_each(?))", wake, JSON.stringify(ids));
 
 const UNDECIDED_SELECT = `SELECT e.id, e.channel, e.kind, e.at, e.place, pl.name AS place_name, pl.kind AS place_kind, e.thread, e.message,
-  e.person, pe.name AS person_name, e.from_me, e.mentions_me, e.text, m.files, m.from_me AS message_from_me
+  e.person, pe.name AS person_name, e.from_me, e.mentions_me, e.text, m.files
   FROM gw_events e LEFT JOIN gw_places pl ON pl.address = e.place LEFT JOIN gw_people pe ON pe.address = e.person
   LEFT JOIN gw_messages m ON m.address = e.message`;
 

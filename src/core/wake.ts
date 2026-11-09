@@ -55,8 +55,9 @@ export interface WakeEvent {
  * - "dm": a one-to-one DM;
  * - "relevant": the judge found it related and needing a response, or could not judge;
  * - "heard": no mention, and the bot has no judge, so every event comes to it;
- * - "interaction": someone used a button or a menu on a message the bot sent, or submitted a form of the bot's (or one
- *   did not open); not through the judge, and without waiting for people to stop;
+ * - "interaction": someone used a button, a menu, a command or a form of the bot's (or one of its forms did not open);
+ *   the platform sends these only to the bot that made them, so not through the judge, and without waiting for people
+ *   to stop;
  * - "steer": new events in a place the bot works on now.
  */
 export type PlaceWakeReason = "mention" | "dm" | "relevant" | "heard" | "interaction" | "steer";

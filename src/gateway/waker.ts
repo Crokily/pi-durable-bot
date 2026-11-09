@@ -25,11 +25,17 @@ export interface WakerSettings {
 const JUDGE_RETRY_MS = [2_000, 8_000] as const;
 
 /**
- * Someone answered the bot itself: a button or a menu on a message the bot sent, or a form of the bot's (submitted, or
- * one that did not open). The person waits for the bot, and the bot asked, so no judge.
+ * Kinds of events that come only to the bot itself: someone used a button or a menu the bot sent (on any message,
+ * ephemeral or not, in a form or a home tab), a command of the bot's, or a form of the bot's (submitted, or one that did
+ * not open). A platform sends these only to the app that made the button, the command or the form, so the person waits
+ * for this bot, and there is nothing for the judge to decide. The adapters leave out what comes at every keystroke
+ * (Discord's autocomplete, Slack's block_suggestion): those are not events.
  */
+const ANSWER_KINDS = new Set(["interaction", "command", "form"]);
+
+/** Someone used a button, a menu, a command or a form of the bot's. */
 function answersMe(event: UndecidedEvent): boolean {
-  return event.kind === "form" || (event.kind === "interaction" && event.message_from_me === 1);
+  return ANSWER_KINDS.has(event.kind);
 }
 
 /** An event that ends its group's wait: it mentions the bot, it is in a one-to-one DM, or it answers the bot. */
@@ -58,7 +64,7 @@ interface Batch {
 
 /**
  * Decides when new events wake the bot. Per place, it waits until people stop (debounce); an event that mentions the
- * bot, one in a DM, or one that answers the bot (a button or a menu on its message, its form) ends the wait at once when
+ * bot, one in a DM, or one that answers the bot (its button, menu, command or form was used) ends the wait at once when
  * its channel runs. Then:
  * 1. the bot works on this place now → steer;
  * 2. an event @-mentions the bot, the place is a one-to-one DM, or an event answers the bot → wake;

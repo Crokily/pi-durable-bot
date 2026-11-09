@@ -3,8 +3,8 @@
 (* The grouping of src/gateway/waker.ts. Per place, the waker waits until  *)
 (* Quiet after the last event, but never longer than Max after the first,  *)
 (* then decides on the whole group at once. An event that mentions the bot,*)
-(* is in a DM, or answers the bot (a button or a menu on its message, its  *)
-(* form) ends the wait when it comes, with itself in the group.            *)
+(* is in a DM, or answers the bot (its button, menu, command or form was   *)
+(* used) ends the wait when it comes, with itself in the group.            *)
 (* Time is in whole seconds.                                               *)
 (*                                                                         *)
 (* Assumptions: a timer fires when it is due (a busy process can fire it a *)
@@ -57,8 +57,8 @@ Arrive(p) ==
     /\ group' = [group EXCEPT ![p] = IF Waiting(p) THEN [@ EXCEPT !.last = now, !.n = @ + 1] ELSE [first |-> now, last |-> now, n |-> 1]]
     /\ UNCHANGED <<now, lastWake, decided>>
 
-\* Waker.add, for an event that mentions the bot, is in a DM, or answers the bot (a button or a menu on its message,
-\* its form): it joins the waiting group, or starts one, and the whole group is decided now.
+\* Waker.add, for an event that mentions the bot, is in a DM, or answers the bot (its button, menu, command or form was
+\* used): it joins the waiting group, or starts one, and the whole group is decided now.
 ArriveAtOnce(p) ==
     /\ arrived < MaxEvents
     /\ now <= LastArrival

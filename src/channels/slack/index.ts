@@ -270,6 +270,9 @@ class SlackChannel implements ChannelAdapter {
       return [await this.#messageHappening({ ...raw.message, channel: raw.channel })];
     }
     if (raw.source === "form-failed") return [await this.#formFailed(raw)];
+    // The options of an external select come at every keystroke, and Slack wants them in the ack, which the bot cannot
+    // give. Not an event.
+    if ("body" in raw && raw.body.type === "block_suggestion") return [];
     if ("body" in raw) return [await this.#interaction(raw)];
     const event = raw.envelope.event;
     if (!event) return [];

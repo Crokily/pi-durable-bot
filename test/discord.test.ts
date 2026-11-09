@@ -489,6 +489,19 @@ describe("Discord channel", () => {
     ]);
   });
 
+  it("makes no event of an autocomplete, which comes at every keystroke, and does not answer it", async () => {
+    const { fake, gateway, translate } = await connect();
+    fake.route("POST", "/interactions/(\\d+)/([\\w-]+)/callback", () => undefined);
+    const [typed, sent] = await gateway([
+      ["INTERACTION_CREATE", { ...interaction("980", 4), data: { id: "960", name: "deploy", type: 1, options: [{ name: "repo", type: 3, value: "po", focused: true }] } }],
+      ["INTERACTION_CREATE", { ...interaction("981", 2), data: { id: "960", name: "deploy", type: 1, options: [{ name: "repo", type: 3, value: "pots" }] } }],
+    ]);
+    expect(await translate(typed!.raw)).toEqual([]);
+    expect(await translate(sent!.raw)).toMatchObject([{ kind: "interaction", text: "/deploy repo: pots" }]);
+    await until(() => fake.requested("POST", "/interactions/981/[\\w-]+/callback").length === 1);
+    expect(fake.requested("POST", "/interactions/980/[\\w-]+/callback")).toEqual([]);
+  });
+
   it("acknowledges a form's submission and gives its values, on the message of the button that opened it", async () => {
     const { fake, gateway, translate } = await connect();
     fake.route("POST", "/interactions/(\\d+)/([\\w-]+)/callback", () => undefined);

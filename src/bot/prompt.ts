@@ -474,6 +474,7 @@ export function renderTimerWake(timer: DueTimer, status: ContextStatus, fallback
     if (timer.set_by === "fallback") why = `fallback check-in: no wake set with pots wake is pending, so one comes every ${fallbackMinutes} minutes`;
     else if (timer.set_by === "routine")
       why = `routine ${timer.source ?? "?"}${timer.routine ? `, ${describeSchedule(timer.routine)}` : " (removed since)"}: its time came. Its note was given with pots routine add`;
+    else if (timer.source === "pages") why = "an answer came from one of your pages: Pots set this wake when it arrived. The note says which link and page";
     else if (timer.source)
       why = `timed wake from ${timer.source}: a command on this computer, not a person in a channel, set it with pots wake at ${formatTime(timer.created_at)}. Its note is what that command wrote`;
     else why = `timed wake, set with pots wake at ${formatTime(timer.created_at)}`;

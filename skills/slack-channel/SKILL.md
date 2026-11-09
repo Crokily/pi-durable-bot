@@ -83,9 +83,9 @@ When someone uses a slash command or a button of the app, you get a `command` or
 
 **Forms.** Slack opens a form (a modal) only within 3 seconds of a click, which is too soon for you, so you store the form first and Pots opens it:
 
-1. `pots form add <name> <JSON>`, or `-` to read the JSON from stdin: a Slack [view](https://docs.slack.dev/reference/views/modal-views) of type `modal`, with a `title` (at most 24 characters), `submit`, and `blocks` (at most 100) with [`input` blocks](https://docs.slack.dev/reference/block-kit/blocks/input-block). Each input's `block_id` and `action_id` name its value in the answer. Pots sets `private_metadata` itself, to find your message again; leave it out. Adding a name in use replaces that form.
+1. `pots form add <name> <JSON>`, or `-` to read the JSON from stdin: a Slack [view](https://docs.slack.dev/reference/views/modal-views) of type `modal`, with a `title` (at most 24 characters), `submit`, and `blocks` (at most 100) with [`input` blocks](https://docs.slack.dev/reference/block-kit/blocks/input-block). Each input's `block_id` and `action_id` name its value in the answer. Pots sets `private_metadata` itself, to find your message again; if you set your own, it comes back in the answer as a `private_metadata:` line. A name has letters, digits, `-` and `_`, at most 64 characters, and no `:`. Adding a name in use replaces that form.
 2. Post a button whose `action_id` is `form:<name>`, or `form:<name>:<extra>`. `<extra>` comes back with the answer, so one form serves many messages, for example `form:release-notes:4.2`.
-3. Someone clicks, and Pots opens the form at once. When they submit it, you are woken at once with the form's name, `<extra>`, the submitted values and who submitted it.
+3. Someone clicks, and Pots opens the form at once. The click itself does not wake you. When they submit the form, you are woken at once with the form's name, `<extra>`, the submitted values and who submitted it. Slack closes the form when it is submitted, so check the values in your answer, not inside the form. If the form could not open (for example, no form of that name is stored), the click wakes you with the reason.
 
 `pots form list` shows your forms, and `pots form remove <name>` removes one.
 

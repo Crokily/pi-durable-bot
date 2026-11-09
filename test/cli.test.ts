@@ -139,6 +139,8 @@ describe("pots", { timeout: 120_000 }, () => {
       [fromFlag.id, "other"],
     ]);
     expect(await fails("wake", "--from", "two words")).toBe('ERROR\n  bad --from "two words": use letters, digits, "-" and "_", at most 64 characters');
+    // Only the page server's wakes may say that an answer came from a page.
+    expect(await fails("wake", "--from", "pages")).toContain("--from pages is kept for the answers that come from your pages");
     for (const item of list) await pots("wake", "--cancel", String(item.id));
   });
 

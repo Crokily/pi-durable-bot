@@ -629,6 +629,8 @@ export class Bot implements WakeTarget {
       "POST /call": async (body: Record<string, unknown>) =>
         this.call(text(body.channel, "channel"), text(body.method, "method"), (body.params as Record<string, unknown> | undefined) ?? {}),
       "POST /wake": async (body: Record<string, unknown>) => {
+        // The page server's wakes say an answer came from a page; nothing else may claim that.
+        if (body.from === "pages") throw new Error('--from pages is kept for the answers that come from your pages; choose another name');
         const at = typeof body.at === "number" ? body.at : Date.now();
         const options = {
           ...(typeof body.from === "string" && body.from ? { source: body.from } : {}),

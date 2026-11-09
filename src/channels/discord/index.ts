@@ -401,7 +401,7 @@ export class DiscordChannel implements ChannelAdapter {
    * Discord shows the person an error unless an interaction is answered within 3 seconds, and takes one first answer
    * only. Once it is stored: a click on a form: button whose form is stored gets the form (a modal); anything else gets
    * "later": a command shows that the bot is thinking, a button shows nothing. The bot answers a command with call, as
-   * docs/channels/discord.md says. A modal that Discord refuses is told to the bot with Discord's answer, and the click
+   * the discord-channel skill says. A modal that Discord refuses is told to the bot with Discord's answer, and the click
    * gets "later" instead, so the person sees no error.
    */
   async #acknowledge(sink: ChannelSink, raw: Extract<Raw, { source: "gateway" }>): Promise<void> {

@@ -113,6 +113,11 @@ export const fileTestHooks: { beforeOpen?: (path: string) => Promise<void> | voi
  * refuseHardLinks (a second name may be a file outside the folder), and the same file (device and inode) that its path
  * still leads to, inside root. So a file or a folder above it swapped for a link between the first look and the open is
  * refused, and what is sent is read from that descriptor, never from the path again.
+ *
+ * Not refused: a folder above the file swapped for a link just before the open, back just after it, and once more
+ * before the last stat. Only a process of this same user can do that, and it can read the secrets folder without the
+ * page server. To refuse it, the walk would have to start from an open folder (openat2 with RESOLVE_BENEATH), which
+ * only Linux has and Node does not expose.
  */
 export async function openFile(root: string, segments: readonly string[], trailingSlash: boolean, refuseHardLinks: boolean): Promise<Resolved | undefined> {
   let path: string;

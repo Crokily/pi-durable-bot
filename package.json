@@ -18,7 +18,9 @@
     "slack-bot",
     "self-hosted",
     "pi-durable",
-    "chat-sdk"
+    "chat-sdk",
+    "grok-bot-alternative",
+    "pi-package"
   ],
   "bin": {
     "pots": "dist/cli/pots.js"
@@ -27,11 +29,18 @@
     "dist",
     "skills",
     "kit",
+    "pi-package",
     "docs/for-agents.md",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"
   ],
+  "pi": {
+    "skills": [
+      "./pi-package/skills"
+    ],
+    "video": "https://github.com/Crokily/pi-durable-bot/raw/refs/heads/main/docs/media/demo.mp4"
+  },
   "engines": {
     "node": ">=24"
   },

@@ -300,7 +300,8 @@ describe("pages", { timeout: 120_000 }, () => {
 
   it("writes the values only to the file, owner-only, and tells the bot which keys came", async () => {
     const file = join(gateway.home, "secrets", "pagetest.env");
-    expect(readFileSync(file, "utf8")).toBe(`API_KEY=${values.API_KEY}\nAPI_SECRET=${values.API_SECRET}\n`);
+    // With the comment line of the submission that wrote them, which readers skip.
+    expect(readFileSync(file, "utf8")).toMatch(new RegExp(`^API_KEY=${values.API_KEY}\nAPI_SECRET=${values.API_SECRET}\n# pots-secret-claim: [0-9a-f]{24}\n$`));
     if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
     const note = "secret page: someone used link S1 (made for test:@bob) and wrote API_KEY, API_SECRET to pagetest.env in the secrets folder";
     await waitFor(() => wakes(model).some((wake) => wake.includes(note)), { what: "the password page's wake" });
@@ -328,7 +329,7 @@ describe("pages", { timeout: 120_000 }, () => {
       await gateway.start();
       const note = `secret page: someone used link S${index} (made for anyone) and wrote TOKEN to crash${index}.env in the secrets folder`;
       await waitFor(() => wakes(model).some((wake) => wake.includes(note)), { what: `the wake after ${crash}` });
-      expect(readFileSync(join(gateway.home, "secrets", `crash${index}.env`), "utf8")).toBe(`TOKEN=${value}\n`);
+      expect(readFileSync(join(gateway.home, "secrets", `crash${index}.env`), "utf8")).toMatch(new RegExp(`^TOKEN=${value}\n# pots-secret-claim: [0-9a-f]{24}\n$`));
       expect(gateway.query("SELECT state FROM bot_secret_links WHERE id = ?", index)).toEqual([{ state: "used" }]);
       expect(gateway.query("SELECT count(*) AS n FROM bot_timers WHERE request_id = ?", `secret:S${index}`)).toEqual([{ n: 1 }]);
       expect((await http("POST", pathOf(link.url), { body: "TOKEN=again", type: "application/x-www-form-urlencoded" })).status).toBe(409);
@@ -336,6 +337,23 @@ describe("pages", { timeout: 120_000 }, () => {
     }
     expect(wakes(model).filter((wake) => wake.includes("secret page: someone used link S2 "))).toHaveLength(1);
     expect(wakes(model).filter((wake) => wake.includes("secret page: someone used link S3 "))).toHaveLength(1);
+
+    // Dying after the claim, before the write, over a file that already has the key, written a moment ago: the old file
+    // is not taken for the claim's write, so the link is open again after the restart, and no wake says it was used.
+    writeFileSync(join(gateway.home, "secrets", "crash4.env"), "TOKEN=written-a-moment-ago\n");
+    const link = await potsJson<{ link: string; url: string }>("page", "secret", "--file", "crash4.env", "--keys", "TOKEN");
+    writeFileSync(join(gateway.botDir, "crash-before-secret-write"), "");
+    await http("POST", pathOf(link.url), { body: "TOKEN=lost-in-the-crash", type: "application/x-www-form-urlencoded" }).catch(() => undefined);
+    await gateway.exited();
+    await gateway.start();
+    expect(gateway.query("SELECT state FROM bot_secret_links WHERE id = 4")).toEqual([{ state: "open" }]);
+    expect(readFileSync(join(gateway.home, "secrets", "crash4.env"), "utf8")).toBe("TOKEN=written-a-moment-ago\n");
+    expect((await http("POST", pathOf(link.url), { body: "TOKEN=sent-again", type: "application/x-www-form-urlencoded" })).status).toBe(200);
+    expect(readFileSync(join(gateway.home, "secrets", "crash4.env"), "utf8")).toMatch(/^TOKEN=sent-again\n# pots-secret-claim: [0-9a-f]{24}\n$/);
+    const note = "secret page: someone used link S4 (made for anyone) and wrote TOKEN to crash4.env in the secrets folder";
+    await waitFor(() => wakes(model).some((wake) => wake.includes(note)), { what: "the wake of the second submission" });
+    expect(wakes(model).filter((wake) => wake.includes(note))).toHaveLength(1);
+    expect(everything()).not.toContain("lost-in-the-crash");
   });
 
   it("keeps links and the port across a restart", async () => {

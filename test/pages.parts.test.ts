@@ -1,14 +1,14 @@
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { gzipSync } from "node:zlib";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type Database, openDatabase } from "../src/agent/agent.ts";
 import { CLOUDFLARED_VERSION, downloadCloudflared, ensureCloudflared, untar } from "../src/pages/cloudflared.ts";
-import { pathSegments } from "../src/pages/files.ts";
+import { fileTestHooks, inside, openFile, pageFolder, pathSegments } from "../src/pages/files.ts";
 import { PageHost, QUICK_TUNNEL_NOTE } from "../src/pages/host.ts";
 import { readSettings } from "../src/pages/settings.ts";
 import { BotPages, PAGE_DAYS, SECRET_LINK_MS } from "../src/pages/store.ts";
@@ -40,6 +40,82 @@ describe("page paths", () => {
       expect({ bad, segments: pathSegments(bad) }).toEqual({ bad, segments: undefined });
     }
     if (process.platform === "win32") for (const bad of ["c:", "a:b", "CON", "nul.txt", "COM1.html", "x.", "x "]) expect(pathSegments(bad)).toBeUndefined();
+  });
+});
+
+/** Make a link, or say why it cannot be made here: Windows without the right to make symbolic links. */
+function linkOrSkip(make: () => void): boolean {
+  try {
+    make();
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EPERM") return false;
+    throw error;
+  }
+}
+
+const dirLink = process.platform === "win32" ? "junction" : "dir";
+
+describe("opening a page file", () => {
+  afterEach(() => {
+    delete fileTestHooks.beforeOpen;
+  });
+
+  it("refuses a file, or a folder above it, swapped for a link between the check and the open", async () => {
+    const root = realpathSync(temp());
+    const outside = temp();
+    writeFileSync(join(outside, "secret.txt"), "outside-secret");
+    mkdirSync(join(outside, "sub"));
+    writeFileSync(join(outside, "sub", "a.txt"), "outside-secret");
+    writeFileSync(join(root, "a.txt"), "inside");
+    mkdirSync(join(root, "sub"));
+    writeFileSync(join(root, "sub", "a.txt"), "inside");
+
+    const plain = await openFile(root, ["a.txt"], false, true);
+    expect(plain?.kind).toBe("file");
+    if (plain?.kind === "file") {
+      expect((await plain.handle.readFile()).toString()).toBe("inside");
+      await plain.handle.close();
+    }
+
+    let swapped = false;
+    fileTestHooks.beforeOpen = (path) => {
+      rmSync(path);
+      swapped = linkOrSkip(() => symlinkSync(join(outside, "secret.txt"), path, "file"));
+    };
+    expect(await openFile(root, ["a.txt"], false, true)).toBeUndefined();
+    if (!swapped) writeFileSync(join(root, "a.txt"), "inside");
+
+    fileTestHooks.beforeOpen = () => {
+      renameSync(join(root, "sub"), join(root, "sub-before"));
+      symlinkSync(join(outside, "sub"), join(root, "sub"), dirLink);
+    };
+    expect(await openFile(root, ["sub", "a.txt"], false, true)).toBeUndefined();
+  });
+
+  it("compares paths by their exact case, and a folder only with its separator", () => {
+    const pages = join(sep === "/" ? "/home/bot" : "C:\\bot", "pages");
+    expect(inside(join(pages, "Report"), join(pages, "report", "x.html"))).toBe(false);
+    expect(inside(join(pages, "report"), join(pages, "report", "x.html"))).toBe(true);
+    expect(inside(join(pages, "rep"), join(pages, "report", "x.html"))).toBe(false);
+    expect(inside(join(pages, "report"), join(pages, "report"))).toBe(false);
+    expect(inside(join(pages, "report"), join(pages, "report"), true)).toBe(true);
+  });
+
+  const probe = temp();
+  writeFileSync(join(probe, "case-probe"), "");
+  const caseSensitive = !existsSync(join(probe, "CASE-PROBE"));
+
+  it.skipIf(!caseSensitive)("refuses a link in pages/Report to pages/report on a case-sensitive file system", async () => {
+    const bot = temp();
+    mkdirSync(join(bot, "pages", "report"), { recursive: true });
+    mkdirSync(join(bot, "pages", "Report"), { recursive: true });
+    writeFileSync(join(bot, "pages", "report", "x.html"), "the other page");
+    if (!linkOrSkip(() => symlinkSync(join(bot, "pages", "report", "x.html"), join(bot, "pages", "Report", "x.html"), "file"))) return;
+    const folder = await pageFolder(bot, "Report");
+    expect(folder).toBe(join(realpathSync(bot), "pages", "Report"));
+    expect(await openFile(folder!, ["x.html"], false, true)).toBeUndefined();
+    expect(await pageFolder(bot, "REPORT")).toBeUndefined();
   });
 });
 
@@ -109,7 +185,7 @@ describe("password links", () => {
     const link = await f.pages.createSecretLink({ file: "b.env", keys: ["A", "B"], person: "slack:@U1" });
     const results = await Promise.all([f.pages.submitSecret(link.token, form({ A: "one", B: "two" })), f.pages.submitSecret(link.token, form({ A: "three", B: "four" }))]);
     expect(results.sort()).toEqual(["saved", "used"]);
-    expect(readFileSync(join(f.secrets, "b.env"), "utf8")).toMatch(/^A=(one|three)\nB=(two|four)\n$/);
+    expect(readFileSync(join(f.secrets, "b.env"), "utf8")).toMatch(/^A=(one|three)\nB=(two|four)\n# pots-secret-claim: [0-9a-f]{24}\n$/);
     expect(f.woke).toEqual([{ note: "secret page: someone used link S1 (made for slack:@U1) and wrote A, B to b.env in the secrets folder", requestId: "secret:S1" }]);
   });
 
@@ -125,6 +201,29 @@ describe("password links", () => {
     expect(await f.pages.revoke("S1")).toBe("S1");
     expect(await f.pages.secretLink(link.token)).toBeUndefined();
     expect(await f.pages.submitSecret(link.token, form({ A: "x" }))).toBe("missing");
+  });
+
+  it("never take an older file with the keys for the claim's write after a crash", async () => {
+    mkdirSync(f.secrets, { recursive: true });
+    writeFileSync(join(f.secrets, "r.env"), "A=written-a-moment-ago\n");
+    const link = await f.pages.createSecretLink({ file: "r.env", keys: ["A"] });
+    f.pages.crashTests.beforeSecretWrite = () => {
+      throw new Error("crash");
+    };
+    await expect(f.pages.submitSecret(link.token, form({ A: "lost" }))).rejects.toThrow("crash");
+    expect(await f.sql.all("SELECT state FROM bot_secret_links")).toEqual([{ state: "writing" }]);
+    f.pages.crashTests.beforeSecretWrite = () => {};
+    await f.pages.resume();
+    expect(await f.sql.all("SELECT state, claim FROM bot_secret_links")).toEqual([{ state: "open", claim: null }]);
+    expect(f.woke).toEqual([]);
+    expect(readFileSync(join(f.secrets, "r.env"), "utf8")).toBe("A=written-a-moment-ago\n");
+    expect(await f.pages.submitSecret(link.token, form({ A: "new" }))).toBe("saved");
+    const claim = (await f.sql.get<{ claim: string }>("SELECT claim FROM bot_secret_links"))!.claim;
+    expect(readFileSync(join(f.secrets, "r.env"), "utf8")).toBe(`A=new\n# pots-secret-claim: ${claim}\n`);
+    // The next password page to the same file puts its own line in place of this one.
+    const next = await f.pages.createSecretLink({ file: "r.env", keys: ["B"] });
+    expect(await f.pages.submitSecret(next.token, form({ B: "b" }))).toBe("saved");
+    expect(readFileSync(join(f.secrets, "r.env"), "utf8")).toMatch(/^A=new\nB=b\n# pots-secret-claim: [0-9a-f]{24}\n$/);
   });
 
   it("finish a submission a crash cut off: a written file counts, an unwritten one opens the link again", async () => {
@@ -193,6 +292,46 @@ describe("page cleanup", () => {
     expect(deleted).toEqual(["untouched"]);
     expect(readdirSync(join(f.dir, "pages")).sort()).toEqual(["edited-meanwhile", "opened-meanwhile"]);
     expect(await f.pages.openLink(link.token)).toMatchObject({ page: "opened-meanwhile" });
+  });
+
+  it("makes and opens no link of a page while the cleanup removes it", async () => {
+    page(f, "old");
+    const before = await f.pages.createLink("old");
+    f.now += (PAGE_DAYS + 1) * DAY;
+    let making: Promise<string> | undefined;
+    let opening: Promise<unknown> | undefined;
+    const deleted = await f.pages.cleanup({
+      beforeRemove: async (name) => {
+        making = f.pages.createLink(name).then(
+          (link) => `made ${link.id}`,
+          (error: Error) => error.message,
+        );
+        opening = f.pages.openLink(before.token);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      },
+    });
+    expect(deleted).toEqual(["old"]);
+    expect(await making).toBe("there is no page folder pages/old/ (or it is a symbolic link); write pages/old/index.html first");
+    expect(await opening).toBeUndefined();
+    expect(await f.sql.all("SELECT * FROM bot_page_links")).toEqual([]);
+    expect(existsSync(join(f.dir, "pages", "old"))).toBe(false);
+  });
+
+  it("takes back the links of a page whose folder is gone, and of one that a new folder of the same name replaced", async () => {
+    page(f, "gone");
+    const first = await f.pages.createLink("gone");
+    rmSync(join(f.dir, "pages", "gone"), { recursive: true });
+    expect(await f.pages.openLink(first.token)).toBeUndefined();
+    page(f, "gone", "<h1>new page</h1>");
+    expect(await f.pages.openLink(first.token)).toBeUndefined();
+    const second = await f.pages.createLink("gone");
+    expect(await f.pages.openLink(second.token)).toMatchObject({ id: "L2", page: "gone" });
+    // Deleted and made again with nobody opening it between: the old link is still dead.
+    rmSync(join(f.dir, "pages", "gone"), { recursive: true });
+    page(f, "gone", "<h1>third page</h1>");
+    expect(await f.pages.openLink(second.token)).toBeUndefined();
+    const third = await f.pages.createLink("gone");
+    expect((await f.pages.list()).pages.find((item) => item.page === "gone")!.links.map((link) => link.link)).toEqual([third.id]);
   });
 
   it("counts a change to any file, also one whose time was set back, and deletes nothing a page links to", async () => {
@@ -375,6 +514,55 @@ describe("the page host", () => {
     const third = host();
     await third.start();
     expect(third.port).toBe(port);
+  });
+
+  it.skipIf(process.platform === "win32")("stops a tunnel a crashed gateway left, also when settings.json has a publicUrl", async () => {
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ publicUrl: "https://coly.tail1234.ts.net" }));
+    const left = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "cloudflared", "--config", join(dir, "cloudflared.yml")], { stdio: "ignore" });
+    writeFileSync(join(dir, "cloudflared.pid"), `${left.pid}\n${join(dir, "cloudflared.yml")}\n`);
+    try {
+      await host().start();
+      await waitFor(() => !running(left.pid!), { what: "the left tunnel to stop", timeout: 5_000 });
+      expect(existsSync(join(dir, "cloudflared.pid"))).toBe(false);
+    } finally {
+      left.kill("SIGKILL");
+    }
+  });
+
+  it("answers Not found for a deleted page's links and answers, and for a file swapped for a link", async () => {
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ publicUrl: "https://coly.tail1234.ts.net" }));
+    page(f, "gone");
+    writeFileSync(join(f.dir, "pages", "gone", "a.txt"), "inside");
+    const outside = temp();
+    writeFileSync(join(outside, "secret.txt"), "outside-secret");
+    const pages = host();
+    await pages.start();
+    pages.register(f.pages);
+    const link = await pages.link(f.pages, "gone");
+    const at = (path: string, init?: RequestInit) => fetch(`http://127.0.0.1:${pages.port}${new URL(link.url).pathname}${path}`, init);
+    const submit = () => at("__pots/submit", { method: "POST", body: JSON.stringify({ submission: "s", version: "v", answers: {} }) });
+    expect((await at("")).status).toBe(200);
+
+    fileTestHooks.beforeOpen = (path) => {
+      rmSync(path);
+      if (!linkOrSkip(() => symlinkSync(join(outside, "secret.txt"), path, "file"))) writeFileSync(path, "inside");
+    };
+    try {
+      const swapped = await at("a.txt");
+      const body = await swapped.text();
+      expect(body).not.toContain("outside-secret");
+      if (body !== "inside") expect(swapped.status).toBe(404);
+    } finally {
+      delete fileTestHooks.beforeOpen;
+    }
+
+    rmSync(join(f.dir, "pages", "gone"), { recursive: true });
+    expect((await at("")).status).toBe(404);
+    expect((await submit()).status).toBe(404);
+    page(f, "gone", "<h1>someone else's page</h1>");
+    const old = await at("");
+    expect([old.status, await old.text()]).toEqual([404, "Not found."]);
+    expect((await submit()).status).toBe(404);
   });
 
   it("starts the Quick Tunnel at the first link, and none while settings.json has a publicUrl", async () => {

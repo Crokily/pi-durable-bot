@@ -5,7 +5,7 @@ import { ensureCloudflared } from "./cloudflared.ts";
 import { readSettings, writeSetting } from "./settings.ts";
 import { PageRequests } from "./server.ts";
 import { type BotPages, PAGE_DAYS } from "./store.ts";
-import { QuickTunnel, type TunnelOptions } from "./tunnel.ts";
+import { QuickTunnel, stopLeftoverTunnel, type TunnelOptions } from "./tunnel.ts";
 
 // The page server of a gateway: one per POTS_HOME, for every bot. Its port is chosen once and kept in settings.json; its
 // public address is settings.json's publicUrl, or else a Cloudflare Quick Tunnel that starts at the first link.
@@ -76,6 +76,8 @@ export class PageHost {
 
   /** Listen on the kept port, or choose one and keep it. A port that is taken is reported, and tried again now and then. */
   async start(): Promise<void> {
+    // A tunnel a crashed gateway left would make the kept port public again, at its old address.
+    stopLeftoverTunnel(this.#options.home, this.#options.print);
     await this.#listen();
     if (!this.#server) this.#retry = setInterval(() => void this.#listen(), RETRY_MS).unref();
   }

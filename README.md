@@ -27,7 +27,7 @@ does the work on its own computer, and speaks up when it should.
 > **Setting this up with an AI agent, such as Claude Code, Codex or Cursor?** Have it read [docs/for-agents.md](https://github.com/Crokily/pi-durable-bot/blob/main/docs/for-agents.md) first. That page explains Pots to your agent and how to set it up. In short: the agent installs it and makes the bot, you sign in to your model with `pots login`, and then the bot connects Slack and your other apps itself.
 
 <p align="center" id="see-it-work">
-  <a href="docs/media/demo.mp4"><img src="docs/media/demo.gif" width="900" alt="Pots reads Slack, email, Discord, X and calendars on its own, decides what matters, speaks up in #pricing, and does real work on its own computer"></a>
+  <a href="docs/media/demo.mp4"><img src="docs/media/demo.gif" width="900" alt="In Slack, Pots answers a pricing question nobody asked it, checks the pricing page in a browser on its own computer, picks up after being killed mid-task, sends a comparison page, asks before posting in #sales, and takes an API key on a one-time page"></a>
 </p>
 
 Grok Bot, dots and Claude Tag showed what an AI teammate can be. pi-durable-bot gives you the same kind of coworker as open source: it runs on your machine, with the model you choose, in the places your team already talks.

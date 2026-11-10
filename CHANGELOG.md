@@ -2,6 +2,13 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
+## 0.7.1 (2026-11-10)
+
+Pots is also a pi package, so a pi user's agent can set Pots up. Nothing changed for bots: a running bot does not need this version.
+
+### Added
+- **A setup skill for pi users.** The package has the `pi-package` keyword, so pi's package gallery can list it. A pi user who installs it (`pi install npm:pi-durable-bot`) gets one skill, `pots-setup`, which has their agent set up Pots by [docs/for-agents.md](docs/for-agents.md). Pots' own channel and page skills stay out of plain pi sessions.
+
 ## 0.7.0 (2026-11-10)
 
 The bot can show people web pages, ask with buttons and forms, and take secrets on a page, also when its computer has no public address.

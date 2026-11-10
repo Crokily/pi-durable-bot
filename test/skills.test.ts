@@ -1,18 +1,21 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { gunzipSync } from "node:zlib";
 import { afterAll, describe, expect, it } from "vitest";
+import { piModule } from "../src/agent/models.ts";
 import { botPaths } from "../src/bot/definition.ts";
 import { folderSection, type PromptFacts, workSection } from "../src/bot/prompt.ts";
 
 // The skills and the page kit that come with Pots: what each skill says about itself, that pi's loader finds them for
 // every bot, from the source tree and from the package as npm packs it (Astra A12), and that the prompt points to them.
+// Also the skill for pi users (pi-package/skills), which pi loads through the package's pi manifest.
 
 const repo = fileURLToPath(new URL("..", import.meta.url));
 const SKILLS = ["discord-channel", "pages", "slack-channel", "telegram-channel"];
+const PI_SKILLS = ["pots-setup"];
 const work = realpathSync(mkdtempSync(join(tmpdir(), "pots-skills-")));
 
 afterAll(() => rmSync(work, { recursive: true, force: true }));
@@ -20,11 +23,14 @@ afterAll(() => rmSync(work, { recursive: true, force: true }));
 /** pi's rules for a skill name (the Agent Skills spec). */
 const NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
+// pi's own front matter parser, without the seconds that pi's whole entry takes to load.
+const { parseFrontmatter } = (await import(piModule("./utils/frontmatter.js"))) as {
+  parseFrontmatter(content: string): { frontmatter: Record<string, string> };
+};
+
+/** A skill's front matter as pi reads it. pi skips a skill whose YAML does not parse, such as a plain value with ": ". */
 function frontMatter(file: string): Record<string, string> {
-  // A Windows checkout can have CRLF line ends.
-  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/.exec(readFileSync(file, "utf8"));
-  if (!match) throw new Error(`${file} has no front matter`);
-  return Object.fromEntries(match[1]!.split(/\r?\n/).map((line) => [line.slice(0, line.indexOf(":")), line.slice(line.indexOf(":") + 1).trim()]));
+  return parseFrontmatter(readFileSync(file, "utf8")).frontmatter;
 }
 
 interface Loaded {
@@ -99,8 +105,10 @@ function unpack(tarball: string, dest: string): void {
 describe("the skills that come with Pots", () => {
   it("each names its folder, says when to use it, and links only to files that exist", () => {
     expect(readdirSync(join(repo, "skills")).sort()).toEqual(SKILLS);
-    for (const name of SKILLS) {
-      const file = join(repo, "skills", name, "SKILL.md");
+    expect(readdirSync(join(repo, "pi-package", "skills")).sort()).toEqual(PI_SKILLS);
+    const files = [...SKILLS.map((name) => join(repo, "skills", name, "SKILL.md")), ...PI_SKILLS.map((name) => join(repo, "pi-package", "skills", name, "SKILL.md"))];
+    for (const file of files) {
+      const name = basename(dirname(file));
       const meta = frontMatter(file);
       expect(meta.name).toBe(name);
       expect(meta.name).toMatch(NAME);
@@ -139,7 +147,7 @@ describe("the skills that come with Pots", () => {
   });
 
   it(
-    "are in the package as npm packs it, with the kit, and found from the installed package",
+    "are in the package as npm packs it, with the kit, found from the installed package, and pots-setup is found by pi through the package manifest",
     () => {
       const packed = join(work, "packed");
       mkdirSync(packed);
@@ -168,10 +176,23 @@ describe("the skills that come with Pots", () => {
       expect(readFileSync(join(installed, "kit", "pots.css"), "utf8")).toBe(readFileSync(join(repo, "kit", "pots.css"), "utf8"));
       expect(existsSync(join(installed, "docs", "channels"))).toBe(false);
 
-      const [loaded] = loadSkills(pathToFileURL(join(installed, "dist", "agent", "resources.js")).href, "installed", [join(work, "installed", "pi")]);
+      // A pi user who installs the package as a pi package: pi reads it from its settings and finds pots-setup through
+      // the package's pi manifest; a skill whose front matter does not parse would be a warning and missing here.
+      const piUser = join(work, "installed", "pi-user");
+      mkdirSync(piUser, { recursive: true });
+      writeFileSync(join(piUser, "settings.json"), JSON.stringify({ packages: [installed] }));
+      for (const name of PI_SKILLS) expect(existsSync(join(installed, "pi-package", "skills", name, "SKILL.md")), name).toBe(true);
+      expect(existsSync(join(installed, "docs", "for-agents.md"))).toBe(true);
+
+      const [loaded, asPiPackage] = loadSkills(pathToFileURL(join(installed, "dist", "agent", "resources.js")).href, "installed", [join(work, "installed", "pi"), piUser]);
       const found = locations(loaded!.skills);
       for (const name of SKILLS) expect(found[name]).toBe(join(installed, "skills", name, "SKILL.md"));
+      expect(found["pots-setup"]).toBeUndefined();
       expect(loaded!.warnings).toEqual([]);
+
+      const fromPackage = locations(asPiPackage!.skills);
+      for (const name of PI_SKILLS) expect(fromPackage[name]).toBe(join(installed, "pi-package", "skills", name, "SKILL.md"));
+      expect(asPiPackage!.warnings).toEqual([]);
     },
     120_000,
   );

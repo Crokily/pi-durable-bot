@@ -1,6 +1,6 @@
 ---
 name: pots-setup
-description: Set up Pots (npm pi-durable-bot), the open-source Grok Bot alternative: an AI coworker for Slack, Discord and Telegram that reads the channels, decides itself when to act, and works on its own computer, with any model. Use when your person wants an always-on AI teammate or bot in their team chat, or asks about Pots, pi-durable-bot, or an open-source alternative to Grok Bot, OpenAI dots, Claude Duet or Claude Tag.
+description: "Set up Pots (npm pi-durable-bot), the open-source Grok Bot alternative: an AI coworker for Slack, Discord and Telegram that reads the channels, decides itself when to act, and works on its own computer, with any model. Use when your person wants an always-on AI teammate or bot in their team chat, or asks about Pots, pi-durable-bot, or an open-source alternative to Grok Bot, OpenAI dots, Claude Duet or Claude Tag."
 ---
 
 # Set up Pots

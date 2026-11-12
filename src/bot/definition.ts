@@ -13,10 +13,6 @@ export interface BotDefinition {
   /** "provider/modelId", any model pi can use. */
   model: string;
   thinking: Thinking;
-  /** The model of the children the main agent starts; unset: the main model. */
-  childModel?: string;
-  /** The thinking level of a new child when the main agent does not choose one. */
-  childThinking: Thinking;
   /** Who judges events that do not mention the bot: "off" (every event wakes it), a classifier "provider/modelId", or "main" (its own model). */
   judge: JudgeSetting;
   channels: ChannelConfig[];
@@ -59,8 +55,6 @@ const DEFAULT_SETTINGS: BotSettings = {
 };
 
 export const DEFAULT_MODEL = "openai/gpt-6.1-sol";
-/** The thinking level of children the main agent starts without choosing one. */
-export const DEFAULT_CHILD_THINKING = "xhigh" as const;
 /** No judge: every message that does not mention the bot comes to it, and it decides itself. */
 export const DEFAULT_JUDGE: JudgeSetting = "off";
 
@@ -114,8 +108,6 @@ const Definition = Schema.Struct({
   name: Schema.Trim.check(Schema.isNonEmpty()),
   model: Schema.String.check(Schema.isPattern(PROVIDER_MODEL)).pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_MODEL))),
   thinking: Schema.Literals(THINKING).pipe(Schema.withDecodingDefaultKey(Effect.succeed("medium" as const))),
-  childModel: Schema.optionalKey(Schema.String.check(Schema.isPattern(PROVIDER_MODEL))),
-  childThinking: Schema.Literals(THINKING).pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_CHILD_THINKING))),
   judge: Schema.String.check(Schema.makeFilter((judge) => judge === "main" || judge === "off" || PROVIDER_MODEL.test(judge))).pipe(
     Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_JUDGE)),
   ),
@@ -154,15 +146,12 @@ function problem(raw: unknown, issue: { message: string; path?: readonly (Proper
       return `"name" is required`;
     case "model":
       return `"model" must be "provider/modelId"`;
-    case "childModel":
-      return `"childModel" must be "provider/modelId"`;
     case "judge":
       return `"judge" must be "main", "off" or "provider/modelId"`;
     case "screen":
       return `"screen" must be an object of environment variables with text values, such as {"DISPLAY": ":99"}`;
     case "thinking":
-    case "childThinking":
-      return `"${String(path[0])}" must be off, minimal, low, medium, high, xhigh or max`;
+      return `"thinking" must be off, minimal, low, medium, high, xhigh or max`;
     case "channels":
       if (path.length === 1) return `"channels" must be a list`;
       if (path[2] === "type") return `channel ${String(channel?.id)} needs a "type"`;
@@ -172,8 +161,25 @@ function problem(raw: unknown, issue: { message: string; path?: readonly (Proper
   }
 }
 
-/** Read and check bot.json. Throws with a readable message when it is wrong. */
-export function readDefinition(file: string): { definition: BotDefinition; text: string } {
+/** Fields of earlier versions that no longer count. A bot.json with them still loads, and the gateway says so. */
+const RETIRED = ["childModel", "childThinking"] as const;
+
+/** What to tell people about the retired fields this bot.json has; undefined when it has none. */
+function retiredNotice(raw: unknown): string | undefined {
+  const found = RETIRED.filter((field) => typeof raw === "object" && raw !== null && Object.hasOwn(raw, field));
+  if (found.length === 0) return undefined;
+  const names = found.map((field) => `"${field}"`).join(" and ");
+  return (
+    `${names} in bot.json ${found.length === 1 ? "is" : "are"} no longer used, and ignored: the main agent chooses each child's model and thinking level ` +
+    `when it starts the child, and a child it starts without them has the bot's model and thinking xhigh. Remove ${found.length === 1 ? "it" : "them"} from bot.json.`
+  );
+}
+
+/**
+ * Read and check bot.json. Throws with a readable message when it is wrong. notice: what to tell people about fields
+ * of earlier versions that it still has and that are ignored.
+ */
+export function readDefinition(file: string): { definition: BotDefinition; text: string; notice?: string } {
   const text = readFileSync(file, "utf8");
   const raw: unknown = JSON.parse(text);
   const result = validate(raw);
@@ -185,14 +191,14 @@ export function readDefinition(file: string): { definition: BotDefinition; text:
     if (ids.has(channel.id)) throw new Error(`${file}: channel id ${channel.id} is used twice`);
     ids.add(channel.id);
   }
+  const notice = retiredNotice(raw);
   return {
     text,
+    ...(notice === undefined ? {} : { notice }),
     definition: {
       name: decoded.name,
       model: decoded.model,
       thinking: decoded.thinking,
-      ...(decoded.childModel === undefined ? {} : { childModel: decoded.childModel }),
-      childThinking: decoded.childThinking,
       judge: decoded.judge,
       channels: decoded.channels.map((channel) => ({ ...channel })),
       ...(decoded.screen === undefined ? {} : { screen: { ...decoded.screen } }),

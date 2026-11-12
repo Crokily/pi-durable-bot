@@ -31,6 +31,8 @@ export type ChildRecord = {
   conversationId: ConversationId;
   /** The place the child works for, when there is one. */
   place?: string;
+  /** The model the main agent chose for it, "provider/modelId", for its whole life; absent: the main agent's model. */
+  model?: string;
   /** Its thinking level, for its whole life. */
   thinking: ModelThinkingLevel;
   startedAt: number;
@@ -70,6 +72,8 @@ export interface ChildInfo {
   title: string;
   conversationId: string;
   place?: string;
+  /** The model chosen for it; absent: the main agent's model. */
+  model?: string;
   thinking: ModelThinkingLevel;
   startedAt: number;
   /** Since when it works, while it works. */
@@ -185,6 +189,7 @@ export function childInfo(record: Readonly<ChildRecord>): ChildInfo {
     title: record.title,
     conversationId: String(record.conversationId),
     ...(record.place === undefined ? {} : { place: record.place }),
+    ...(record.model === undefined ? {} : { model: record.model }),
     thinking: record.thinking,
     startedAt: record.startedAt,
     ...(record.since === undefined ? {} : { since: record.since }),
@@ -203,9 +208,14 @@ export interface ChildEnd {
   text: string;
 }
 
+/** The thinking level of a child the main agent starts without choosing one. */
+export const DEFAULT_CHILD_THINKING = "xhigh" satisfies ModelThinkingLevel;
+
 export interface ChildrenHost {
-  /** The model of children now, and the thinking level of a new child when the main agent does not choose one. */
-  agent(): { model: ModelRef; thinkingLevel: ModelThinkingLevel };
+  /** The main agent's model now, which a child started without a model of its own has. */
+  mainModel(): ModelRef;
+  /** The model of "provider/modelId", or why a child cannot have it: unknown, or not signed in on this computer. */
+  childModel(model: string): Promise<{ model: ModelRef } | { refused: string }>;
   /** How many children may work at once. */
   max(): number;
   /** The place the main agent works on now, when it works on one. */
@@ -238,8 +248,8 @@ export function age(ms: number): string {
 }
 
 /**
- * A child, for the task tool, wakes and pots children: one line, with its thinking level for the lists, and for a child
- * that works and whose activity was read, indented lines on what it does now.
+ * A child, for the task tool, wakes and pots children: one line, which in the lists also has its thinking level and the
+ * model chosen for it, and for a child that works and whose activity was read, indented lines on what it does now.
  */
 export function describeChild(child: ChildInfo, now = Date.now(), options: { thinking?: boolean } = {}): string {
   const state =
@@ -248,7 +258,7 @@ export function describeChild(child: ChildInfo, now = Date.now(), options: { thi
       : child.since !== undefined
         ? `working, for ${age(now - child.since)}`
         : `ended ${age(now - (child.endedAt ?? child.startedAt))} ago, waits for a message`;
-  const line = `${child.id} "${child.title}": ${state}${child.place ? `, for ${child.place}` : ""}${options.thinking ? `, thinking ${child.thinking}` : ""}`;
+  const line = `${child.id} "${child.title}": ${state}${child.place ? `, for ${child.place}` : ""}${options.thinking ? `${child.model ? `, model ${child.model}` : ""}, thinking ${child.thinking}` : ""}`;
   if (child.activity === undefined || child.since === undefined || child.stoppedAt !== undefined) return line;
   return [line, ...describeActivity(child.activity, now).map((each) => `  ${each}`)].join("\n");
 }
@@ -404,8 +414,8 @@ export function childrenExtension(host: ChildrenHost): Extension {
     name: "task",
     description:
       "Children: agents that work in the background, so you stay free to talk. action start: a new child with a short title and a brief " +
-      "(place: the address of the place it works for, by default the place you work on; thinking: its thinking level, high, xhigh or max, " +
-      "by default childThinking in bot.json); it starts with an empty conversation and the brief, and keeps its thinking level. " +
+      "(place: the address of the place it works for, by default the place you work on; model: \"provider/modelId\", which it keeps, by default yours; " +
+      "thinking: its thinking level, which it keeps, by default xhigh); it starts with an empty conversation and the brief. " +
       "list: your children, and what each one that works does now. send: a message to a child (child: its ID); a child that waits starts on it " +
       "at once, and one that works takes it when its current tool calls end. interrupt: ends the tool calls a child is in, such as a command " +
       "that hangs; the child goes on, sees that they were aborted, and takes the messages that wait for it. " +
@@ -416,7 +426,8 @@ export function childrenExtension(host: ChildrenHost): Extension {
         title: opt(str()),
         brief: opt(str()),
         place: opt(str()),
-        thinking: opt(StringEnum(["high", "xhigh", "max"] as const)),
+        model: opt(str()),
+        thinking: opt(StringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const)),
         child: opt(str()),
         message: opt(str()),
       },
@@ -438,9 +449,14 @@ export function childrenExtension(host: ChildrenHost): Extension {
       if (args.action === "start") {
         if (!args.title?.trim() || !args.brief?.trim()) return text("start needs a title and a brief.");
         const place = args.place?.trim() || host.place();
-        const { model, thinkingLevel: fallback } = host.agent();
+        // A model of its own is checked now, so a child never starts with a model it cannot use. Without one, the
+        // child has the main model, also when bot.json changes it later.
+        const chosen = args.model?.trim() || undefined;
+        const found = chosen === undefined ? { model: host.mainModel() } : await host.childModel(chosen);
+        if ("refused" in found) return text(`Not started: ${found.refused}`);
+        const { model } = found;
         // As pi does, a level the model does not have becomes the nearest one it has, at each request (pi-ai).
-        const thinkingLevel = args.thinking ?? fallback;
+        const thinkingLevel = args.thinking ?? DEFAULT_CHILD_THINKING;
         const started = await api.commit(async (tx) => {
           const state = await tx.doc(Children, api.conversationId);
           const full = atCap(state);
@@ -457,6 +473,7 @@ export function childrenExtension(host: ChildrenHost): Extension {
             title: args.title!.trim(),
             conversationId: conversation.id,
             ...(place ? { place } : {}),
+            ...(chosen === undefined ? {} : { model: chosen }),
             thinking: thinkingLevel,
             startedAt: now,
             since: now,
@@ -468,7 +485,8 @@ export function childrenExtension(host: ChildrenHost): Extension {
         }, call);
         if (started.id === undefined) return text(await capText("Not started", started.full, api.now()));
         return text(
-          `Started ${started.id} ("${args.title!.trim()}")${place ? ` for ${place}` : ""}, thinking ${thinkingLevel}. Its final message comes back to you as a wake.`,
+          `Started ${started.id} ("${args.title!.trim()}")${place ? ` for ${place}` : ""}, model ${model.provider}/${model.modelId}${chosen === undefined ? " (yours)" : ""}, ` +
+            `thinking ${thinkingLevel}. Its final message comes back to you as a wake.`,
         );
       }
       if (!args.child) return text(`${args.action} needs a child ID.`);

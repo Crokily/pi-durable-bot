@@ -24,8 +24,8 @@ export interface BotOptions {
   /** bot.json "judge". */
   readonly judge?: string;
   readonly settings?: Record<string, unknown>;
-  /** bot.json "childModel": fake/helper, which the fake provider then has too. */
-  readonly childModel?: string;
+  /** More models for children: fake/helper and fake/other, and locked/model, whose provider has no key. */
+  readonly moreModels?: boolean;
   /** Also a terminal channel, for `pots chat`. */
   readonly terminal?: boolean;
   /**
@@ -70,7 +70,6 @@ export class TestGateway {
       model: "fake/coworker",
       thinking: "off",
       judge: options.judge ?? "off",
-      ...(options.childModel ? { childModel: options.childModel } : {}),
       channels: [{ id: CHANNEL, type: "test", dir: this.platformDir, me: ME }, ...(options.terminal ? [{ id: "terminal", type: "terminal" }] : [])],
       settings: { debounceMs: 300, debounceMaxMs: 2_000, ...options.settings },
     };
@@ -92,9 +91,11 @@ export class TestGateway {
           },
           models: [
             { id: "coworker", contextWindow: 128_000, input: ["text", "image"] },
-            ...(options.childModel ? [{ id: "helper", contextWindow: 128_000, input: ["text", "image"] }] : []),
+            ...(options.moreModels ? ["helper", "other"].map((id) => ({ id, contextWindow: 128_000, input: ["text", "image"] })) : []),
           ],
         },
+        // No key: pi knows its model, but it is not signed in.
+        ...(options.moreModels ? { locked: { baseUrl: options.model.url, api: "openai-completions", models: [{ id: "model", contextWindow: 128_000 }] } } : {}),
       },
     };
     writeFileSync(join(this.home, "pi", "models.json"), JSON.stringify(models, null, 2));

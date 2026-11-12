@@ -20,10 +20,11 @@ const isChild = (request: FakeRequest) => request.system.includes("You are a chi
 
 /**
  * The main agent starts a child for "please research" and stops it for "stop the research"; a child's end it passes
- * on in the place. The child answers its brief at once, or for "wait long" runs a long command first. For "please
- * note", the child adds a line to the bot's memory index first. For "please probe" the child runs a command that hangs
- * after one line of output, from bash or from a script; the main agent sends it "wrap up" for "wrap up the probe", and
- * interrupts it for "interrupt the probe".
+ * on in the place. The child answers its brief at once, or for "wait long" runs a long command first, and for "wait
+ * for go" one that ends once the file go is in the workspace. For "please note", the child adds a line to the bot's
+ * memory index first. "on <model>" starts the child on that model, and "please tell <child> more" sends it a message.
+ * For "please probe" the child runs a command that hangs after one line of output, from bash or from a script; the
+ * main agent sends it "wrap up" for "wrap up the probe", and interrupts it for "interrupt the probe".
  */
 function script(request: FakeRequest): FakeReply {
   const last = request.messages.at(-1);
@@ -33,6 +34,7 @@ function script(request: FakeRequest): FakeReply {
     if (last.content.includes("hang in bash")) return { call: { name: "bash", arguments: { command: HANG } } };
     if (last.content.includes("hang in a script")) return { call: { name: "codemode", arguments: { code: `return await tools.bash({ command: ${JSON.stringify(HANG)} });` } } };
     if (last.content.includes("wait long")) return { call: { name: "bash", arguments: { command: "sleep 60" } } };
+    if (last.content.includes("wait for go")) return { call: { name: "bash", arguments: { command: "until [ -e go ]; do sleep 0.2; done" } } };
     if (last.content.includes("nap first")) return { call: { name: "bash", arguments: { command: "sleep 8" } } };
     if (last.content.includes("save a memory")) {
       const index = /Contents of (\S+\/MEMORY\.md) \(the auto-memory of/.exec(request.system)![1]!;
@@ -54,11 +56,18 @@ function script(request: FakeRequest): FakeReply {
     const brief = last.content.includes("by script") ? "hang in a script" : "hang in bash";
     return { call: { name: "task", arguments: { action: "start", title: "probe", brief } } };
   }
+  const tell = /please tell (c\d+) more/.exec(last.content);
+  if (tell) return { call: { name: "task", arguments: { action: "send", child: tell[1], message: "more" } } };
+  const on = /please \w+ on ([\w-]+\/[\w-]+)/.exec(last.content)?.[1];
+  if (last.content.includes("please wait")) {
+    const choice = on ? { model: on, thinking: "low" } : {};
+    return { call: { name: "task", arguments: { action: "start", title: "waiter", brief: `wait for go, then answer (${on ?? "no model"})`, ...choice } } };
+  }
   if (last.content.includes("please nap")) return { call: { name: "task", arguments: { action: "start", title: "nap", brief: "nap first, then answer" } } };
   if (last.content.includes("please note")) return { call: { name: "task", arguments: { action: "start", title: "note", brief: "save a memory", thinking: "max" } } };
   if (last.content.includes("please research")) {
     const brief = last.content.includes("slowly") ? "wait long, then find the answer" : "find the answer";
-    return { call: { name: "task", arguments: { action: "start", title: "research", brief } } };
+    return { call: { name: "task", arguments: { action: "start", title: "research", brief, ...(on ? { model: on } : {}) } } };
   }
   return { text: "nothing to do" };
 }
@@ -66,9 +75,13 @@ function script(request: FakeRequest): FakeReply {
 /** A command that hangs after one line of output; the process that hangs writes its ID to hang.pid in the workspace. */
 const HANG = "sleep 6131 & echo $! > hang.pid; echo probing 5901; wait";
 
-async function setUp(childModel?: string): Promise<void> {
+async function setUp(options: { moreModels?: boolean; definition?: Record<string, unknown> } = {}): Promise<void> {
   model = await startFakeModel(script);
-  gateway = new TestGateway({ model, ...(childModel ? { childModel } : {}) });
+  gateway = new TestGateway({ model, moreModels: options.moreModels ?? false });
+  if (options.definition) {
+    const file = join(gateway.botDir, "bot.json");
+    writeFileSync(file, `${JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), ...options.definition }, null, 2)}\n`);
+  }
   await gateway.start();
 }
 
@@ -138,17 +151,55 @@ describe("children", { timeout: 90_000 }, () => {
     expect(gateway.pots("children")).toMatch(/^c1 "note": .*, thinking max$/m);
   });
 
-  it("takes the bot's model once bot.json no longer names a childModel, also a child that works", async () => {
-    await setUp("fake/helper");
-    gateway.say("general", "alice", `@${ME} please nap`);
-    await waitFor(() => model.requests.some(isChild), { what: "the child to start" });
+  it("keeps the model the main agent chose across a bot.json change and a restart; a child without one has the bot's model", async () => {
+    // childModel and childThinking of an earlier version are still in bot.json: they are ignored, and the gateway says so.
+    await setUp({ moreModels: true, definition: { childModel: "fake/helper", childThinking: "max" } });
+    expect(gateway.output.some((line) => String(line.message).startsWith('"childModel" and "childThinking" in bot.json are no longer used, and ignored'))).toBe(true);
+    const children = () => model.requests.filter(isChild);
+    gateway.say("general", "alice", `@${ME} please wait on fake/helper`);
+    await waitFor(() => children().length === 1, { what: "the first child" });
+    gateway.say("general", "alice", `@${ME} please wait`);
+    await waitFor(() => children().length === 2, { what: "the second child" });
+    // Each line may be followed by lines on what the child does now.
+    const list = gateway.pots("children");
+    expect(list).toMatch(/^c1 "waiter": working, for [^,]*, for test:#general, model fake\/helper, thinking low$/m);
+    expect(list).toMatch(/^c2 "waiter": working, for [^,]*, for test:#general, thinking xhigh$/m);
+
+    // The bot's model changes while both children work: only the child without a model of its own takes it.
     const file = join(gateway.botDir, "bot.json");
-    const { childModel: _, ...definition } = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
-    writeFileSync(file, `${JSON.stringify(definition, null, 2)}\n`);
+    writeFileSync(file, `${JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), model: "fake/other" }, null, 2)}\n`);
     await waitFor(() => gateway.output.some((line) => line.message === "definition applied"), { what: "the new definition" });
-    await waitFor(() => reports().length === 1, { what: "the report" });
-    // The child's first request before the change, its last one after.
-    expect(model.requests.filter(isChild).map((request) => request.model)).toEqual(["helper", "coworker"]);
+    writeFileSync(join(gateway.botDir, "workspace", "go"), "");
+    await waitFor(() => reports().length === 2, { what: "both reports" });
+    const of = (choice: string) => children().filter((request) => request.messages[0]!.content.endsWith(`(${choice})`)).map((request) => request.model);
+    expect(of("fake/helper")).toEqual(["helper", "helper"]);
+    expect(of("no model")).toEqual(["coworker", "other"]);
+
+    // After a restart, each keeps the model it had.
+    await gateway.stop();
+    await gateway.start();
+    gateway.say("general", "alice", `@${ME} please tell c1 more`);
+    await waitFor(() => reports().length === 3, { what: "the first child's second report" });
+    gateway.say("general", "alice", `@${ME} please tell c2 more`);
+    await waitFor(() => reports().length === 4, { what: "the second child's second report" });
+    expect(of("fake/helper")).toEqual(["helper", "helper", "helper"]);
+    expect(of("no model")).toEqual(["coworker", "other", "other"]);
+  });
+
+  it("starts no child on a model that is not signed in or unknown, and says why", async () => {
+    await setUp({ moreModels: true });
+    const results = () => agentRequests(model).flatMap((request) => (request.messages.at(-1)?.role === "tool" ? [request.messages.at(-1)!.content] : []));
+    gateway.say("general", "alice", `@${ME} please research on locked/model`);
+    await waitFor(() => results().length === 1, { what: "the first refusal" });
+    gateway.say("general", "alice", `@${ME} please research on fake/nope`);
+    await waitFor(() => results().length === 2, { what: "the second refusal" });
+    const list = 'a codemode script lists the models you can use with models.getAvailableOfType("chat").';
+    expect(results()).toEqual([
+      `Not started: locked/model is not signed in on this computer: pi has no login or key for "locked". A person signs in with pots login in their terminal; ${list}`,
+      `Not started: unknown model fake/nope; ${list}`,
+    ]);
+    expect(gateway.pots("children").trim()).toBe("No children.");
+    expect(model.requests.some(isChild)).toBe(false);
   });
 
   for (const when of ["before", "after"] as const) {

@@ -122,8 +122,6 @@ describe("the screen tool in a codemode script", { timeout: 60_000 }, () => {
         screen: { current: () => ({ key: SCREEN, label: "the test screen", env: { POTS_TEST_SCREEN: "yes" } }), bot: dir, name: () => "Test", leases },
         sections: [{ name: "identity", render: () => "You are a test bot." }],
         children: {
-          model: () => undefined,
-          thinking: () => "off",
           max: () => 1,
           sections: [{ name: "child", render: () => "You are a child." }],
           place: () => undefined,

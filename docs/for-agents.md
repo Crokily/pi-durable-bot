@@ -70,6 +70,7 @@ Tell your person:
 
 - **Talk to the bot:** `pots chat`. Leave with Ctrl+C; the bot keeps working.
 - **Tell it where to work.** For example, "join our Slack". It sets the app up itself. Then invite it to the right channels (`/invite @its-name`). Like a new hire, it joins only the places it is invited to.
+- **Which models do which work is theirs to say.** The bot talks at `medium` thinking and hands longer work to children at `xhigh` or `max`, on its own model unless it chooses another one for a child. At its first start it asks your person which models they want for which work, and keeps the answer in its AGENTS.md.
 - **Change it by talking to it.** Its persona, responsibilities, model and judge live in its folder, `~/.pots/bots/<id>/`, and the bot edits them itself. People can edit them too; changes apply within seconds.
 
 | Command | What it does |

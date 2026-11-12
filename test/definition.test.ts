@@ -62,14 +62,31 @@ describe("bot.json while running", { timeout: 90_000 }, () => {
     const errorFile = join(gateway.botDir, "bot.json.error");
     const definition = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
     // The fake model has no thinking levels: pi makes max the nearest one it has.
-    writeFileSync(file, `${JSON.stringify({ ...definition, thinking: "max", childThinking: "max" }, null, 2)}\n`);
+    writeFileSync(file, `${JSON.stringify({ ...definition, thinking: "max" }, null, 2)}\n`);
     await gateway.start();
     gateway.say("general", "alice", `@${ME} think hard`);
     await waitFor(() => gateway.sent().length === 1, { what: "the reply" });
 
-    writeFileSync(file, `${JSON.stringify({ ...definition, childThinking: "huge" }, null, 2)}\n`);
+    writeFileSync(file, `${JSON.stringify({ ...definition, thinking: "huge" }, null, 2)}\n`);
     await waitFor(() => existsSync(errorFile), { what: "bot.json.error" });
-    expect(readFileSync(errorFile, "utf8")).toBe(`${file}: "childThinking" must be off, minimal, low, medium, high, xhigh or max\n`);
+    expect(readFileSync(errorFile, "utf8")).toBe(`${file}: "thinking" must be off, minimal, low, medium, high, xhigh or max\n`);
+  });
+
+  it("loads a bot.json with the childModel and childThinking of earlier versions, and says they are ignored", async () => {
+    model = await startFakeModel();
+    gateway = new TestGateway({ model });
+    const file = join(gateway.botDir, "bot.json");
+    const definition = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+    // Values that were wrong then do not matter now.
+    writeFileSync(file, `${JSON.stringify({ ...definition, childModel: "nobody/knows", childThinking: "huge" }, null, 2)}\n`);
+    await gateway.start();
+    gateway.say("general", "alice", `@${ME} hello`);
+    await waitFor(() => gateway.sent().length === 1, { what: "the reply" });
+    expect(existsSync(join(gateway.botDir, "bot.json.error"))).toBe(false);
+    expect(gateway.output.map((line) => line.message)).toContain(
+      '"childModel" and "childThinking" in bot.json are no longer used, and ignored: the main agent chooses each child\'s model and thinking level when it starts the child, ' +
+        "and a child it starts without them has the bot's model and thinking xhigh. Remove them from bot.json.",
+    );
   });
 
   it("keeps the bot's own prompt sections for the page, and shows a change after the page turns", async () => {

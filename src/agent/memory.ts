@@ -527,7 +527,7 @@ export class MemoryPasses {
       // What it changed counts also when its model failed; then the next pass looks at the same messages again.
       next = await this.#host.settle(ended.answered ? { cursor: at } : {});
       this.#tell("extract", ended);
-      if (!ended.answered) return;
+      if (!ended.answered) return this.#log("memory pass got no answer", { source: "extract", reason: ended.reason });
       this.#log("memory pass", { messages: messages.length, written: ended.written.length, deleted: ended.deleted.length });
     }
     if (!this.#closing && this.#host.enabled() && dreamDue(next)) await this.#dream(at, next);
@@ -539,6 +539,7 @@ export class MemoryPasses {
     await this.#host.settle(ended.answered ? { dreamt: Date.now() } : {});
     this.#tell("dream", ended);
     if (ended.answered) this.#log("memory dream", { written: ended.written.length, deleted: ended.deleted.length });
+    else this.#log("memory pass got no answer", { source: "dream", reason: ended.reason });
   }
 
   /** The note of what a fork changed, for the main agent's next wake. */
@@ -548,10 +549,16 @@ export class MemoryPasses {
 
   /**
    * Fork the main conversation at `at`, give the fork the message, and wait until it ends. Returns whether it ended as
-   * it should (answered, or at its turn cap) and the files it wrote and deleted, or undefined when the gateway stops.
-   * The fork is deleted after.
+   * it should (answered, or at its turn cap), why not, and the files it wrote and deleted, or undefined when the gateway
+   * stops. The fork is deleted after. The caller logs how it ended once it has recorded it, so that a log line means the
+   * pass is over: its fork deleted and its progress stored.
    */
-  async #fork(source: MemorySource, at: number, message: string, maxTurns?: number): Promise<{ answered: boolean; written: string[]; deleted: string[] } | undefined> {
+  async #fork(
+    source: MemorySource,
+    at: number,
+    message: string,
+    maxTurns?: number,
+  ): Promise<{ answered: boolean; reason?: string; written: string[]; deleted: string[] } | undefined> {
     const root = this.#root!;
     const context = this.#context;
     // Before the fork exists: a file that changes after this, the fork may not change.
@@ -573,8 +580,12 @@ export class MemoryPasses {
       if (this.#closing) return undefined;
       const capped = state.maxTurns !== undefined && state.rounds >= state.maxTurns;
       const answered = settled.status === "done" || capped;
-      if (!answered) this.#log("memory pass got no answer", { source, reason: settled.status === "unanswered" ? settled.reason : "unknown" });
-      return { answered, written: [...state.written], deleted: [...state.deleted] };
+      return {
+        answered,
+        ...(answered ? {} : { reason: settled.status === "unanswered" ? settled.reason : "unknown" }),
+        written: [...state.written],
+        deleted: [...state.deleted],
+      };
     } finally {
       this.#forks.delete(Number(id));
       if (!this.#closing) await this.#delete(id);

@@ -48,7 +48,8 @@ export function workSection(facts: PromptFacts): string {
 - A brief gives the child what it cannot find itself, such as the person's words and the place. Not the method or the steps: the child is usually the stronger model.
 - You choose each child's thinking level when you start it: high, xhigh (the default) or max; harder work gets more.
 - Only one agent can use a screen at a time, so give screen work to one child at a time.
-- While a child works for a place, new events there come to you as "[new events]". Timed and fallback wakes list the children that work.
+- A child takes your messages only between its steps: one you send while it is in a tool call, such as a long command, waits until the call ends. The task tool's interrupt ends the tool calls a child is in, and the child goes on; stop ends the child.
+- While a child works for a place, new events there come to you as "[new events]". Timed and fallback wakes list the children that work, and what each does now.
 
 # Addresses
 - An address is an opaque string that points to a place, thread, message or person. It starts with the channel account. Copy addresses from wake messages or the log; do not build them yourself.
@@ -415,7 +416,7 @@ function renderEvent(event: WakeEvent): string {
   return lines.join("\n");
 }
 
-/** The children that work now, with how long each has run. */
+/** The children that work now, with how long each has run and what each does now. */
 function renderChildren(children: readonly ChildInfo[], label: string, now = Date.now()): string[] {
   const working = children.filter((child) => child.since !== undefined && child.stoppedAt === undefined);
   return working.length === 0 ? [] : [`${label} (${working.length}):`, ...working.map((child) => `- ${describeChild(child, now)}`)];

@@ -2,7 +2,13 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
-## Unreleased
+## 0.7.2 (2026-11-13)
+
+The bot sees what its children are doing and can free a stuck one, chooses each child's model, and `pots login` sets up everything in one run.
+
+### Added
+- **The bot sees what a working child is doing now.** Wherever a working child is described (the `task` tool's `list`, the answer to `send`, the children lines in wakes, `pots children`), indented lines say which tool it is in and for how long, the start of its command, its last output line and how old it is, and whether a message to it is still waiting: a child takes messages only between its steps.
+- **`task interrupt` ends only a child's current command.** The child sees that its tool call was aborted, takes the messages that waited, and goes on. `stop` still ends the child.
 
 ### Changed
 - **`pots login` adds all you need in one run.** After each sign-in, key or local server it says what is ready, or why not, and comes back to its menu; "Done" leaves and lists the models and judges pi can use, as `pots login --list` does. A judge's key, such as TypeSafe's for Jev, is tried at once, as `pots init` tries it.
@@ -14,6 +20,7 @@ What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm inst
 
 ### Fixed
 - **An empty API key is no longer saved.** Enter at an empty key prompt in `pots login` or `pots init` saved an empty key over the one pi had, and pi then counted the provider as not signed in: `pots login` ended with "signed in, but pi lists no model or judge for this login". Now the prompt asks again, and Ctrl+C goes back without changing the key.
+- **For contributors: `npm test` no longer depends on the environment it runs in.** `POTS_*` variables, a desktop (`DISPLAY`) and your home folder no longer leak into the tests, and the sign-in tests can no longer open a real browser. A test of memory passes that sometimes failed under load is fixed in the code: the log line "memory pass got no answer" is written after the pass has saved its progress.
 
 ## 0.7.1 (2026-11-10)
 

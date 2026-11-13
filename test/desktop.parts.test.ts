@@ -148,6 +148,8 @@ describe("desktop links", () => {
   afterEach(async () => {
     await f.desktop.stop();
     await f.sql.close();
+    // Windows does not delete a database file that is still open.
+    f.leases.close();
   });
 
   it("need a VNC server that answers before a link is made", async () => {
@@ -307,6 +309,7 @@ describe("desktop links after a stop or a crash", () => {
     expect(second.woke).toHaveLength(1);
     await second.desktop.stop();
     await second.sql.close();
+    leases.close();
   });
 });
 

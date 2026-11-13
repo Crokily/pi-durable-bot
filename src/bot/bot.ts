@@ -502,7 +502,8 @@ export class Bot implements WakeTarget {
 
   async deliver(wake: PlaceWake, caller?: TelemetrySpan): Promise<Delivered> {
     const me = this.#gateway.channels.find((channel) => channel.owns(wake.place.address))?.me;
-    const text = renderPlaceWake(wake, await this.#agent.contextStatus(), me, this.#workingChildren(wake.place.address));
+    const children = await this.#agent.childrenNow(this.#workingChildren(wake.place.address));
+    const text = renderPlaceWake(wake, await this.#agent.contextStatus(), me, children);
     return this.#submit(wake.id, wake.reason, wake.place.address, text, wake.reason === "steer", caller);
   }
 
@@ -511,7 +512,8 @@ export class Bot implements WakeTarget {
   }
 
   async #deliverTimer(timer: DueTimer, caller?: TelemetrySpan): Promise<Delivered> {
-    const text = renderTimerWake(timer, await this.#agent.contextStatus(), this.#definition.settings.fallbackWakeMinutes, this.#workingChildren());
+    const children = await this.#agent.childrenNow(this.#workingChildren());
+    const text = renderTimerWake(timer, await this.#agent.contextStatus(), this.#definition.settings.fallbackWakeMinutes, children);
     return this.#submit(`timer:${timer.id}`, timer.set_by === "agent" ? "timer" : timer.set_by, undefined, text, false, caller);
   }
 
@@ -608,7 +610,7 @@ export class Bot implements WakeTarget {
 
   async turnPage(note: string): Promise<{ notesChars: number }> {
     const notes = await readFile(this.paths.notes, "utf8").catch(() => "");
-    await this.#agent.turnPage(renderHandoff(note, notes, this.paths.notes, this.#workingChildren()));
+    await this.#agent.turnPage(renderHandoff(note, notes, this.paths.notes, await this.#agent.childrenNow(this.#workingChildren())));
     this.#print("turn page", { notesChars: notes.length });
     return { notesChars: notes.length };
   }
@@ -683,8 +685,8 @@ export class Bot implements WakeTarget {
       },
       "POST /turn-page": async (body: Record<string, unknown>) => this.turnPage(text(body.note, "note")),
       "GET /children": async () => {
+        const children = await this.#agent.childrenNow();
         const now = Date.now();
-        const children = this.#agent.children;
         return { children, text: children.length === 0 ? "No children." : children.map((child) => describeChild(child, now, { thinking: true })).join("\n") };
       },
       "POST /children/stop": async (body: Record<string, unknown>) => {

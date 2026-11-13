@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { JsonValue } from "@earendil-works/chord";
-import { BACKGROUND_CONTEXT, type Context, withTelemetry } from "@earendil-works/chord/context";
+import { BACKGROUND_CONTEXT, type Context, withAbortSignal, withTelemetry } from "@earendil-works/chord/context";
 import type { Message, Models } from "@earendil-works/pi-ai";
 import { calculateContextTokens, estimateMessageTokens } from "@earendil-works/pi-ai/utils/estimate";
 import {
@@ -16,6 +16,7 @@ import {
   GenerationTask,
   Harness,
   hook,
+  InboxDoc,
   type JsonObject,
   LiveDoc,
   type LiveState,
@@ -27,6 +28,7 @@ import {
   type TaskId,
   SystemEntry,
   section,
+  type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
@@ -35,7 +37,22 @@ import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlit
 import { type BashExecution, createBashTool, createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
 import { bool, map, obj, opt, str, unknown } from "@earendil-works/pi-schema";
 import type { TelemetryCarrier, TelemetryContext, TelemetrySpan } from "@earendil-works/pi-telemetry";
-import { type ChildEnd, type ChildInfo, type ChildRecord, type ChildrenState, Children, childInfo, childrenExtension, reportRequestId } from "./children.ts";
+import {
+  age,
+  type CallTask,
+  type ChildActivity,
+  type ChildCall,
+  type ChildEnd,
+  type ChildInfo,
+  type ChildRecord,
+  type ChildrenState,
+  Children,
+  childActivity,
+  childInfo,
+  childrenExtension,
+  describeActivity,
+  reportRequestId,
+} from "./children.ts";
 import type { Codemode } from "./codemode.ts";
 import type { Mcp } from "./mcp.ts";
 import { deleteLeftForks, lastAnswer, type MemoryHost, MemoryPasses, readPaths, withAgeNote } from "./memory.ts";
@@ -184,6 +201,8 @@ export interface CacheUse {
 
 /** Call results longer than this go to a file in the workspace. */
 const CALL_OUTPUT_CHARS = 30_000;
+/** How long an interrupt waits for a child's tool calls to end. */
+const INTERRUPT_WAIT_MS = 10_000;
 /** The window assumed for a model whose catalog entry gives none. */
 const DEFAULT_WINDOW = 200_000;
 /** Room kept free for the answer and long tool results; pi's own default is 16K. */
@@ -216,6 +235,8 @@ export class Agent {
   #closing = false;
   /** Stops the last process did not finish; resume() finishes them. */
   #unfinishedStops: Stop[] = [];
+  /** The running tool calls that give output as they run, by tool task, with when their last output came. */
+  readonly #outputs: Map<string, number | undefined>;
   /**
    * Crash tests: called just before and just after a child's end is handed to the main agent, right after a stop
    * marked a child stopped, before its work ended, and right before a memory pass forks the main conversation.
@@ -227,10 +248,11 @@ export class Agent {
     beforeMemoryPass?: () => void;
   } = {};
 
-  private constructor(options: AgentOptions, harness: Harness, root: Conversation) {
+  private constructor(options: AgentOptions, harness: Harness, root: Conversation, outputs: Map<string, number | undefined>) {
     this.#options = options;
     this.#harness = harness;
     this.#root = root;
+    this.#outputs = outputs;
     this.#models = options.models;
     this.#model = modelRef(options.model);
   }
@@ -269,6 +291,26 @@ export class Agent {
         execution.inheritEnv = false;
         execution.env = { ...base, ...extra, ...execution.env };
       };
+    // When each running call of bash, screen and codemode last gave output, so a child's description can say how old its
+    // last output is. Only in memory: a call does not run on after a restart.
+    const outputs = new Map<string, number | undefined>();
+    const timed = <T extends ToolRegistration>(tool: T): T =>
+      defineTool({
+        ...tool,
+        execute: async (args, api, call) => {
+          const key = String(api.taskId);
+          outputs.set(key, undefined);
+          const output = (chunk: string | Uint8Array, skipped?: Parameters<typeof api.output>[1]) => {
+            outputs.set(key, Date.now());
+            api.output(chunk, skipped);
+          };
+          try {
+            return await tool.execute(args, new Proxy(api, { get: (target, property) => (property === "output" ? output : Reflect.get(target, property, target)) }), call);
+          } finally {
+            outputs.delete(key);
+          }
+        },
+      }) as T;
     /** The channel actions, for the main agent only: children have no send, react or call. */
     const channelTools = [
       defineTool({
@@ -313,32 +355,34 @@ export class Agent {
         },
       }),
     ];
-    const screenTool = defineTool({
-      ...createBashTool(),
-      name: "screen",
-      description:
-        "Run a bash command on your screen: like bash, with the screen's environment (such as DISPLAY), which bash does not have. " +
-        "Use it for anything on the screen: screenshots, mouse, keyboard, and the apps and the browser on it. Only one agent uses a screen at a time: " +
-        "your first call takes the screen until your work ends, and while another agent has it, the command does not run and you learn who has it.",
-      // A rerun after a crash could click twice: the model gets an interrupted result instead.
-      replay: "unsafe",
-      execute: async (args, api, call) => {
-        const screen = options.screen.current();
-        if (screen.key === undefined) return { output: text(NO_SCREEN), isError: true };
-        const taken = leases().take(screen.key, {
-          bot: options.screen.bot,
-          name: options.screen.name(),
-          agent: describeAgent(String(api.conversationId)),
-          conversation: String(api.conversationId),
-        });
-        if (!taken.ok) return { output: text(renderBusy(screen, taken.lease, leases().idleMs, options.screen.bot)), isError: true };
-        try {
-          return await createBashTool({ prepare: environment(screen.env) }).execute(args, api, call);
-        } finally {
-          taken.done();
-        }
-      },
-    });
+    const screenTool = timed(
+      defineTool({
+        ...createBashTool(),
+        name: "screen",
+        description:
+          "Run a bash command on your screen: like bash, with the screen's environment (such as DISPLAY), which bash does not have. " +
+          "Use it for anything on the screen: screenshots, mouse, keyboard, and the apps and the browser on it. Only one agent uses a screen at a time: " +
+          "your first call takes the screen until your work ends, and while another agent has it, the command does not run and you learn who has it.",
+        // A rerun after a crash could click twice: the model gets an interrupted result instead.
+        replay: "unsafe",
+        execute: async (args, api, call) => {
+          const screen = options.screen.current();
+          if (screen.key === undefined) return { output: text(NO_SCREEN), isError: true };
+          const taken = leases().take(screen.key, {
+            bot: options.screen.bot,
+            name: options.screen.name(),
+            agent: describeAgent(String(api.conversationId)),
+            conversation: String(api.conversationId),
+          });
+          if (!taken.ok) return { output: text(renderBusy(screen, taken.lease, leases().idleMs, options.screen.bot)), isError: true };
+          try {
+            return await createBashTool({ prepare: environment(screen.env) }).execute(args, api, call);
+          } finally {
+            taken.done();
+          }
+        },
+      }),
+    );
 
     let harness: Harness | undefined;
     // After an upgrade, the main conversation's pinned sections show their new text until a request with it goes out.
@@ -414,23 +458,25 @@ export class Agent {
         defineTool({ ...read, execute: async (args, api, call) => withAgeNote(await read.execute(args, api, call), args.path, memoryFolders(), options.workspace) }),
         createWriteTool(),
         createEditTool(),
-        createBashTool({ prepare: environment() }),
+        timed(createBashTool({ prepare: environment() })),
       ],
     });
     // pi's code mode, for the main agent and its children. As in pi, a script waits for the MCP servers it names, or for
     // all of them when it looks tools up, so it sees their tools. A server that connected meanwhile came after this
     // call's phase resolved the agent: then the script gets the agent as it is now, with that server's tools.
     const [script, ...scriptModels] = options.codemode.tools;
-    const codemodeTool = defineTool({
-      ...script!,
-      execute: async (args, api, call) => {
-        const code = (args as { code?: unknown }).code;
-        if (!(await options.mcp?.ready(typeof code === "string" ? code : "", call.abortSignal))) return script!.execute(args, api, call);
-        const now = await (await harness!.conversation(api.conversationId, call))!.agent(call);
-        const current = new Proxy(api, { get: (target, property) => (property === "agent" ? async () => now : Reflect.get(target, property, target)) });
-        return script!.execute(args, current, call);
-      },
-    });
+    const codemodeTool = timed(
+      defineTool({
+        ...script!,
+        execute: async (args, api, call) => {
+          const code = (args as { code?: unknown }).code;
+          if (!(await options.mcp?.ready(typeof code === "string" ? code : "", call.abortSignal))) return script!.execute(args, api, call);
+          const now = await (await harness!.conversation(api.conversationId, call))!.agent(call);
+          const current = new Proxy(api, { get: (target, property) => (property === "agent" ? async () => now : Reflect.get(target, property, target)) });
+          return script!.execute(args, current, call);
+        },
+      }),
+    );
     const codemode = defineExtension({ name: "codemode", tools: [codemodeTool, ...scriptModels] });
     // The servers' tools, which only scripts call: a new extension of the same name each time servers connect or go.
     const mcp = () => options.mcp?.extension() ?? defineExtension({ name: "mcp" });
@@ -449,6 +495,8 @@ export class Agent {
         await self().#harness.abortSubmission(Number(submission) as SubmissionId, context, ROOT_CONVERSATION_ID);
       },
       stop: (id) => self().stopChild(id),
+      activity: (conversation) => self().#activity(conversation),
+      interrupt: (child) => self().interruptChild(child),
       settled: (conversation) => self().#releaseScreen(conversation),
       beforeReport: (reporter) => self().crashTests.beforeReport?.(reporter),
       afterReport: (reporter) => self().crashTests.afterReport?.(reporter),
@@ -496,7 +544,7 @@ export class Agent {
     const model = modelRef(options.model);
     const root = await harness.root(context, { agent: { model, thinkingLevel: options.thinking } });
     await root.configure({ model, thinkingLevel: options.thinking, cwd: options.workspace }, context);
-    agent = new Agent(options, harness, root);
+    agent = new Agent(options, harness, root, outputs);
     if (memory) {
       memory.attach(harness, root);
       memory.beforePass = () => agent?.crashTests.beforeMemoryPass?.();
@@ -630,6 +678,83 @@ export class Agent {
   /** The main agent's children, oldest first. */
   get children(): readonly ChildInfo[] {
     return this.#children;
+  }
+
+  /** Children with what each one that works does now, read from its conversation. */
+  async childrenNow(children: readonly ChildInfo[] = this.#children): Promise<ChildInfo[]> {
+    return Promise.all(
+      children.map(async (child) => {
+        if (child.since === undefined || child.stoppedAt !== undefined) return child;
+        const activity = await this.#activity(Number(child.conversationId) as ConversationId);
+        return activity === undefined ? child : { ...child, activity };
+      }),
+    );
+  }
+
+  /** What a working child does now: its current tool calls or model answer, and the messages that wait for it. */
+  async #activity(conversation: ConversationId): Promise<ChildActivity | undefined> {
+    try {
+      const [live, inbox] = await Promise.all([this.#harness.snapshot(LiveDoc, conversation, context), this.#harness.snapshot(InboxDoc, conversation, context)]);
+      const running = [...(live?.tools ?? []), ...(live?.nestedTools ?? [])].flatMap((slot) => (slot.taskId !== undefined && slot.status !== "done" ? [slot.taskId] : []));
+      const tasks = new Map<string, CallTask>();
+      for (const id of running) {
+        const record = await this.#harness.getTask(id, context);
+        if (!record) continue;
+        const checkpoint = record.state.checkpoint as { phase?: unknown; arguments?: JsonObject } | undefined;
+        tasks.set(String(id), {
+          ...(record.startedAt === undefined ? {} : { startedAt: record.startedAt }),
+          ...(checkpoint?.phase === "execute" && checkpoint.arguments ? { arguments: checkpoint.arguments } : {}),
+        });
+      }
+      return childActivity(live, inbox, tasks, this.#outputs);
+    } catch (error) {
+      this.#options.log("could not read what a child does", { conversation: String(conversation), error: String(error) });
+      return undefined;
+    }
+  }
+
+  /**
+   * End the tool calls a working child is in, such as a command that hangs. The child goes on: each call's result says
+   * it was aborted, and the child takes the messages that wait for it. Returns what happened, in words for the model.
+   */
+  async interruptChild(child: ChildInfo): Promise<string> {
+    const before = await this.#activity(Number(child.conversationId) as ConversationId);
+    if (before === undefined) return `Could not read what ${child.id} does now, so nothing was interrupted.`;
+    if (before.calls.length === 0) {
+      const now = describeActivity({ ...before, waiting: 0 }, Date.now());
+      return `${child.id} is in no tool call now, so nothing was interrupted.${now.length > 0 ? ` ${now.join(" ")}` : ""}`;
+    }
+    // A tool that does not end on its abort signal would hold the main agent: wait for a while, not for ever.
+    const wait = withAbortSignal(AbortSignal.timeout(INTERRUPT_WAIT_MS), context);
+    const ended = await Promise.all(
+      before.calls.map(async (call): Promise<"aborted" | "ended before" | "running"> => {
+        const task = Number(call.task) as TaskId;
+        try {
+          if ((await this.#harness.abortTask(task, wait)) === "terminal") return "ended before";
+          await this.#harness.waitForTask(task, wait);
+          return "aborted";
+        } catch (error) {
+          if (wait.abortSignal?.aborted) return "running";
+          throw error;
+        }
+      }),
+    );
+    const now = Date.now();
+    const named = (call: ChildCall) => `${call.tool}${call.since === undefined ? "" : `, which ran ${age(now - call.since)}`}${call.command === undefined ? "" : ` (${call.command})`}`;
+    const done = before.calls.filter((_, index) => ended[index] === "aborted");
+    const early = before.calls.filter((_, index) => ended[index] === "ended before");
+    const left = before.calls.filter((_, index) => ended[index] === "running");
+    const lines: string[] = [];
+    if (early.length > 0) lines.push(`${child.id}'s ${early.map((call) => call.tool).join(" and ")} ended by itself just before.`);
+    if (done.length > 0) {
+      const { waiting } = before;
+      const takes = waiting === 0 ? "" : `, and takes the ${waiting === 1 ? "message" : `${waiting} messages`} from you that ${waiting === 1 ? "waits" : "wait"}`;
+      lines.push(`Interrupted ${child.id}: ended its ${done.map(named).join("; its ")}. It goes on: it sees that ${done.length === 1 ? "the call was" : "the calls were"} aborted${takes}.`);
+    }
+    if (left.length > 0) {
+      lines.push(`${child.id}'s ${left.map((call) => call.tool).join(" and ")} did not end within ${INTERRUPT_WAIT_MS / 1_000} s of the interrupt; it ends when the tool gives up.`);
+    }
+    return lines.join("\n");
   }
 
   /** The model of children: bot.json's childModel, else the main model. */

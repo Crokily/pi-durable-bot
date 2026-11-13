@@ -1,7 +1,7 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { agentRequests, type FakeModel, type FakeReply, type FakeRequest, startFakeModel, wakeLine } from "./support/fake-model.ts";
+import { agentRequests, type FakeModel, type FakeReply, type FakeRequest, startFakeModel, wakeLine, wakes } from "./support/fake-model.ts";
 import { ME, pause, TestGateway, waitFor } from "./support/gateway.ts";
 
 // Children from outside: a real gateway whose fake main agent starts a child with the task tool. A report that comes
@@ -21,12 +21,17 @@ const isChild = (request: FakeRequest) => request.system.includes("You are a chi
 /**
  * The main agent starts a child for "please research" and stops it for "stop the research"; a child's end it passes
  * on in the place. The child answers its brief at once, or for "wait long" runs a long command first. For "please
- * note", the child adds a line to the bot's memory index first.
+ * note", the child adds a line to the bot's memory index first. For "please probe" the child runs a command that hangs
+ * after one line of output, from bash or from a script; the main agent sends it "wrap up" for "wrap up the probe", and
+ * interrupts it for "interrupt the probe".
  */
 function script(request: FakeRequest): FakeReply {
   const last = request.messages.at(-1);
   if (isChild(request)) {
     if (last?.role !== "user") return { text: "done waiting" };
+    if (last.content.includes("wrap up")) return { text: "wrapped up" };
+    if (last.content.includes("hang in bash")) return { call: { name: "bash", arguments: { command: HANG } } };
+    if (last.content.includes("hang in a script")) return { call: { name: "codemode", arguments: { code: `return await tools.bash({ command: ${JSON.stringify(HANG)} });` } } };
     if (last.content.includes("wait long")) return { call: { name: "bash", arguments: { command: "sleep 60" } } };
     if (last.content.includes("nap first")) return { call: { name: "bash", arguments: { command: "sleep 8" } } };
     if (last.content.includes("save a memory")) {
@@ -43,6 +48,12 @@ function script(request: FakeRequest): FakeReply {
     return { call: { name: "send", arguments: { to: place, text: `report: ${final}` } } };
   }
   if (last.content.includes("stop the research")) return { call: { name: "task", arguments: { action: "stop", child: "c1" } } };
+  if (last.content.includes("wrap up the probe")) return { call: { name: "task", arguments: { action: "send", child: "c1", message: "wrap up" } } };
+  if (last.content.includes("interrupt the probe")) return { call: { name: "task", arguments: { action: "interrupt", child: "c1" } } };
+  if (last.content.includes("please probe")) {
+    const brief = last.content.includes("by script") ? "hang in a script" : "hang in bash";
+    return { call: { name: "task", arguments: { action: "start", title: "probe", brief } } };
+  }
   if (last.content.includes("please nap")) return { call: { name: "task", arguments: { action: "start", title: "nap", brief: "nap first, then answer" } } };
   if (last.content.includes("please note")) return { call: { name: "task", arguments: { action: "start", title: "note", brief: "save a memory", thinking: "max" } } };
   if (last.content.includes("please research")) {
@@ -52,6 +63,9 @@ function script(request: FakeRequest): FakeReply {
   return { text: "nothing to do" };
 }
 
+/** A command that hangs after one line of output; the process that hangs writes its ID to hang.pid in the workspace. */
+const HANG = "sleep 6131 & echo $! > hang.pid; echo probing 5901; wait";
+
 async function setUp(childModel?: string): Promise<void> {
   model = await startFakeModel(script);
   gateway = new TestGateway({ model, ...(childModel ? { childModel } : {}) });
@@ -59,6 +73,23 @@ async function setUp(childModel?: string): Promise<void> {
 }
 
 const reports = () => gateway.sent().filter((record) => record.text?.startsWith("report:"));
+/** The result of the main agent's last task call that starts with `start`. */
+const taskResult = (start: string) =>
+  agentRequests(model)
+    .filter((request) => !isChild(request))
+    .flatMap((request) => request.messages.filter((message) => message.role === "tool" && message.content.startsWith(start)))
+    .at(-1)?.content;
+/** Whether the hanging process still runs: on Windows, Git Bash's process IDs are not Windows', so undefined there. */
+const hangRuns = () => {
+  if (process.platform === "win32") return undefined;
+  const pid = Number(readFileSync(join(gateway.botDir, "workspace", "hang.pid"), "utf8"));
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
 /** How often the main conversation holds a child's report, as its newest request shows it. */
 const reportsSeen = () => {
   const main = agentRequests(model).filter((request) => !isChild(request));
@@ -160,6 +191,61 @@ describe("children", { timeout: 90_000 }, () => {
     expect(reports()).toHaveLength(0);
     expect(gateway.query<{ id: string }>("SELECT id FROM bot_wakes WHERE reason = 'child'")).toHaveLength(0);
     expect(wakeLine(gateway.pots("children"))).toMatch(/^c1 "research": stopped/);
+  });
+
+  it("shows what a child that hangs in a command does, and interrupt ends only the command: the child takes the message that waited", async () => {
+    await setUp();
+    gateway.say("general", "alice", `@${ME} please probe`);
+    await waitFor(() => /Last output \d+ s ago: probing 5901/.test(gateway.pots("children")), { what: "the command's output" });
+    expect(existsSync(join(gateway.botDir, "workspace", "hang.pid"))).toBe(true);
+    expect(gateway.pots("children")).toMatch(
+      /^c1 "probe": working, for \d+ s, for test:#general, thinking xhigh\n {2}In bash for \d+ s: sleep 6131 & echo \$! > hang\.pid; echo probing 5901; wait\n {2}Last output \d+ s ago: probing 5901$/m,
+    );
+
+    // A message to the child while it is in the command waits for the command to end, and the main agent learns that,
+    // from the wake and from the answer to its send.
+    gateway.say("general", "alice", `@${ME} wrap up the probe`);
+    await waitFor(() => taskResult("Sent to c1") !== undefined, { what: "the send" });
+    const wake = wakes(model).find((text) => text.includes("wrap up the probe"))!;
+    expect(wake).toMatch(
+      /^Your children working for this place \(1\):\n- c1 "probe": working, for \d+ s, for test:#general\n {2}In bash for \d+ s: sleep 6131 [^\n]*\n {2}Last output \d+ s ago: probing 5901$/m,
+    );
+    expect(taskResult("Sent to c1")).toMatch(
+      /^Sent to c1; it takes the message when its current tool calls end\.\nc1 "probe": working, for \d+ s, for test:#general\n {2}In bash for \d+ s: sleep 6131 [^\n]*\n {2}Last output \d+ s ago: probing 5901$/,
+    );
+    await waitFor(() => gateway.pots("children").includes("1 message from you waits until its current tool calls end."), { what: "the waiting message" });
+    await pause(1_000);
+    expect(model.requests.filter(isChild)).toHaveLength(1);
+    expect(hangRuns()).not.toBe(false);
+
+    // The interrupt ends the command and the processes it started; the child goes on with the message.
+    gateway.say("general", "alice", `@${ME} interrupt the probe`);
+    await waitFor(() => reports().length === 1, { what: "the report" });
+    expect(reports()[0]!.text).toBe("report: wrapped up");
+    expect(taskResult("Interrupted c1")).toMatch(
+      /^Interrupted c1: ended its bash, which ran \d+ s \(sleep 6131 & echo \$! > hang\.pid; echo probing 5901; wait\)\. It goes on: it sees that the call was aborted, and takes the message from you that waits\.$/,
+    );
+    const after = model.requests.filter(isChild)[1]!;
+    expect(after.messages.map((message) => message.role)).toEqual(["user", "assistant", "tool", "user"]);
+    expect(after.messages[2]!.content).toMatch(/probing 5901[\s\S]*aborted/);
+    expect(after.messages[3]!.content).toBe("[message from the main agent]\nwrap up");
+    expect(hangRuns()).not.toBe(true);
+    expect(gateway.pots("children")).toMatch(/^c1 "probe": ended \d+ s ago, waits for a message, for test:#general, thinking xhigh$/m);
+  });
+
+  it("interrupts a command that a child's script runs, and the child goes on", async () => {
+    await setUp();
+    gateway.say("general", "alice", `@${ME} please probe by script`);
+    await waitFor(() => /Last output \d+ s ago: probing 5901/.test(gateway.pots("children")), { what: "the command's output" });
+    expect(gateway.pots("children")).toMatch(
+      /^c1 "probe": working, [^\n]*\n {2}In codemode for \d+ s: return await tools\.bash\(\{ command: "sleep 6131 [^\n]*\n {2}Its script is in bash for \d+ s: sleep 6131 & echo \$! > hang\.pid; echo probing 5901; wait\n {2}Last output \d+ s ago: probing 5901$/m,
+    );
+    gateway.say("general", "alice", `@${ME} interrupt the probe`);
+    await waitFor(() => reports().length === 1, { what: "the report" });
+    expect(reports()[0]!.text).toBe("report: done waiting");
+    expect(taskResult("Interrupted c1")).toMatch(/^Interrupted c1: ended its codemode, which ran \d+ s \(return await tools\.bash[^\n]*\)\. It goes on: it sees that the call was aborted\.$/);
+    expect(model.requests.filter(isChild).at(-1)!.messages.at(-1)!.content).toMatch(/aborted/);
+    expect(hangRuns()).not.toBe(true);
   });
 
   it("does nothing more when the gateway dies between marking a child stopped and ending its work", async () => {

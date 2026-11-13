@@ -146,6 +146,12 @@ interface Stream {
   close(code: number, reason: string): void;
 }
 
+/**
+ * The Starts of this process, one after another: between the check that nobody uses the screen and the binding, a
+ * Start waits for the VNC server, and two links must not both pass the check meanwhile.
+ */
+let starting: Promise<unknown> = Promise.resolve();
+
 const linkId = (row: { id: number }) => `D${row.id}`;
 const hash = (secret: string) => createHash("sha256").update(secret).digest("hex");
 const madeFor = (person: string | null) => person ?? "anyone";
@@ -282,6 +288,13 @@ export class BotDesktop {
       return { ok: true, secret: secret!, view: this.#view(row, secret) };
     }
     if (state !== "open") return { ok: false, status: 410, code: state, error: "This link has ended." };
+    const turn = starting.then(() => this.#bind(row, secret));
+    starting = turn.catch(() => {});
+    return turn;
+  }
+
+  /** The rest of a Start, alone among the Starts of this process. */
+  async #bind(row: DesktopRow, secret: string | undefined): Promise<StartResult> {
     const busy = await this.#busy(row.id);
     if (busy) return { ok: false, status: 409, code: "busy", error: `Someone is using this desktop through another link (${busy}).` };
     let layout: DesktopLayout;
@@ -303,6 +316,8 @@ export class BotDesktop {
     const bound = await this.#sql.transaction(async (tx) => {
       const current = await tx.get<DesktopRow>("SELECT * FROM bot_desktop_links WHERE id = ?", row.id);
       if (!current || this.#state(current) !== "open") return current;
+      // The same browser pressed Start twice at once: the first one bound it.
+      if (current.state === "started") return current;
       await tx.run(
         "UPDATE bot_desktop_links SET state = 'started', started_at = ?, browser = ?, layout = ?, expires_at = ? WHERE id = ?",
         now,
@@ -315,7 +330,10 @@ export class BotDesktop {
     });
     if (!bound || bound.browser !== hash(fresh)) {
       // Another browser was a moment faster, or the link ended meanwhile.
-      if (bound && this.#state(bound) === "started") return { ok: false, status: 409, code: "elsewhere", error: "This link is open on another device." };
+      if (bound && this.#state(bound) === "started") {
+        if (this.#mine(bound, secret)) return { ok: true, secret: secret!, view: this.#view(bound, secret) };
+        return { ok: false, status: 409, code: "elsewhere", error: "This link is open on another device." };
+      }
       return { ok: false, status: 410, code: bound ? this.#state(bound) : "missing", error: "This link has ended." };
     }
     this.#arm(row.id, bound.expires_at);
@@ -597,6 +615,7 @@ export class BotDesktop {
     };
     ws.once("close", () => {
       closed = true;
+      socketClose?.();
       forget();
     });
 

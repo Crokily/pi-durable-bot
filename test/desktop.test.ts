@@ -211,10 +211,17 @@ describe("desktop pages", { timeout: 120_000 }, () => {
     // The page takes the phone's shape.
     browser.send(setDesktopSize(500, 1082));
     await waitFor(() => desktop.width === 500, { what: "the desktop to take the phone's shape" });
-    // The same browser opens it again, in another tab: that one takes over.
-    const again = (await openSocket(path, cookie)) as Browser;
+    // Another tab of the same browser takes over from the first; closed during the handshake, it leaves no connection
+    // to the VNC server behind.
+    const before = desktop.connections.length;
+    const brief = (await openSocket(path, cookie)) as Browser;
+    expect((await brief.read(12)).toString("latin1")).toBe("RFB 003.008\n");
     expect(await browser.closed).toBe(4001);
-    browser = again;
+    brief.ws.close();
+    await brief.closed;
+    await waitFor(() => desktop.connections.slice(before).every((each) => each.closed), { what: "the VNC connection of the closed tab to close" });
+    // The same browser opens it again, in another tab.
+    browser = (await openSocket(path, cookie)) as Browser;
     expect(await handshake(browser, true)).toMatchObject({ width: 500, height: 1082 });
   });
 

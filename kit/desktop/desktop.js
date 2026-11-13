@@ -454,6 +454,9 @@ function reconnect(now) {
 
 async function dropped() {
   if (over) return;
+  // noVNC tells of the disconnect from the socket's own close handler, before this page's handler has the close code.
+  await sleep(0);
+  if (over) return;
   setDot("off");
   dim(W.reconnecting);
   if (closeCode === 4001) {
@@ -842,12 +845,17 @@ function syncTyped() {
   const added = now.slice(start, now.length - end).join("");
   sent = now.join("");
   if (removed === 0 && !added) return;
-  for (let index = 0; index < end; index++) sendKey("Left");
-  for (let index = 0; index < removed; index++) sendKey("BackSpace");
-  typeText(added);
-  if (end > 0) typing = typing.then(() => {
-    for (let index = 0; index < end; index++) sendKey("Right");
+  // In order with the characters still on their way: moves and deletions wait for them too.
+  typing = typing.then(() => {
+    for (let index = 0; index < end; index++) sendKey("Left");
+    for (let index = 0; index < removed; index++) sendKey("BackSpace");
   });
+  typeText(added);
+  if (end > 0) {
+    typing = typing.then(() => {
+      for (let index = 0; index < end; index++) sendKey("Right");
+    });
+  }
 }
 
 function onTypedKey(event) {

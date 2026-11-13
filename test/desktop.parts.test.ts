@@ -201,6 +201,15 @@ describe("desktop links", () => {
     ]);
   });
 
+  it("let only one of two links that are started at the same moment have the screen", async () => {
+    const first = await f.desktop.create({ text: "One" });
+    const second = await f.desktop.create({ text: "Two" });
+    const results = await Promise.all([f.desktop.start(first.token, undefined), f.desktop.start(second.token, undefined)]);
+    expect(results.map((result) => (result.ok ? "ok" : result.code)).sort()).toEqual(["busy", "ok"]);
+    const winner = results[0]!.ok ? "D1" : "D2";
+    expect(f.leases.holder("x11:local:91")).toMatchObject({ conversation: `desktop:${winner}` });
+  });
+
   it("set the desktop's size back when they hand it back, or the link ends otherwise", async () => {
     const link = await f.desktop.create({ text: "Sign in", person: "test:@bob" });
     const started = await f.desktop.start(link.token, undefined);

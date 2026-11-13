@@ -125,12 +125,11 @@ export interface AgentOptions {
    * go, or every part is sent again.
    */
   sections: readonly AgentSection[];
-  /** The children the main agent starts with the task tool. */
+  /**
+   * The children the main agent starts with the task tool. It chooses each one's model and thinking level; a child
+   * without a model of its own has the main model, also after it changes.
+   */
   children: {
-    /** "provider/modelId" of children; unset: the main model. */
-    model(): string | undefined;
-    /** The thinking level of a new child when the main agent does not choose one. */
-    thinking(): Thinking;
     /** How many children may work at once. */
     max(): number;
     /**
@@ -486,7 +485,8 @@ export class Agent {
       return agent;
     };
     const tasks = childrenExtension({
-      agent: () => ({ model: self().#childModel(), thinkingLevel: options.children.thinking() }),
+      mainModel: () => self().#model,
+      childModel: (model) => childModel(models, model),
       max: () => options.children.max(),
       place: () => options.children.place(),
       extensions: () => ({ child: [coding, child, codemode, mcp()] }),
@@ -528,11 +528,12 @@ export class Agent {
           // The fallback when the agent does not turn the page itself.
           get compaction() {
             const main = agent ? agent.#model : modelRef(options.model);
-            const policy = compactionFor(models, main, options.compaction());
-            // Children may have another model, with another window.
-            const childModel = modelRef(options.children.model() ?? `${main.provider}/${main.modelId}`);
-            const key = `${childModel.provider}/${childModel.modelId}`;
-            return key === `${main.provider}/${main.modelId}` ? policy : { ...policy, modelOverrides: { [key]: compactionFor(models, childModel, options.compaction()) } };
+            const set = options.compaction();
+            const policy = compactionFor(models, main, set);
+            // Children may have other models, with other windows: each model a child has gets its own.
+            const others = new Set(children.flatMap((child) => (child.model !== undefined && child.model !== `${main.provider}/${main.modelId}` ? [child.model] : [])));
+            if (others.size === 0) return policy;
+            return { ...policy, modelOverrides: Object.fromEntries([...others].map((model) => [model, compactionFor(models, modelRef(model), set)])) };
           },
         },
         env: () => new NodeExecutionEnv({ cwd: options.workspace, shellEnv: options.shellEnv }),
@@ -553,8 +554,8 @@ export class Agent {
     await agent.#watchRun();
     await agent.#watchChildren((list) => (children = list));
     await agent.#holdUnfinishedStops();
-    // bot.json may have changed while the bot was stopped: the children that go on get the model new children get.
-    await agent.#configureChildren(agent.#childModel());
+    // bot.json may have changed the model while the bot was stopped: the children without a model of their own get it.
+    await agent.#configureChildren();
     return agent;
   }
 
@@ -757,24 +758,14 @@ export class Agent {
     return lines.join("\n");
   }
 
-  /** The model of children: bot.json's childModel, else the main model. */
-  #childModel(childModel = this.#options.children.model()): ModelRef {
-    return childModel ? modelRef(childModel) : this.#model;
-  }
-
   /**
-   * Give every child that is not stopped this model for children ("provider/modelId"; unset: the main model), which new
-   * children get too. A child keeps its thinking level. Throws for an unknown model.
+   * Give the main model to every child that is not stopped and has no model of its own. A child with its own model
+   * keeps it, and every child keeps its thinking level.
    */
-  async configureChildren(childModel: string | undefined): Promise<void> {
-    if (childModel) await requireChatModel(this.#models, childModel);
-    // Not #childModel(childModel): for undefined, its default reads bot.json's childModel from before this change.
-    await this.#configureChildren(childModel ? modelRef(childModel) : this.#model);
-  }
-
-  async #configureChildren(model: ModelRef): Promise<void> {
-    const children = this.#children.filter((child) => child.stoppedAt === undefined);
+  async #configureChildren(): Promise<void> {
+    const children = this.#children.filter((child) => child.stoppedAt === undefined && child.model === undefined);
     if (children.length === 0) return;
+    const model = this.#model;
     await this.#root.commit(async (tx) => {
       for (const child of children) await configure(tx, Number(child.conversationId) as ConversationId, { model });
     }, context);
@@ -938,11 +929,15 @@ export class Agent {
     return use;
   }
 
-  /** Change the model ("provider/modelId") or the thinking level. Throws for an unknown model. */
+  /**
+   * Change the model ("provider/modelId") or the thinking level. The children without a model of their own get the new
+   * model too. Throws for an unknown model.
+   */
   async configure(model: string, thinking: Thinking): Promise<void> {
     await requireChatModel(this.#models, model);
     this.#model = modelRef(model);
     await this.#root.configure({ model: this.#model, thinkingLevel: thinking }, context);
+    await this.#configureChildren();
   }
 
   /**
@@ -1001,4 +996,25 @@ function compactionFor(models: Models, ref: ModelRef, set: Compaction): Required
 
 async function requireChatModel(models: Models, model: string): Promise<void> {
   await requireModel(models, model, (provider, id) => models.getModel(provider, id));
+}
+
+/**
+ * A child's model ("provider/modelId"), or why it cannot be used: an unknown model, or one that is not signed in on this
+ * computer, said now rather than as the child's first failed request.
+ */
+async function childModel(models: Models, model: string): Promise<{ model: ModelRef } | { refused: string }> {
+  const ref = modelRef(model);
+  if (!ref.provider || !ref.modelId) return { refused: `the model must be "provider/modelId", not "${model}".` };
+  const list = 'a codemode script lists the models you can use with models.getAvailableOfType("chat").';
+  try {
+    await requireChatModel(models, model);
+  } catch {
+    return { refused: `unknown model ${model}; ${list}` };
+  }
+  const available = await models.getAvailable(ref.provider);
+  if (available.some((each) => each.id === ref.modelId)) return { model: ref };
+  if (available.length === 0) {
+    return { refused: `${model} is not signed in on this computer: pi has no login or key for "${ref.provider}". A person signs in with pots login in their terminal; ${list}` };
+  }
+  return { refused: `the login for "${ref.provider}" on this computer cannot use ${model}; ${list}` };
 }

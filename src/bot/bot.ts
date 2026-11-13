@@ -320,8 +320,6 @@ export class Bot implements WakeTarget {
         { name: "remembered", render: async () => (memoryOn() ? memorySection(facts(), await indexes()) : undefined), pin: true },
       ],
       children: {
-        model: () => current().childModel,
-        thinking: () => current().childThinking,
         max: () => settings().maxChildren,
         // The same for every child, so children share the start of their requests; then the memory's indexes, as they
         // were when the child started.
@@ -446,10 +444,8 @@ export class Bot implements WakeTarget {
   /** Apply a changed bot.json while running. The new definition counts only once every step worked, so a retry redoes all. */
   async applyDefinition(next: BotDefinition): Promise<void> {
     const before = this.#definition;
+    // Also for the children that have no model of their own: they use the main one.
     if (before.model !== next.model || before.thinking !== next.thinking) await this.#agent.configure(next.model, next.thinking);
-    // Also for the children that exist: those without a model of their own use the main one. A child keeps its thinking
-    // level; childThinking counts for new children.
-    if (before.model !== next.model || before.childModel !== next.childModel) await this.#agent.configureChildren(next.childModel);
     const old = new Map(before.channels.map((channel) => [channel.id, JSON.stringify(channel)]));
     const fresh = new Map(next.channels.map((channel) => [channel.id, JSON.stringify(channel)]));
     const nameChanged = before.name !== next.name;

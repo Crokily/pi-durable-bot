@@ -116,7 +116,7 @@ const children = Command.make(
       const result = (yield* control(id, "GET", "/children")) as { text: string };
       yield* printResult(result.text);
     }),
-).pipe(Command.withDescription("List the children the bot's main agent started, with each one's thinking level, or stop one or all. A stopped child reports nothing."));
+).pipe(Command.withDescription("List the children the bot's main agent started, with each one's thinking level, the model it chose for it, and what each one that works does now, or stop one or all. A stopped child reports nothing."));
 
 const routineAdd = Command.make(
   "add",

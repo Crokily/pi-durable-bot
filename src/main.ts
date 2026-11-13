@@ -100,6 +100,7 @@ export async function runGateway(): Promise<void> {
           running.set(id, { bot, text: read.text });
         }
         failed.delete(id);
+        if (read.notice) print(id)(read.notice);
         if (existsSync(paths.definitionError)) await unlink(paths.definitionError).catch(() => {});
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

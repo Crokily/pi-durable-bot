@@ -41,16 +41,20 @@ When it needs tokens the person copied, it asks for them in `pots chat` with hid
 
 ## Set it up
 
-Do the setup yourself, in your own shell. Only one step is your person's: signing in to a model. A subscription sign-in opens their browser, and an API key must not pass through your conversation, so they do it in their own terminal with `pots login`.
+Do the setup yourself, in your own shell. Only one step is your person's: signing in to the model the bot thinks with and, when it will be in group chats, a judge. A subscription sign-in opens their browser, and an API key must not pass through your conversation, so they do it in their own terminal with `pots login`.
 
 1. **Install:** `npm install -g pi-durable-bot`.
 2. **See what pi can use already:** `pots login --list`. It lists the models (for `--model`) and judges (for `--judge`) that have a login, a key or a local server on this computer, and never shows a secret.
 3. **Ask your person**, in your chat, only what `--list` cannot answer:
    - the bot's name;
    - in one sentence, what it is for (optional; the bot asks them later if they skip it);
-   - how it should get its AI, when the list has nothing they want: a subscription they already pay for (ChatGPT, Claude, GitHub Copilot, Grok, Kimi and more), an API key from a provider, or a local model server (Ollama, LM Studio, llama.cpp, vLLM);
-   - who decides whether a group message that does not mention the bot wakes it: the bot itself (the default: every such message wakes it), or Jev, a fast judge from TypeSafe that wakes it only for messages about its work, with their TypeSafe API key. Do not ask when the bot will not be in group chats: use `--judge off`.
-4. **If what they chose is not listed, ask them to run `pots login` in their own terminal.** It asks how to get the AI, signs in or takes the key with hidden input, tries a model, and ends with a line such as `Ready: openai/gpt-6.1-sol`. On a computer without a browser, such as a server over SSH, it prints a link and asks for the code the page shows (choose "Copy code login (headless)" when it is offered). For Jev, they run it once more and choose "Use an API key", then TypeSafe. Then run `pots login --list` again.
+   - which model the bot thinks with, when the list has nothing they want. It is the bot's brain: it reads, decides and does the work with it. Usually it is the subscription they already pay for and use every day (ChatGPT, Claude, GitHub Copilot, Grok, Kimi and more); it can also be an API key from a provider, or a local model server (Ollama, LM Studio, llama.cpp, vLLM);
+   - who decides whether a group message that does not mention the bot wakes it: the bot itself (the default: every such message wakes it, and its own model reads it), or a judge, a fast model that reads each such message first and wakes the bot only for messages about its work. Jev, from TypeSafe, is one; it needs their TypeSafe API key. Do not ask when the bot will not be in group chats: use `--judge off`.
+4. **If something they chose is not listed, they sign in with `pots login`, once, for all of it.** Do not just give them the command. First tell them in your chat what they will add and why, one after the other. For example:
+
+   > Run `pots login` in your terminal. Choose "Sign in with a subscription", then ChatGPT, and sign in: that is the model your bot thinks with. Then choose "Use an API key", then TypeSafe, and paste your TypeSafe key: that is Jev, which decides which group messages wake your bot. Then choose "Done".
+
+   `pots login` takes each key with hidden input and does not take an empty one. It tries each model and judge, says that it is ready or why not, and comes back to its menu, so both go in one run; "Done" lists what pi can use. On a computer without a browser, such as a server over SSH, a sign-in prints a link and asks for the code the page shows (choose "Copy code login (headless)" when it is offered). Then run `pots login --list` again.
 5. **Make the bot:**
    ```sh
    pots init --yes --name "Ada" --model openai/gpt-6.1-sol --about "our team's research and ops assistant" --no-chat
@@ -70,7 +74,7 @@ Tell your person:
 
 | Command | What it does |
 |---|---|
-| `pots login` | Sign in to a model, or add an API key or a local server (in a terminal); `--list` shows what can be used |
+| `pots login` | Sign in to models and judges, or add API keys or local servers, one after another (in a terminal); `--list` shows what can be used |
 | `pots mcp add` / `list` / `remove` | MCP servers for every bot and pi on this computer, in pi's `~/.pi/agent/mcp.json`, with the options of `pi mcp` (`pots mcp --help`); the bot calls their tools from code mode scripts: short JavaScript programs it writes to call its tools |
 | `pots mcp login <server>` | Sign in to an MCP server in the browser (in a terminal) |
 | `pots status` | The gateway, the service and each bot |

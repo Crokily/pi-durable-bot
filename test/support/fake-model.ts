@@ -1,8 +1,9 @@
-import { createServer, type IncomingMessage } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 
 // A model server for tests: it speaks the OpenAI chat completions API, so a real gateway process uses it through pi's
-// model layer like any OpenAI-compatible endpoint. Its answers come from a script, not from a model.
+// model layer like any OpenAI-compatible endpoint. Its answers come from a script, not from a model. It is also a judge
+// with TypeSafe's System One API, for pi's provider "typesafe" pointed at it in models.json.
 
 export interface FakeRequest {
   /** The model the request names, without its provider. */
@@ -44,6 +45,10 @@ export async function startFakeModel(
   let calls = 0;
   const server = createServer((req, res) => {
     void (async () => {
+      if (req.method === "POST" && req.url?.endsWith("/systemone")) {
+        systemOne(req.headers.authorization, await readBody(req), res);
+        return;
+      }
       if (req.method !== "POST" || !req.url?.endsWith("/chat/completions")) {
         res.writeHead(404).end();
         return;
@@ -92,6 +97,22 @@ export async function startFakeModel(
     requests,
     close: () => new Promise((resolve) => server.close(() => resolve())),
   };
+}
+
+/**
+ * A System One judge, like TypeSafe's Jev: yes to events about pricing, as the coworker's judge. A key that starts with
+ * "wrong" gets TypeSafe's 401.
+ */
+function systemOne(authorization: string | undefined, body: string, res: ServerResponse): void {
+  if (authorization?.startsWith("Bearer wrong")) {
+    res.writeHead(401, { "content-type": "application/json" });
+    res.end(JSON.stringify({ detail: { error_type: "authentication_error", message: "Cannot authenticate with the server. Please check your API key and try again." } }));
+    return;
+  }
+  const request = JSON.parse(body) as { state: unknown; questions: Record<string, unknown> };
+  const yes = /pricing/i.test(JSON.stringify(request.state)) ? 0.9 : 0.1;
+  res.writeHead(200, { "content-type": "application/json" });
+  res.end(JSON.stringify({ answers: Object.fromEntries(Object.keys(request.questions).map((id) => [id, { type: "noul", noul: yes }])) }));
 }
 
 /** The first line of a wake message, which says why the bot was woken: "[wake] someone mentioned you". */

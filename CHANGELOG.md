@@ -2,6 +2,16 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
+## Unreleased
+
+### Changed
+- **`pots login` adds all you need in one run.** After each sign-in, key or local server it says what is ready, or why not, and comes back to its menu; "Done" leaves and lists the models and judges pi can use, as `pots login --list` does. A judge's key, such as TypeSafe's for Jev, is tried at once, as `pots init` tries it.
+- **`pots init` asks again when getting the AI fails.** A failed sign-in, a model or local server that does not answer, or Ctrl+C in one of its prompts takes you back to "How should your bot get its AI?" instead of ending `pots init`.
+- **The setup page for AI agents ([docs/for-agents.md](docs/for-agents.md)) has the agent explain what you sign in to, and why, before it gives you `pots login`:** the model the bot thinks with, usually the subscription you already use, and a judge such as Jev, which decides which group messages wake the bot. You add both in one run.
+
+### Fixed
+- **An empty API key is no longer saved.** Enter at an empty key prompt in `pots login` or `pots init` saved an empty key over the one pi had, and pi then counted the provider as not signed in: `pots login` ended with "signed in, but pi lists no model or judge for this login". Now the prompt asks again, and Ctrl+C goes back without changing the key.
+
 ## 0.7.1 (2026-11-10)
 
 Pots is also a pi package, so a pi user's agent can set Pots up. Nothing changed for bots: a running bot does not need this version.

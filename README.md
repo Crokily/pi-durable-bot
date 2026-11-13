@@ -24,7 +24,7 @@ does the work on its own computer, and speaks up when it should.
 </div>
 
 > [!TIP]
-> **Setting this up with an AI agent, such as Claude Code, Codex or Cursor?** Have it read [docs/for-agents.md](https://github.com/Crokily/pi-durable-bot/blob/main/docs/for-agents.md) first. That page explains Pots to your agent and how to set it up. In short: the agent installs it and makes the bot, you sign in to your model with `pots login`, and then the bot connects Slack and your other apps itself.
+> **Setting this up with an AI agent, such as Claude Code, Codex or Cursor?** Have it read [docs/for-agents.md](https://github.com/Crokily/pi-durable-bot/blob/main/docs/for-agents.md) first. That page explains Pots to your agent and how to set it up. In short: the agent installs it and makes the bot, you sign in to your model (and a judge such as Jev, for group chats) with `pots login`, and then the bot connects Slack and your other apps itself.
 
 <p align="center" id="see-it-work">
   <a href="docs/media/demo.mp4"><img src="docs/media/demo.gif" width="900" alt="In Slack, Pots reads every message and decides a pricing question is its job, checks the pricing page in a browser on its own computer, picks up after being killed mid-task, sends a comparison page, uses Slack's own buttons, and takes an API key on a one-time page"></a>
@@ -167,7 +167,7 @@ It joins only the places it is invited to, like a new hire who is added to the r
 | Command | What it does |
 |---|---|
 | `pots init` | Set up your first bot, or another one |
-| `pots login` | Sign in to a model, or add an API key or a local server, for every bot on this computer; `--list` shows what can be used |
+| `pots login` | Sign in to models and judges, or add API keys or local servers, one after another, for every bot on this computer; `--list` shows what can be used |
 | `pots mcp add \| remove \| list \| login \| logout` | The [MCP servers](#mcp-servers) of every bot on this computer, and sign-ins to them |
 | `pots chat` | Talk to a bot in this terminal |
 | `pots status` | The gateway, the service and each bot |
@@ -181,7 +181,7 @@ To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service resta
 
 ### Choose the models
 
-`pots init` sets up the model, and `pots login` signs in to another one or adds a key, for every bot on the computer. Each bot's `bot.json` names its model and, if you want one, a judge, and you can change them at any time; edits apply within seconds. Logins, API keys and local endpoints are stored in pi's files in `~/.pi/agent/`, so the [pi](https://github.com/earendil-works/pi) command line, if you use it, shares them.
+`pots init` sets up the model, and `pots login` signs in to others or adds keys, one after another, for every bot on the computer. Each bot's `bot.json` names its model and, if you want one, a judge, and you can change them at any time; edits apply within seconds. Logins, API keys and local endpoints are stored in pi's files in `~/.pi/agent/`, so the [pi](https://github.com/earendil-works/pi) command line, if you use it, shares them.
 
 | Field | What it does | Values |
 |---|---|---|

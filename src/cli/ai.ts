@@ -2,54 +2,104 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Api, AuthEvent, AuthInteraction, AuthPrompt, AuthType, Model, Models } from "@earendil-works/pi-ai";
-import { type Context, Console, Effect, Redacted } from "effect";
+import { type Context, Console, Effect, Redacted, Terminal } from "effect";
 import { Prompt } from "effect/cli";
 import { userError } from "./control.ts";
 
 // Step 2 of pots init, and pots login: give the bot an AI. Logins, keys and endpoints are pi's own (~/.pi/agent, or
 // PI_CODING_AGENT_DIR), so the pi command line and every bot on this machine share them.
 
-type Way = "existing" | "oauth" | "api_key" | "local";
+type Way = "existing" | "oauth" | "api_key" | "local" | "done";
 
-/** Ask how the bot gets its AI, set that up, and return the chosen model as "provider/modelId". */
+/** What one way of getting an AI gave: a model to think with, the judges of a provider that has only judges, or why it failed. */
+type Outcome = { model: string } | { judges: string[] } | { failed: string };
+
+/**
+ * Ask how the bot gets its AI, set that up, and return the chosen model as "provider/modelId". When that fails, say why
+ * and ask again.
+ */
 export const setUpModel = (models: Models) =>
   Effect.gen(function* () {
-    const ready = yield* Effect.promise(() => models.getAvailable());
-    const way = yield* chooseWay(ready.length);
-    if (way === "existing") return yield* chooseModel(models, ready);
-    if (way === "local") return yield* setUpLocal(models, "pots init");
-    const providerId = yield* chooseProvider(models, way);
-    yield* login(models, providerId, way);
-    return yield* chooseModel(models, yield* Effect.promise(() => models.getAvailable(providerId)), yield* Effect.promise(() => piDefaultModel(providerId)));
+    for (;;) {
+      const ready = yield* Effect.promise(() => models.getAvailable());
+      const way = yield* chooseWay("How should your bot get its AI?", ready.length, false);
+      // Not offered here: the bot needs a model.
+      if (way === "done") continue;
+      const outcome = way === "existing" ? yield* attempt(Effect.map(chooseModel(models, ready), (model) => ({ model }))) : yield* setUpWay(models, way);
+      if ("model" in outcome) return outcome.model;
+      if ("judges" in outcome) yield* Console.log(`\nReady as a judge: ${outcome.judges.join(", ")}. Step 3 offers it, but the bot also needs a model to think with.\n`);
+      else yield* Console.log(`\n${outcome.failed}\n`);
+    }
   });
 
 /**
- * pots login: sign in with a subscription, or add an API key or a local server, then name what can be used with it: a
- * model, chosen and tried as pots init does, or the judges of a provider that has only judges, such as TypeSafe's Jev.
+ * pots login: sign in with subscriptions, add API keys or local servers, one after another, until the person chooses
+ * Done. After each, say what can be used with it, or why it failed: a model, chosen and tried as pots init does, or
+ * the judges of a provider that has only judges, such as TypeSafe's Jev, tried with one message.
  */
 export const signIn = (models: Models) =>
   Effect.gen(function* () {
-    const way = yield* chooseWay(0);
-    if (way === "existing") return yield* Effect.die(new Error("pots login does not offer the models pi has already"));
-    if (way === "local") return { model: yield* setUpLocal(models, "pots login") };
-    const providerId = yield* chooseProvider(models, way);
-    yield* login(models, providerId, way);
-    const chat = yield* Effect.promise(() => models.getAvailable(providerId));
-    if (chat.length > 0) return { model: yield* chooseModel(models, chat, yield* Effect.promise(() => piDefaultModel(providerId))) };
-    const judges = yield* Effect.promise(() => models.getAvailableOfType("classifier", providerId));
-    return { judges: judges.map((model) => `${model.provider}/${model.id}`) };
+    for (let first = true; ; first = false) {
+      const way = yield* chooseWay(first ? "How should your bot get its AI?" : "What next?", 0, true);
+      if (way === "done") return;
+      if (way === "existing") return yield* Effect.die(new Error("pots login does not offer the models pi has already"));
+      const outcome = yield* setUpWay(models, way);
+      if ("model" in outcome) {
+        yield* Console.log(`\nReady: ${outcome.model}. A new bot can think with it: pots init --model ${outcome.model}\n`);
+      } else if ("judges" in outcome) {
+        yield* Console.log(`\nReady as a judge: ${outcome.judges.join(", ")}. A new bot can use it: pots init --judge ${outcome.judges[0]}\n`);
+      } else {
+        yield* Console.log(`\n${outcome.failed}\n`);
+      }
+    }
   });
 
-/** Ask how the bot gets its AI. ready: how many models pi can already use; none, and that choice is not offered. */
-const chooseWay = (ready: number) =>
+/**
+ * Sign in, take an API key or add a local server, and name what can be used with it: a model, chosen and tried, or the
+ * judges of a provider that has only judges, the first one tried. A failure is told, not an end, and so is Ctrl+C in
+ * one of its prompts: the person chooses again.
+ */
+const setUpWay = (models: Models, way: "oauth" | "api_key" | "local") =>
+  attempt(
+    Effect.gen(function* () {
+      if (way === "local") return { model: yield* setUpLocal(models) };
+      const providerId = yield* chooseProvider(models, way);
+      const error = yield* tryLogin(models, providerId, way);
+      if (error !== undefined) return { failed: `Login failed: ${error}` };
+      const chat = yield* Effect.promise(() => models.getAvailable(providerId));
+      if (chat.length > 0) return { model: yield* chooseModel(models, chat, yield* Effect.promise(() => piDefaultModel(providerId))) };
+      const judges = (yield* Effect.promise(() => models.getAvailableOfType("classifier", providerId))).map((model) => `${model.provider}/${model.id}`);
+      if (judges.length === 0) return { failed: "Signed in, but pi lists no model or judge for this login." };
+      // As with a model: better to learn here than on the bot's first group message that the key is wrong.
+      yield* Console.log(`Trying ${judges[0]}…`);
+      const judgeError = yield* tryJudge(models, judges[0]!);
+      return judgeError === undefined ? { judges } : { failed: `${judges[0]} cannot be used as the judge: ${judgeError}` };
+    }),
+  );
+
+/** An outcome for each way it can end: Ctrl+C in a prompt, or an error meant for the person, is a failure with its reason. */
+const attempt = <R>(setUp: Effect.Effect<Outcome, Terminal.QuitError | ReturnType<typeof userError>, R>) =>
+  setUp.pipe(
+    Effect.catchTags({
+      QuitError: () => Effect.succeed<Outcome>({ failed: "Cancelled." }),
+      UserError: (error) => Effect.succeed<Outcome>({ failed: error.message }),
+    }),
+  );
+
+/**
+ * Ask how the bot gets its AI. ready: how many models pi can already use; none, and that choice is not offered. done:
+ * offer Done, to leave.
+ */
+const chooseWay = (message: string, ready: number, done: boolean) =>
   Prompt.run(
     Prompt.Select<Way>({
-      message: "How should your bot get its AI?",
+      message,
       choices: [
         ...(ready > 0 ? [{ title: `A model you have already set up in pi (${ready})`, value: "existing" as const }] : []),
         { title: "Sign in with a subscription", value: "oauth", description: "ChatGPT, Claude, GitHub Copilot, Grok, Kimi and more" },
         { title: "Use an API key", value: "api_key", description: "Any of pi's providers, also TypeSafe for the Jev judge" },
         { title: "A local or OpenAI-compatible server", value: "local", description: "Ollama, LM Studio, llama.cpp, vLLM, a proxy. Your data stays on your machines." },
+        ...(done ? [{ title: "Done", value: "done" as const, description: "List what pi can use, and leave" }] : []),
       ],
     }),
   );
@@ -111,7 +161,7 @@ const chooseModel = (models: Models, available: readonly Model<Api>[], piDefault
       recommended = undefined;
     }
     for (;;) {
-      if (left.length === 0) return yield* Effect.fail(userError("no model answers with this login"));
+      if (left.length === 0) return yield* Effect.fail(userError("No model answers with this login."));
       const chosen = yield* Prompt.run(
         Prompt.Select({
           message: "Which model should it think with? A strong model that calls tools well works best.",
@@ -154,7 +204,10 @@ async function piDefaultModel(providerId: string): Promise<string | undefined> {
   return defaultModelPerProvider[providerId];
 }
 
-/** Run pi's login flow for a provider in this terminal. Why it failed, or undefined when it worked. */
+/**
+ * Run pi's login flow for a provider in this terminal. Why it failed, or undefined when it worked; Ctrl+C in one of its
+ * prompts fails with the prompt's QuitError.
+ */
 const tryLogin = (models: Models, providerId: string, type: AuthType) =>
   Effect.gen(function* () {
     const terminal = yield* Effect.context<Prompt.Environment>();
@@ -162,16 +215,16 @@ const tryLogin = (models: Models, providerId: string, type: AuthType) =>
     const error = yield* Effect.promise(() =>
       models.login(providerId, type, terminalInteraction(terminal), { getDeviceId: () => deviceId }).then(
         () => undefined,
-        (error: unknown) => (error instanceof Error ? error.message : String(error)),
+        (error: unknown) => error,
       ),
     );
-    if (error === undefined) yield* Console.log("Signed in.");
-    return error;
+    if (error === undefined) {
+      yield* Console.log("Signed in.");
+      return undefined;
+    }
+    if (Terminal.isQuitError(error)) return yield* Effect.fail(error);
+    return error instanceof Error ? error.message : String(error);
   });
-
-/** Run pi's login flow for a provider in this terminal; pots init ends when it fails. */
-const login = (models: Models, providerId: string, type: AuthType) =>
-  Effect.flatMap(tryLogin(models, providerId, type), (error) => (error === undefined ? Effect.void : Effect.fail(userError(`login failed: ${error}`))));
 
 /** Jev, a fast judge from TypeSafe: pi's provider "typesafe", with an API key. */
 const JEV = "typesafe/jev-latest";
@@ -200,7 +253,7 @@ export const setUpJudge = (models: Models, name: string, mainModel: string) =>
       );
       if (choice === "off") return choice;
       if (choice === JEV && (newKey || (yield* Effect.promise(() => models.getAvailableOfType("classifier", "typesafe"))).length === 0)) {
-        const error = yield* tryLogin(models, "typesafe", "api_key");
+        const error = yield* tryLogin(models, "typesafe", "api_key").pipe(Effect.catchTag("QuitError", () => Effect.succeed("cancelled")));
         if (error !== undefined) {
           yield* Console.log(`The TypeSafe API key was not saved: ${error}`);
           continue;
@@ -232,8 +285,8 @@ export const checkJudge = (models: Models, judge: string, mainModel: string) =>
     return error === undefined ? judge : yield* Effect.fail(userError(`${judge} cannot be used as the judge: ${error}`));
   });
 
-/** Ask the judge about one message. The reason it cannot answer, or undefined when it can. */
-const tryJudge = (models: Models, judge: string, mainModel: string) =>
+/** Ask the judge about one message. The reason it cannot answer, or undefined when it can. mainModel: the bot's, for "main". */
+const tryJudge = (models: Models, judge: string, mainModel = "") =>
   Effect.promise(async () => {
     const { createJudge } = await import("../agent/judge.ts");
     let timer: NodeJS.Timeout | undefined;
@@ -297,7 +350,11 @@ function toPrompt(prompt: AuthPrompt): Prompt.Prompt<string> {
     case "select":
       return Prompt.Select({ message: prompt.message, choices: prompt.options.map((option) => ({ title: option.label, value: option.id, description: option.description })) });
     case "secret":
-      return Prompt.Password({ message: prompt.message }).pipe(Prompt.map(Redacted.value));
+      // pi saves an empty key as it is, over the key it had, and then counts the provider as not signed in.
+      return Prompt.Password({
+        message: prompt.message,
+        validate: (value) => (value.trim() === "" ? Effect.fail("It cannot be empty: paste it, or press Ctrl+C to go back") : Effect.succeed(value)),
+      }).pipe(Prompt.map(Redacted.value));
     default:
       return Prompt.String({ message: prompt.message });
   }
@@ -337,7 +394,7 @@ const LOCAL_SERVERS = [
  * Add an OpenAI-compatible endpoint to pi's models.json, the same file the pi command line reads, in the format pi
  * documents. pi itself has no prompts for this; its documentation has people write the file.
  */
-const setUpLocal = (models: Models, command: string) =>
+const setUpLocal = (models: Models) =>
   Effect.gen(function* () {
     const { getAgentDir } = yield* Effect.promise(() => import("@earendil-works/pi-coding-agent"));
     const modelsFile = join(getAgentDir(), "models.json");
@@ -380,6 +437,6 @@ const setUpLocal = (models: Models, command: string) =>
       if (error === undefined) return name;
       yield* Console.log(`${name} does not answer: ${error}`);
       const again = yield* Prompt.run(Prompt.Confirm({ message: "Try again, for example once the server runs?", initial: true }));
-      if (!again) return yield* Effect.fail(userError(`${name} does not answer; it stays in ${modelsFile}. Run ${command} again once it does.`));
+      if (!again) return yield* Effect.fail(userError(`${name} does not answer. It stays in ${modelsFile}.`));
     }
   });

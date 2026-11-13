@@ -2,7 +2,7 @@
   "name": "pi-durable-bot",
   "version": "0.7.2",
   "description": "Open-source AI coworkers that read every channel, decide what matters, and act on their own computer. Self-hosted, any model.",
-  "license": "MIT",
+  "license": "MIT AND MPL-2.0",
   "type": "module",
   "homepage": "https://github.com/Crokily/pi-durable-bot#readme",
   "repository": {

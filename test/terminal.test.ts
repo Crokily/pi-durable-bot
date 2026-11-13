@@ -248,7 +248,8 @@ describe.skipIf(!python)("pots in a terminal", { timeout: 90_000 }, () => {
   });
 });
 
-// The tests above set BROWSER so that a sign-in opens no page. xdg-open reads it on Linux; on macOS pots reads it.
+// A sign-in opens no page in these tests: test/support/environment.ts sets BROWSER to a command that does nothing, and
+// puts an xdg-open and an open that do nothing first on PATH. On macOS pots reads $BROWSER itself.
 describe.runIf(process.platform === "darwin")("pots opens a page on macOS", () => {
   afterEach(() => vi.unstubAllEnvs());
 

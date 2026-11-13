@@ -57,6 +57,7 @@ import type { Codemode } from "./codemode.ts";
 import type { Mcp } from "./mcp.ts";
 import { deleteLeftForks, lastAnswer, type MemoryHost, MemoryPasses, readPaths, withAgeNote } from "./memory.ts";
 import { modelRef, requireModel } from "./models.ts";
+import type { CommandScopes } from "./scopes.ts";
 import { NO_SCREEN, renderBusy, type Screen, ScreenLeases } from "./screen.ts";
 
 const context = BACKGROUND_CONTEXT;
@@ -110,6 +111,8 @@ export interface AgentOptions {
   workspace: string;
   /** Environment of bash commands, without the screen's variables. */
   shellEnv: NodeJS.ProcessEnv;
+  /** Where each command of bash and screen runs in a systemd scope of its own; unset, commands run as pi-durable runs them. */
+  scopes?: CommandScopes;
   /** The bot's screen for the screen tool, read at each call, and the bot as other agents see it when it holds a lease. */
   screen: {
     current(): Screen;
@@ -536,7 +539,8 @@ export class Agent {
             return { ...policy, modelOverrides: Object.fromEntries([...others].map((model) => [model, compactionFor(models, modelRef(model), set)])) };
           },
         },
-        env: () => new NodeExecutionEnv({ cwd: options.workspace, shellEnv: options.shellEnv }),
+        // The scopes' environment runs each shell command in a systemd scope of its own; its files are the same.
+        env: () => (options.scopes ? options.scopes.env({ cwd: options.workspace, shellEnv: options.shellEnv }) : new NodeExecutionEnv({ cwd: options.workspace, shellEnv: options.shellEnv })),
         ...(options.telemetry ? { telemetry: options.telemetry } : {}),
         onReport: (report) => options.log("pi report", { type: report.kind, error: String(report.error) }),
       },

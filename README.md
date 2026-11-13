@@ -90,7 +90,7 @@ It has a real machine with a shell, files, the internet, and a screen it uses li
 
 This is **code mode**: the agent gets a few general tools (`read`, `write`, `edit`, `bash`, `screen`) plus three channel actions (`send`, `react`, `call`), and builds the rest itself. One more tool, `task`, hands work to its helpers (below). With `codemode`, pi's code mode, it writes a JavaScript script that calls these tools and the tools of [MCP servers](#mcp-servers) in a sandbox; only what the script returns comes back to it.
 
-`screen` is `bash` with the screen's environment, such as `DISPLAY`; `bash` does not have it. A screen runs one task at a time, as a person's desktop does: the first `screen` command of an agent takes the screen until its work ends, also across bots and the Pots processes of the same user on the machine. Another agent that tries then learns who has it, since when, and when it frees, and decides itself what to do. A bot that sets up its own desktop, such as an Xvfb display, writes its environment into `screen` in its `bot.json`.
+`screen` is `bash` with the screen's environment, such as `DISPLAY`; `bash` does not have it. A screen runs one task at a time, as a person's desktop does: the first `screen` command of an agent takes the screen until its work ends, also across bots and the Pots processes of the same user on the machine. Another agent that tries then learns who has it, since when, and when it frees, and decides itself what to do. A person who takes over the screen from a desktop page link holds it the same way, until they hand it back. A bot that sets up its own desktop, such as an Xvfb display, writes its environment into `screen` in its `bot.json`.
 
 One agent at a time per screen is enforced only on Linux, where plain `bash` has no `DISPLAY` or `WAYLAND_DISPLAY` and so cannot reach the screen. On macOS and Windows the screen does not depend on those variables, so `bash` can still use it; there the agents use the `screen` tool because the prompt tells them to.
 
@@ -112,6 +112,7 @@ Some things do not fit in a chat message. For a plan, a report or a dashboard, t
 
 - **Buttons and forms in the chat.** On Slack and Discord the bot sends the platform's own buttons, menus and forms; on Telegram, inline buttons. A click wakes it within a second, and a form opens at once.
 - **A password page for secrets.** When the bot needs an API key from you, it sends a one-time link to a page of Pots' own. You type the key there. It goes into a file in the secrets folder, never into the chat, the log or a trace.
+- **A desktop page for the steps only you can do.** When a sign-in, a CAPTCHA or an approval needs you, the bot sends a one-time link. On your phone or computer you see its whole screen, do the step, and press Done; the bot is woken with your note and carries on. On a phone the picture fills the screen, and the bot's desktop takes your phone's shape when its VNC server can change size; you type into a field that sends each character as you go. Pots signs in to the VNC server on the bot's computer itself, so its password stays there, and nothing shows before you press Start. While you have the screen, the bot's screen commands do not run.
 - **No public address needed.** The first link starts a Cloudflare Quick Tunnel, so pages work from a laptop behind a home router. For a fixed address, the bot sets up Tailscale Funnel with you, or uses your own domain.
 
 ### ⏰ Its own schedule
@@ -296,7 +297,7 @@ One gateway process runs every bot on the machine. Everything lives in `~/.pots/
 
 | File | What it is |
 |---|---|
-| `bot.json` | Name, model, children's model, judge, channel accounts, its screen, settings. Edits apply within seconds. |
+| `bot.json` | Name, model, children's model, judge, channel accounts, its screen and the VNC server that shows it, settings. Edits apply within seconds. |
 | `AGENTS.md` | Personality and voice, read the way pi reads AGENTS.md. The bot maintains it. |
 | `responsibilities.md` | What it is responsible for. The judge reads it. The bot maintains it. |
 | `notes.md` | Its handoff to the next page: what it is doing and what it promised. |
@@ -332,6 +333,7 @@ pi-durable-bot runs every day as a teammate in a real workspace. What works toda
 - [x] `AGENTS.md`, Agent Skills and images as in a pi session
 - [x] MCP servers and code mode, through pi's own MCP support
 - [x] Pages, buttons, forms and a password page, with a public address that needs no setup
+- [x] A desktop page: a person takes over the bot's screen from a link, on a phone or a computer, and hands it back
 - [ ] More adapters: Teams, email
 - [ ] `pots init` in a web page, for people who do not use a terminal
 
@@ -371,3 +373,5 @@ npm run tla               # the TLA+ models of the inbox, outbox and waker (need
 ## License
 
 MIT. The demo video, music, sky images and logo in [`docs/media`](docs/media) were made for this project and use the same license.
+
+The desktop page bundles [noVNC](https://github.com/novnc/noVNC) 1.7.0 in [`kit/desktop/novnc.js`](kit/desktop/novnc.js), under the MPL 2.0, with the MIT-licensed pako in it; their license texts are in [`kit/desktop/novnc/`](kit/desktop/novnc). `node scripts/vendor-novnc.ts` builds that file from noVNC's release.

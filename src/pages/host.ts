@@ -23,6 +23,8 @@ export const QUICK_TUNNEL_NOTE =
   "This link goes through a Cloudflare Quick Tunnel: its address changes when Pots restarts, Cloudflare can see the page's content, and Cloudflare says Quick Tunnels are for testing and development.";
 export const QUICK_TUNNEL_SECRET_NOTE =
   "This link goes through a Cloudflare Quick Tunnel: its address changes when Pots restarts, Cloudflare can see what is typed on the page, and Cloudflare says Quick Tunnels are for testing and development.";
+export const QUICK_TUNNEL_DESKTOP_NOTE =
+  "This link goes through a Cloudflare Quick Tunnel: its address changes when Pots restarts, Cloudflare can see your screen and every key typed on the page, and Cloudflare says Quick Tunnels are for testing and development.";
 
 export interface PageHostOptions {
   /** POTS_HOME. */
@@ -65,6 +67,7 @@ export class PageHost {
     this.#requests = new PageRequests({
       bots: () => this.#bots.values(),
       quickTunnel: () => this.#quickTunnel(),
+      publicHosts: () => this.#publicHosts(),
       kitDir: options.kitDir ?? KIT_DIR,
       print: options.print,
     });
@@ -113,6 +116,7 @@ export class PageHost {
       return this.#report(error instanceof Error ? error.message : String(error));
     }
     const server = createServer(this.#requests.handle);
+    server.on("upgrade", this.#requests.upgrade);
     try {
       await new Promise<void>((resolve, reject) => {
         server.once("error", reject);
@@ -153,6 +157,19 @@ export class PageHost {
     } catch {
       return true;
     }
+  }
+
+  /** The hosts that people reach the page server at now: publicUrl's, or the Quick Tunnel's. */
+  #publicHosts(): string[] {
+    const hosts: string[] = [];
+    try {
+      const publicUrl = readSettings(this.#options.settingsFile).publicUrl;
+      if (publicUrl) hosts.push(new URL(publicUrl).host);
+    } catch {
+      // settings.json is wrong; pots status says so
+    }
+    if (this.#tunnel?.address) hosts.push(new URL(this.#tunnel.address).host);
+    return hosts;
   }
 
   /**
@@ -223,9 +240,35 @@ export class PageHost {
     };
   }
 
+  /**
+   * pots page desktop: a link to Pots' own desktop page, with which one person sees and controls the bot's screen. Pots
+   * checks first that it reaches the VNC server of bot.json.
+   */
+  async desktop(
+    bot: BotPages,
+    input: { text: string; input?: string; area?: string; minutes?: number; person?: string },
+  ): Promise<{ link: string; url: string; expires: string; via: Via; note?: string }> {
+    this.#ready();
+    const made = await bot.desktop.create(input);
+    let address: { base?: string; via: Via };
+    try {
+      address = await this.#address(true);
+    } catch (error) {
+      await bot.revoke(made.id);
+      throw error;
+    }
+    return {
+      link: made.id,
+      url: `${address.base}/d/${made.token}/`,
+      expires: new Date(made.expiresAt).toISOString(),
+      via: address.via,
+      ...(address.via === "quick-tunnel" ? { note: QUICK_TUNNEL_DESKTOP_NOTE } : {}),
+    };
+  }
+
   /** pots page unlink: by link ID or by URL. */
   async unlink(bot: BotPages, link: string): Promise<string> {
-    const token = /\/(?:p|s)\/([A-Za-z0-9_-]{16,128})(?:\/|$)/.exec(link)?.[1];
+    const token = /\/(?:p|s|d)\/([A-Za-z0-9_-]{16,128})(?:\/|$)/.exec(link)?.[1];
     const revoked = await bot.revoke(token ?? link.trim());
     if (!revoked) throw new Error(`there is no link ${JSON.stringify(link)} of this bot (pots page list shows them)`);
     return `Unlinked ${revoked}.`;
@@ -245,7 +288,7 @@ export class PageHost {
     return {
       via: address.via,
       address: address.base ?? null,
-      ...(address.base ? {} : { addressNote: problem ?? "no Quick Tunnel runs now; the next pots page link or pots page secret starts one, and these links work again at its address" }),
+      ...(address.base ? {} : { addressNote: problem ?? "no Quick Tunnel runs now; the next pots page link, pots page secret or pots page desktop starts one, and these links work again at its address" }),
       pages: listing.pages.map((page) => ({
         page: page.page,
         kept: page.kept,
@@ -264,6 +307,18 @@ export class PageHost {
         created: iso(link.created),
         expires: iso(link.expires),
         state: link.state,
+      })),
+      desktopLinks: listing.desktopLinks.map((link) => ({
+        link: link.link,
+        url: url(`/d/${link.token}/`),
+        for: link.for,
+        text: link.text,
+        created: iso(link.created),
+        expires: iso(link.expires),
+        state: link.state,
+        started: iso(link.started),
+        ended: iso(link.ended),
+        connected: link.connected,
       })),
     };
   }

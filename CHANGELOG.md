@@ -2,6 +2,21 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
+## Unreleased
+
+A person can take over the bot's screen from a link, on a phone or a computer, do one step, and hand it back.
+
+### Added
+- **A desktop page: `pots page desktop`.** It gives the bot a one-time link to a page of Pots' own, where one person sees the bot's whole screen and controls it, through the VNC server that shows that screen on its computer. Pots signs in to that server itself, so its password never reaches the browser, a link or a log. Nothing of the desktop shows before the person presses Start, so a link preview cannot open it, and only the browser that pressed Start first can use the link; that browser can open it again, after a reload or a switch to another app, until the link ends. An unopened link stops working after an hour, a started one after 15 minutes (`--minutes`, up to 60). It goes through the page server's public address, a Quick Tunnel or your own; with a Quick Tunnel the page and the command's note say that Cloudflare can see the screen and every key typed.
+- **Made for phones.** The picture fills the screen, with a strip for the bot's words and the time left, and three buttons: keyboard, more, and Done. When the VNC server can change its size, the bot's desktop takes the phone's shape while the person uses it (at least 500 pixels wide), and gets its own size back when the link ends, when the person's browser has been away for 20 seconds, and when Pots stops; after a crash, when the link ends. Pinching zooms the picture, not the page under it. The typing field sends each character as it is typed, also from an input method; with `--input password` it is a password field that password managers fill, and with `--input code` phones offer the code from a text message. `--area` starts a desktop that cannot change size zoomed in on the part that matters. More has Esc, Tab, Enter, arrows, select all, paste, a trackpad mode and the picture's size. On a computer the desktop takes the window's size, the keyboard types straight in, ⌘ on a Mac becomes Ctrl, and the strip folds to a tab at the top. The page is in English, or in Chinese for a browser that asks for it.
+- **The bot is woken once when the link ends**: when the person presses Done or "I can't do it", with their note, and when the link expires, unopened or after Start. It is also woken once when Pots cannot reach the VNC server for the person, at Start or later, while their page tries again by itself. While the link is started, the person holds the bot's screen: the screen commands of every agent on that screen do not run, and say why. `pots page list` lists desktop links, and `pots page unlink` ends one at once, with no wake.
+- **`vnc` in bot.json**: the port of the VNC server on this computer and the file with its password, in the secrets folder: `VNC_PASSWORD=` as the password page writes it, or a password file as `vncpasswd` writes it. A new `desktop-page` skill says when to use the page, what the person sees, and how to set up a VNC server on Linux (X11, Wayland, or none), macOS and Windows.
+
+### Changed
+- **The `pages` skill and the prompt point to the desktop page**, and the prompt's choices for a computer without a desktop say that the person signs in to a virtual desktop from a desktop page link, with no SSH tunnel or open port.
+- **A wake from a page link says that the link was used or ended**, since not every such wake is an answer now.
+- **`ws` is a dependency of Pots**, for the desktop page's WebSocket. It was installed with Pots before, through other packages.
+
 ## 0.7.2 (2026-11-13)
 
 The bot sees what its children are doing and can free a stuck one, chooses each child's model, and `pots login` sets up everything in one run.

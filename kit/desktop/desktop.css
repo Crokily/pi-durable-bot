@@ -1,0 +1,832 @@
+/*
+ * The desktop page of Pots: a person sees and controls the bot's screen. The picture fills the screen; a few controls
+ * float on it. Phone first, also for computers. Pots' own page; bots do not use this file.
+ */
+
+:root {
+  color-scheme: light dark;
+  --bg: #f6f6f3;
+  --card: #ffffff;
+  --text: #1d1d1f;
+  --muted: #5f6368;
+  --line: #dcdcd7;
+  --go: #1f9d6b;
+  --bad: #c0392b;
+  --sheet: #f4f4f2;
+  --tile: #ffffff;
+  --soft: #e6e6e3;
+  --font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans CJK SC", "Segoe UI", system-ui, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141516;
+    --card: #1f2022;
+    --text: #ececea;
+    --muted: #a2a6ab;
+    --line: #34373a;
+    --bad: #ff8a7e;
+    --sheet: #1f2022;
+    --tile: #2c2d30;
+    --soft: #2c2d30;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  font: 15px/1.4 var(--font);
+  color: var(--text);
+  background: var(--bg);
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ---- Start and end pages ---- */
+
+.page {
+  max-width: 520px;
+  min-height: 100%;
+  margin: 0 auto;
+  padding: calc(40px + env(safe-area-inset-top)) 22px calc(22px + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+}
+
+.who {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.ava {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  flex: none;
+  background: linear-gradient(135deg, #4fb3a5, #1f7a70);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+}
+
+.ask {
+  margin: 18px 0 14px;
+  background: var(--card);
+  border-radius: 18px;
+  padding: 16px;
+  font-size: 19px;
+  line-height: 1.45;
+  font-weight: 600;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.meta {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.fold {
+  font-size: 13px;
+  margin-top: 12px;
+  color: var(--muted);
+}
+
+.fold summary {
+  cursor: pointer;
+}
+
+.fold p {
+  margin: 6px 0 0;
+  line-height: 1.5;
+}
+
+.msg {
+  color: var(--bad);
+  font-size: 14px;
+  min-height: 1.4em;
+  margin: 14px 0 0;
+}
+
+.big {
+  margin-top: auto;
+  width: 100%;
+  text-align: center;
+  background: var(--go);
+  color: #fff;
+  font-weight: 700;
+  font-size: 18px;
+  border-radius: 16px;
+  padding: 16px;
+}
+
+.big:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.fine {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+  margin: 10px 0 0;
+  line-height: 1.5;
+}
+
+.ended {
+  text-align: center;
+}
+
+.ended h1 {
+  font-size: 21px;
+  margin: 0 0 8px;
+}
+
+.check {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  margin: 100px auto 18px;
+  display: grid;
+  place-items: center;
+}
+
+.check.good {
+  background: var(--go);
+}
+
+.check.gone {
+  background: var(--muted);
+}
+
+.check::after {
+  content: "";
+  width: 22px;
+  height: 12px;
+  border: solid #fff;
+  border-width: 0 0 3px 3px;
+  transform: translateY(-3px) rotate(-45deg);
+}
+
+.check.gone::after {
+  width: 26px;
+  height: 0;
+  border-width: 0 0 3px 0;
+  transform: none;
+}
+
+/* ---- The session: the picture fills the screen ---- */
+
+#session {
+  position: fixed;
+  inset: 0;
+  background: #000;
+  overflow: hidden;
+  color: #fff;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+#screen {
+  position: absolute;
+  inset: 0;
+  touch-action: none;
+  transition: transform 0.25s ease;
+}
+
+#screen canvas {
+  touch-action: none;
+}
+
+.glass {
+  background: rgba(22, 22, 24, 0.66);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  backdrop-filter: blur(14px) saturate(1.4);
+  color: #fff;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+#dim {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: grid;
+  place-items: center;
+  z-index: 3;
+  font-size: 16px;
+  text-align: center;
+  padding: 24px;
+}
+
+/* The task strip: dot, time left, the bot's words. Folds to dot and time. */
+#pill {
+  position: absolute;
+  top: calc(12px + env(safe-area-inset-top));
+  left: calc(12px + env(safe-area-inset-left));
+  max-width: min(300px, calc(100% - 24px));
+  min-height: 36px;
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px 0 10px;
+  font-size: 13.5px;
+  z-index: 5;
+  text-align: left;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #f5b041;
+  flex: none;
+  box-shadow: 0 0 0 3px rgba(245, 176, 65, 0.25);
+}
+
+.dot.on {
+  background: #3ddc84;
+  box-shadow: 0 0 0 3px rgba(61, 220, 132, 0.25);
+}
+
+.dot.off {
+  background: #ff6b5e;
+  box-shadow: 0 0 0 3px rgba(255, 107, 94, 0.25);
+}
+
+.time {
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  flex: none;
+}
+
+.time.low {
+  color: #ffb347;
+}
+
+#pill .txt {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  opacity: 0.92;
+}
+
+#pill .more-text {
+  display: none;
+}
+
+#pill.short .txt {
+  display: none;
+}
+
+#pill.open {
+  right: calc(12px + env(safe-area-inset-right));
+  max-width: none;
+  border-radius: 16px;
+  padding: 10px 12px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+#pill.open .txt {
+  white-space: pre-wrap;
+  flex-basis: 100%;
+  font-size: 14.5px;
+  line-height: 1.45;
+  order: 3;
+  max-height: 40vh;
+  overflow: auto;
+}
+
+#pill.open .more-text {
+  display: block;
+  order: 4;
+  flex-basis: 100%;
+  font-size: 12px;
+  opacity: 0.7;
+  margin-top: 2px;
+}
+
+#pill .actions {
+  display: none;
+}
+
+/* The three buttons at the bottom: keyboard, more, done. They can be dragged out of the way. */
+#dock {
+  position: absolute;
+  left: 50%;
+  bottom: calc(18px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  width: max-content;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px;
+  border-radius: 30px;
+  z-index: 5;
+  touch-action: none;
+}
+
+.ib {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: #fff;
+}
+
+.ib:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.ib svg,
+.done svg {
+  width: 23px;
+  height: 23px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.done {
+  height: 46px;
+  padding: 0 18px 0 14px;
+  border-radius: 23px;
+  background: var(--go);
+  color: #fff;
+  font-weight: 650;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 15.5px;
+}
+
+.done svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 2.6;
+}
+
+@media (orientation: landscape) and (max-height: 520px) {
+  #dock {
+    left: auto;
+    right: calc(14px + env(safe-area-inset-right));
+    bottom: 50%;
+    transform: translateY(50%);
+    flex-direction: column;
+  }
+  .done {
+    padding: 0;
+    width: 46px;
+    justify-content: center;
+  }
+  .done span {
+    display: none;
+  }
+}
+
+#zoom {
+  position: absolute;
+  right: calc(12px + env(safe-area-inset-right));
+  top: calc(56px + env(safe-area-inset-top));
+  padding: 0 12px;
+  height: 32px;
+  border-radius: 16px;
+  font-size: 13px;
+  z-index: 5;
+}
+
+#toast {
+  position: absolute;
+  left: 50%;
+  bottom: calc(86px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  padding: 8px 14px;
+  border-radius: 14px;
+  font-size: 13px;
+  z-index: 6;
+  text-align: center;
+  transition: opacity 0.6s;
+  pointer-events: none;
+}
+
+/* The typing strip, above the phone's keyboard. */
+#strip {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px env(safe-area-inset-bottom);
+  background: rgba(32, 33, 36, 0.97);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  z-index: 7;
+}
+
+#strip .k {
+  min-width: 40px;
+  height: 38px;
+  padding: 0 8px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.12);
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  color: #fff;
+  flex: none;
+}
+
+#strip .k.on {
+  background: #4fb3a5;
+  color: #0c1a18;
+}
+
+#strip label {
+  flex: 1;
+  min-width: 0;
+  height: 38px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  gap: 6px;
+  font-size: 12.5px;
+  color: rgba(255, 255, 255, 0.75);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+#typed {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #fff;
+  /* 16px keeps iOS from zooming the page when the field gets the focus. */
+  font: 16px var(--font);
+  letter-spacing: 0.5px;
+}
+
+/* Sheets from the bottom: more, and handing back. */
+#scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.42);
+  z-index: 8;
+}
+
+.sheet {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 9;
+  background: var(--sheet);
+  color: var(--text);
+  border-radius: 22px 22px 0 0;
+  padding: 8px 16px calc(22px + env(safe-area-inset-bottom));
+  box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.25);
+  max-height: 85%;
+  overflow: auto;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.grab {
+  width: 38px;
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(128, 128, 128, 0.45);
+  margin: 0 auto 12px;
+}
+
+.sheet h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+
+.sheet p {
+  margin: 0 0 12px;
+  font-size: 13.5px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.tile {
+  background: var(--tile);
+  border-radius: 12px;
+  padding: 9px 4px 7px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.25;
+  color: var(--text);
+}
+
+.tile i {
+  display: block;
+  font-style: normal;
+  font-size: 18px;
+  margin-bottom: 3px;
+}
+
+.list {
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 14px;
+  background: var(--tile);
+  font-size: 14.5px;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.12);
+  color: var(--text);
+  text-align: left;
+}
+
+.li:last-child {
+  border-bottom: 0;
+}
+
+.li small {
+  display: block;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.li.red {
+  color: var(--bad);
+}
+
+.tog {
+  width: 40px;
+  height: 24px;
+  border-radius: 12px;
+  background: #c9c9c9;
+  position: relative;
+  flex: none;
+}
+
+.tog::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  transition: left 0.2s;
+}
+
+.tog.on {
+  background: var(--go);
+}
+
+.tog.on::after {
+  left: 18px;
+}
+
+.seg {
+  display: inline-flex;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  flex: none;
+}
+
+.seg button {
+  padding: 4px 9px;
+  font-size: 12.5px;
+}
+
+.seg button.on {
+  background: var(--go);
+  color: #fff;
+}
+
+.seg button:disabled {
+  opacity: 0.4;
+}
+
+.pri {
+  display: block;
+  width: 100%;
+  text-align: center;
+  background: var(--go);
+  color: #fff;
+  font-weight: 650;
+  border-radius: 14px;
+  padding: 13px;
+  font-size: 16px;
+  margin-top: 10px;
+}
+
+.sec {
+  display: block;
+  width: 100%;
+  text-align: center;
+  background: var(--soft);
+  color: var(--text);
+  border-radius: 14px;
+  padding: 11px;
+  font-size: 15px;
+  margin-top: 8px;
+}
+
+.sheet textarea {
+  display: block;
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+  background: var(--tile);
+  color: var(--text);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font: 16px/1.4 var(--font);
+  border: 1px solid rgba(128, 128, 128, 0.25);
+}
+
+.sheet .msg {
+  margin: 8px 0 0;
+}
+
+/* ---- On a computer: one strip at the top, with Done and a menu; the keyboard types straight in. ---- */
+
+#session.desktop #dock,
+#session.desktop #strip {
+  display: none !important;
+}
+
+#session.desktop #pill {
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+  top: 12px;
+  height: 40px;
+  border-radius: 20px;
+  gap: 10px;
+  padding: 0 6px 0 14px;
+  font-size: 14px;
+  max-width: min(760px, calc(100% - 24px));
+  transition: top 0.3s ease, height 0.3s ease;
+}
+
+#session.desktop #pill .txt {
+  display: block;
+  max-width: 430px;
+}
+
+#session.desktop #pill .actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+#session.desktop #pill .done {
+  height: 30px;
+  font-size: 14px;
+  padding: 0 14px 0 10px;
+}
+
+#session.desktop #pill .done svg {
+  width: 15px;
+  height: 15px;
+}
+
+#session.desktop #pill .ib {
+  width: 32px;
+  height: 32px;
+}
+
+#session.desktop #pill .ib svg {
+  width: 19px;
+  height: 19px;
+}
+
+#session.desktop #pill.tab {
+  top: 0;
+  height: 22px;
+  border-radius: 0 0 12px 12px;
+  padding: 0 10px;
+  font-size: 12px;
+  gap: 8px;
+}
+
+#session.desktop #pill.tab .txt,
+#session.desktop #pill.tab .actions {
+  display: none;
+}
+
+#menu {
+  position: absolute;
+  top: 58px;
+  left: 50%;
+  transform: translateX(calc(min(760px, 100vw - 24px) / 2 - 100%));
+  width: 290px;
+  border-radius: 12px;
+  overflow: hidden;
+  z-index: 9;
+  background: var(--tile);
+  color: var(--text);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+}
+
+#menu .li {
+  padding: 9px 14px;
+  font-size: 13.5px;
+}
+
+#menu .li kbd {
+  font: 12px var(--font);
+  color: var(--muted);
+}
+
+#menu .keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 14px 10px;
+  background: var(--tile);
+  border-bottom: 1px solid rgba(128, 128, 128, 0.12);
+}
+
+#menu .keys button {
+  background: var(--soft);
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 12.5px;
+}
+
+#session.desktop .sheet {
+  left: 50%;
+  right: auto;
+  bottom: auto;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(420px, calc(100% - 32px));
+  border-radius: 18px;
+  padding: 18px;
+}
+
+#session.desktop .sheet .grab {
+  display: none;
+}
+
+#session.desktop #toast {
+  bottom: 18px;
+}

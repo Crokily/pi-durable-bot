@@ -41,6 +41,8 @@ describe("the systemd service", () => {
     commands.length = 0;
     await Effect.runPromise(manager.install({ system: false }));
     expect(readFileSync(files.user, "utf8")).toContain("WantedBy=default.target");
+    // The kernel's kill of one of its processes for memory, such as an MCP server's, does not stop the gateway.
+    expect(readFileSync(files.user, "utf8")).toContain("\nOOMPolicy=continue\n");
     expect(commands).toEqual([
       "systemctl --user daemon-reload",
       "systemctl --user enable pots.service",
@@ -58,6 +60,27 @@ describe("the systemd service", () => {
     expect(commands).toEqual(["systemctl --user disable --now pots.service", "systemctl --user daemon-reload"]);
     expect(existsSync(files.user)).toBe(false);
     expect(readFileSync(files.system, "utf8")).toContain("User=someone-else");
+  });
+
+  it("brings a unit that an older version wrote up to date when it restarts", async () => {
+    const { files, commands, manager } = setUp();
+    await Effect.runPromise(manager.install({ system: false }));
+    const current = readFileSync(files.user, "utf8");
+    const old = current.replace("OOMPolicy=continue\n", "");
+    writeFileSync(files.user, old);
+    commands.length = 0;
+    await Effect.runPromise(manager.restart());
+    expect(readFileSync(files.user, "utf8")).toBe(current);
+    expect(commands).toEqual(["systemctl --user daemon-reload", "systemctl --user restart pots.service"]);
+
+    // Up to date, or not written by Pots: only the restart.
+    commands.length = 0;
+    await Effect.runPromise(manager.restart());
+    const own = "[Service]\nExecStart=/usr/bin/node pots.js start\nTimeoutStopSec=30\n";
+    writeFileSync(files.user, own);
+    await Effect.runPromise(manager.restart());
+    expect(readFileSync(files.user, "utf8")).toBe(own);
+    expect(commands).toEqual(["systemctl --user restart pots.service", "systemctl --user restart pots.service"]);
   });
 
   it("takes a system service that runs as this user as its own", async () => {

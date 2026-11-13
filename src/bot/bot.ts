@@ -15,9 +15,10 @@ import { SCREEN_VARIABLES, screenOf } from "../agent/screen.ts";
 import { createJudge } from "../agent/judge.ts";
 import { Mcp } from "../agent/mcp.ts";
 import { openResources } from "../agent/resources.ts";
+import { CommandScopes, scopeSupport } from "../agent/scopes.ts";
 import { loadChannel } from "../channels/load.ts";
 import type { Address, ChannelAdapter, ChannelConfig } from "../core/channel.ts";
-import { MEMORY_DIR, SECRETS_DIR } from "../core/home.ts";
+import { MEMORY_DIR, POTS_HOME, SECRETS_DIR } from "../core/home.ts";
 import { VERSION } from "../core/version.ts";
 import type { Judge } from "../core/judge.ts";
 import { formatTime } from "../core/time.ts";
@@ -48,6 +49,7 @@ import {
   renderDream,
   renderExtraction,
   renderHandoff,
+  renderLeftScopes,
   renderMemoryNote,
   renderPlaceWake,
   renderTimerWake,
@@ -106,6 +108,10 @@ export class Bot implements WakeTarget {
   readonly #pages: BotPages;
   /** The notes of what the memory passes changed, which the next wake that goes out takes. */
   readonly #notes: MemoryNote[];
+  /** The scopes of the bot's commands, on Linux with a systemd user manager. */
+  readonly #scopes: CommandScopes | undefined;
+  /** What the bot's commands left running when this gateway started, which the next wake that goes out takes. */
+  #left: string | undefined;
   /** Undefined when bot.json says "judge": "off". */
   #judge: Judge | undefined;
   readonly #control: ControlServer;
@@ -135,6 +141,8 @@ export class Bot implements WakeTarget {
     pages: BotPages;
     judge: Judge | undefined;
     notes: MemoryNote[];
+    scopes: CommandScopes | undefined;
+    left: string | undefined;
   }) {
     this.id = init.id;
     this.paths = init.paths;
@@ -147,6 +155,8 @@ export class Bot implements WakeTarget {
     this.#agent = init.agent;
     this.#pages = init.pages;
     this.#notes = init.notes;
+    this.#scopes = init.scopes;
+    this.#left = init.left;
     this.#judge = init.judge;
     this.#control = new ControlServer(init.paths.socket, this.#routes());
     let working: readonly string[] = [];
@@ -218,20 +228,31 @@ export class Bot implements WakeTarget {
     // The environment of bash commands, of routines' commands and of the stdio MCP servers. Without the screen's variables: a command that uses
     // the screen goes through the screen tool, which holds the screen for one agent at a time. Without POTS_FROM, which
     // only a routine's command has.
-    const left = new Set<string>([...SCREEN_VARIABLES, "POTS_FROM"]);
+    const without = new Set<string>([...SCREEN_VARIABLES, "POTS_FROM"]);
     const shellEnv: Record<string, string> = {
-      ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && !left.has(entry[0]))),
+      ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && !without.has(entry[0]))),
       POTS_BOT: id,
       PATH: `${dirname(env.potsCommand)}${delimiter}${process.env.PATH ?? ""}`,
       HOME: process.env.HOME ?? homedir(),
     };
+    // Each command in a systemd scope of its own, where the user manager allows. First, before anything can start a
+    // command: the scopes of the commands that the last gateway still waited on when it ended stop, and what commands
+    // left running is told at the next wake.
+    const support = await scopeSupport(POTS_HOME);
+    const scopes = support ? new CommandScopes(support, id) : undefined;
+    const recovered = await scopes?.recover().catch((error: unknown) => {
+      print("could not look at the scopes of earlier commands", { error: String(error) });
+      return undefined;
+    });
+    if (recovered?.stopped.length) print("stopped the scopes of commands the last gateway waited on", { scopes: recovered.stopped });
+    const left = recovered?.left.length ? renderLeftScopes(recovered.left, Date.now()) : undefined;
     const gateway = await Gateway.open(sql, {
       bot: id,
       judge: () => (bot ? bot.#judge : judge),
       settings,
       fallbackWakeMinutes: () => settings().fallbackWakeMinutes,
       fireTimer: (timer, caller) => self().#deliverTimer(timer, caller),
-      runCommand: commandRunner(paths.workspace, shellEnv),
+      runCommand: commandRunner(paths.workspace, shellEnv, scopes),
       filesDir: paths.files,
       print,
     });
@@ -259,6 +280,7 @@ export class Bot implements WakeTarget {
       secretsDir: SECRETS_DIR,
       fallbackWakeMinutes: current().settings.fallbackWakeMinutes,
       sharedMemory: MEMORY_DIR,
+      ...(scopes ? { scopes: { slice: scopes.support.slice, prefix: scopes.prefix } } : {}),
     });
     // AGENTS.md and skills as a pi session finds them from the bot's working directory, so its own folder's AGENTS.md.
     const resources = await openResources(paths.workspace, print);
@@ -299,6 +321,7 @@ export class Bot implements WakeTarget {
       compaction: () => settings().compaction,
       workspace: paths.workspace,
       shellEnv,
+      ...(scopes ? { scopes } : {}),
       screen: { current: () => screenOf(current().screen, process.env), bot: paths.dir, name: () => current().name },
       // The start of every request, so the provider's prompt cache can keep it: only facts that stay the same. What
       // changes from one wake to the next (the time, the context use, the bot's own address in a channel) is in the
@@ -369,7 +392,7 @@ export class Bot implements WakeTarget {
     });
     opened(agent);
 
-    bot = new Bot({ id, paths, definition, env, print, sql, gateway, timers, agent, pages, judge, notes });
+    bot = new Bot({ id, paths, definition, env, print, sql, gateway, timers, agent, pages, judge, notes, scopes, left });
     // Crash tests: with one of these files in the bot folder, the process dies at that point, once.
     const crashTest = (file: string, message: string, key: string) => (id: string) => {
       if (!existsSync(file)) return;
@@ -421,10 +444,13 @@ export class Bot implements WakeTarget {
   /**
    * Stop in this order: no new wakes (a decision in progress is finished and delivered), then the agent (its work in
    * progress is interrupted and goes on after the next start), then the gateway. The gateway takes the agent's actions
-   * until the agent has stopped, so an action is never refused while the agent still works.
+   * until the agent has stopped, so an action is never refused while the agent still works. Last, the scopes of the
+   * commands that were still running then.
    */
   async stop(): Promise<void> {
     this.#env.pages.unregister(this.id);
+    // The commands that the routines and the agent interrupt as they stop are those the bot was waiting on.
+    this.#scopes?.close();
     try {
       await this.#pages.stopCleanup();
       await this.#control.stop();
@@ -436,6 +462,9 @@ export class Bot implements WakeTarget {
         await this.#gateway.stop();
       } finally {
         await this.#sql.close().catch(() => {});
+        // What commands that returned left running goes on.
+        const stopped = (await this.#scopes?.stopInterrupted()) ?? 0;
+        if (stopped > 0) this.#print("stopped the scopes of commands that still ran", { commands: stopped });
       }
     }
     this.#print("bot stopped");
@@ -530,7 +559,14 @@ export class Bot implements WakeTarget {
     // What the memory passes changed since the last wake, once, at the end of this one, as Claude Code tells it. Taken
     // at once, so two wakes never give the same note; not by a wake given again after a crash, which does not go out
     // again; and put back when the wake could not go out.
-    const notes = (await this.#agent.submitted(id)) ? [] : this.#notes.splice(0);
+    // The same for what the bot's commands left running when this gateway started.
+    const again = await this.#agent.submitted(id);
+    const notes = again ? [] : this.#notes.splice(0);
+    const left = again ? undefined : this.#left;
+    if (left) {
+      this.#left = undefined;
+      text = `${text}\n\n${left}`;
+    }
     if (notes.length > 0) {
       const read = await this.#agent.readFiles().catch(() => new Set<string>());
       const stale = (paths: readonly string[]) => paths.filter((path) => basename(path) === "MEMORY.md" || read.has(path));
@@ -541,6 +577,7 @@ export class Bot implements WakeTarget {
       submitted = await this.#agent.submit({ id, text, steer, data: { reason, ...(place ? { place } : {}) }, caller });
     } catch (error) {
       this.#notes.unshift(...notes);
+      this.#left ??= left;
       throw error;
     }
     const { id: submission, trace } = submitted;
@@ -717,9 +754,9 @@ export class Bot implements WakeTarget {
   }
 }
 
-/** Runs a routine's command as the bash tool runs one: the same shell, environment and working directory. */
-function commandRunner(workspace: string, shellEnv: Record<string, string>): RunCommand {
-  const shell = new NodeExecutionEnv({ cwd: workspace, shellEnv });
+/** Runs a routine's command as the bash tool runs one: the same shell, environment, working directory and scopes. */
+function commandRunner(workspace: string, shellEnv: Record<string, string>, scopes: CommandScopes | undefined): RunCommand {
+  const shell = scopes ? scopes.env({ cwd: workspace, shellEnv }) : new NodeExecutionEnv({ cwd: workspace, shellEnv });
   return async (command, env, signal, onOutput) => {
     const result = await shell.exec(command, { env: { ...shellEnv, ...env }, inheritEnv: false, onOutput: (text) => onOutput(text) }, withAbortSignal(signal, BACKGROUND_CONTEXT));
     return result.ok ? { exitCode: result.value.exitCode } : { error: result.error.message };

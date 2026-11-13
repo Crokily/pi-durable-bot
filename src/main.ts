@@ -3,6 +3,7 @@ import { rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openModels } from "./agent/models.ts";
+import { foundScopeSupport, stopAllScopes, stoppingOnPurpose } from "./agent/scopes.ts";
 import { Bot } from "./bot/bot.ts";
 import { ControlServer } from "./bot/control.ts";
 import { BOT_ID, botPaths, readDefinition } from "./bot/definition.ts";
@@ -125,8 +126,15 @@ export async function runGateway(): Promise<void> {
     log("shutdown", { signal });
     clearInterval(timer);
     const deadline = setTimeout(() => process.exit(1), 25_000);
+    // Pots' service stopped on purpose, not restarted: what the bots' commands left running stops too, once they stopped.
+    const support = await foundScopeSupport();
+    const onPurpose = signal === "SIGTERM" ? stoppingOnPurpose(support) : Promise.resolve(false);
     await scanning;
     await Promise.allSettled([...running.values()].map((entry) => entry.bot.stop()));
+    if (support && (await onPurpose)) {
+      log("stopped on purpose: stopping what the commands left running", { slice: support.slice });
+      await stopAllScopes(support);
+    }
     await pages.stop().catch((error: unknown) => log("page server stop failed", { error: String(error) }));
     clearTimeout(deadline);
     if (runningGateway() === process.pid) await unlink(PID_FILE).catch(() => {});

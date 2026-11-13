@@ -2,6 +2,12 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
+## Unreleased
+
+### Changed
+- **Linux: each command runs in a systemd scope of its own.** Where a systemd user manager runs (a desktop, or a server with lingering), every command of `bash`, `screen` and a routine runs in its own scope, in `app-pots-<id>.slice`, about 25 ms more per command. When memory runs out, systemd-oomd or the kernel stops the command that uses it, not the gateway with every bot in it: before, a heavy command, or the tabs of a browser a bot started, counted against the service, and systemd-oomd could kill the whole service with all its bots. What a command leaves running when it returns, such as a browser or a dev server, now keeps running when Pots restarts after an upgrade or a crash, and the bot's next wake lists it with its processes, so the bot decides when to stop it; a command Pots still waits on is stopped, with what it started. Stopping the service on purpose (`systemctl --user stop pots`, `pots service uninstall`) stops all of it. The prompt tells the bot these facts and the scopes' names. Elsewhere commands run as before.
+- **Linux: the service has `OOMPolicy=continue`.** When the kernel kills one process of the service for memory, such as an MCP server, the gateway goes on instead of restarting. `pots service restart` adds the line to a unit an older version wrote.
+
 ## 0.7.2 (2026-11-13)
 
 The bot sees what its children are doing and can free a stuck one, chooses each child's model, and `pots login` sets up everything in one run.

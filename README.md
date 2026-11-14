@@ -164,6 +164,8 @@ Then the gateway starts as a background service (it starts again at login) and y
 
 It joins only the places it is invited to, like a new hire who is added to the right channels.
 
+To add another bot, ask a bot you have to make one, or run `pots bot new <name> --about "<what it is for>"`. The new bot sets itself up the same way, and when another bot already uses the screen, it offers to set up one of its own ([Add another bot](docs/for-agents.md#add-another-bot)).
+
 | Command | What it does |
 |---|---|
 | `pots init` | Set up your first bot, or another one |

@@ -220,6 +220,17 @@ describe("the prompt", () => {
     expect(folderSection(facts, true)).not.toContain("pots page secret");
   });
 
+  it("names a token file for this bot, and says how to make another bot", () => {
+    for (const folder of [folderSection(facts), folderSection(facts, true)]) {
+      expect(folder).toContain("such as slack-ada.env");
+      expect(folder).toContain('pots bot new <name> --about "<what it is for>"');
+      expect(folder).toContain('pots chat --bot <its id> -m "<text>"');
+      expect(folder).not.toContain("A new folder with a bot.json is a new bot");
+    }
+    expect(folderSection(facts)).toContain('"file": "<app>-ada.env"');
+    expect(workSection(facts)).toContain("bots that share a screen wait for each other");
+  });
+
   it("lists the page and form commands", () => {
     const work = workSection(facts);
     expect(work).toContain("pots page link <name> [--for <person address>]");

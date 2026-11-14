@@ -12,15 +12,15 @@ Written for a bot that connects itself; a person can follow it too. The bot gets
 1. The person makes the Telegram bot in their own Telegram app. Only a Telegram account can make a bot, and you cannot use theirs. Ask them to open a chat with [@BotFather](https://t.me/BotFather), send `/newbot`, and give a name (what people see, for example your name) and a username that ends in `bot`. BotFather answers with the token (`123456789:AA…`).
 2. In the same chat, ask them to send `/setprivacy`, choose the bot, and choose **Disable**. Without this, you get only the group messages that mention you, reply to you or are commands. The change counts only in groups the bot joins after it: in a group the bot is already in, they remove it and add it again.
 3. Ask for the token with ask-secret in the terminal channel:
-   `call <terminal channel id> ask-secret {"text": "…", "file": "telegram.env", "keys": ["TELEGRAM_BOT_TOKEN"]}`.
-   `pots chat` writes it to `telegram.env` in the secrets folder (`~/.pots/secrets/`), readable only by this user, without showing it to you:
+   `call <terminal channel id> ask-secret {"text": "…", "file": "telegram-<your bot ID>.env", "keys": ["TELEGRAM_BOT_TOKEN"]}`.
+   `pots chat` writes it to `telegram-<your bot ID>.env` in the secrets folder (`~/.pots/secrets/`), readable only by this user, without showing it to you. Your bot ID is the name of your folder, so for the bot `ada` the file is `telegram-ada.env`. Other bots on this computer keep their tokens in the same folder, so never use a file that is not yours, such as a `telegram.env` that is already there:
    ```sh
    TELEGRAM_BOT_TOKEN=123456789:AA...
    ```
    Do not put the token in a chat message, a log or any other file.
 4. Add the channel to `channels` in your `bot.json`:
    ```json
-   { "id": "telegram", "type": "telegram", "secrets": "~/.pots/secrets/telegram.env" }
+   { "id": "telegram", "type": "telegram", "secrets": "~/.pots/secrets/telegram-<your bot ID>.env" }
    ```
    It connects within a few seconds. `pots status` lists it; if it fails, the reason is in `bot.json.error`. Only one process can get a bot's messages: when another one uses the same token, the gateway's output says so.
 5. Ask the person to add you to their groups (the group's info → **Add members** → your username). To see reactions, you must be an admin of the group: Telegram sends reactions only to admins. To post in a Telegram channel, you must be an admin there.
@@ -71,7 +71,7 @@ The files of a message are saved for you, and the wake gives their paths. The me
 1. `call <channel id> getFile {"file_id": "<file ID>"}` gives its `file_path`.
 2. Download it from Telegram's file host with the token from its line of the env file, read in the shell, so that it stays out of messages and logs:
    ```sh
-   curl -sS -o photo.jpg "https://api.telegram.org/file/bot$(grep '^TELEGRAM_BOT_TOKEN=' ~/.pots/secrets/telegram.env | cut -d= -f2-)/<file_path>"
+   curl -sS -o photo.jpg "https://api.telegram.org/file/bot$(grep '^TELEGRAM_BOT_TOKEN=' ~/.pots/secrets/telegram-<your bot ID>.env | cut -d= -f2-)/<file_path>"
    ```
    Never `source` the env file or `.` it in a shell, and never print the token: the file holds each value exactly as it was typed, and a value with `$(…)` in it would run as a command.
    The link works for at least an hour. Telegram gives bots files of at most 20 MB.

@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { userInfo } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -232,6 +233,12 @@ describe("pots", { timeout: 120_000 }, () => {
     const answer = await pots("chat", "--message", "are you there?", "--timeout", "60");
     expect(answer).toBe("Coworker: ack: [wake] DM\n");
     await waitFor(() => gateway.query("SELECT 1 FROM gw_events WHERE channel = 'terminal' AND text = 'are you there?'").length === 1, { what: "the message in the log" });
+
+    // What the bot sends there after pots chat -m has ended comes first in the next one, and only once.
+    const person = userInfo().username.toLowerCase().replace(/[^\w-]+/g, "-") || "you";
+    await pots("send", `terminal:@${person}`, "the build is done");
+    expect(await pots("chat", "--message", "thanks", "--timeout", "60")).toBe("Coworker: the build is done\nCoworker: ack: [wake] DM\n");
+    expect(await pots("chat", "--message", "anything else?", "--timeout", "60")).toBe("Coworker: ack: [wake] DM\n");
   });
 
   it("asks for secrets in pots chat, where the bot does not see them", async () => {
@@ -262,6 +269,19 @@ describe("pots", { timeout: 120_000 }, () => {
     expect(await fails("send", "test:#general", "  ")).toBe("ERROR\n  text is empty");
     expect(await fails("turn-page")).toBe("ERROR\n  Missing required flag: --note");
   });
+
+  it("gives the command a mistyped one most likely means, not the whole help", async () => {
+    const mistyped = await gateway.run(["bots", "new", "Ada", "--about", "our team's helper"]);
+    expect(mistyped).toEqual({ status: 1, stdout: "", stderr: expect.any(String) });
+    expect(mistyped.stderr.trim()).toBe(`ERROR\n  Unknown subcommand "bots" for "pots"\n\n  Did you mean this?\n    pots bot new Ada --about 'our team'\\''s helper'`);
+    expect(await fails("bot", "lst")).toBe('ERROR\n  Unknown subcommand "lst" for "pots bot"\n\n  Did you mean this?\n    pots bot list');
+    // With no close match, the help and the error, as before.
+    const unknown = await gateway.run(["nothing-like-it"]);
+    expect(unknown.status).toBe(1);
+    expect(unknown.stdout).toContain("SUBCOMMANDS");
+    expect(unknown.stderr.trim()).toBe('ERROR\n  Unknown subcommand "nothing-like-it" for "pots"');
+    expect(existsSync(join(gateway.home, "bots", "ada"))).toBe(false);
+  });
 });
 
 describe("pots without a running gateway", { timeout: 120_000 }, () => {
@@ -277,6 +297,15 @@ describe("pots without a running gateway", { timeout: 120_000 }, () => {
       channels: [{ id: "terminal", type: "terminal" }],
     });
     expect(readFileSync(join(dir, "responsibilities.md"), "utf8")).toBe("helps with releases\n");
+    // Its first start: who made it and where they talk with it, what it is for, and that another bot may share its screen.
+    const wake = readFileSync(join(dir, "first-wake.md"), "utf8");
+    expect(wake).toContain(`This is your first start. ${userInfo().username} just created you with pots bot new on this computer`);
+    expect(wake).toContain("pots chat --bot second-bot");
+    expect(wake).toContain('They described you in one sentence: "helps with releases".');
+    expect(wake).toContain("Other bots already work on this computer: Coworker (coworker)");
+    expect(wake).toContain("bots that share a screen wait for each other");
+    expect(wake).toContain(process.platform === "darwin" || process.platform === "win32" ? "a second screen of your own is not practical" : "TigerVNC's Xvnc");
+    expect(wake).toContain("as an app of your own with a token file of your own");
     expect((await pots("bot", "new", "Second Bot", "--model", "fake/coworker")).trim()).toBe(join(gateway.home, "bots", "second-bot-2"));
     expect(await fails("bot", "new", "X", "--id", "Bad ID")).toBe('ERROR\n  bad bot ID "Bad ID": use lowercase letters, digits, "_" and "-"');
     expect(await pots("bot", "list")).toBe(
@@ -288,6 +317,18 @@ describe("pots without a running gateway", { timeout: 120_000 }, () => {
     expect(await fails("send", "test:#general", "hi")).toBe("ERROR\n  say which bot with --bot <id> (bots: coworker, second-bot, second-bot-2)");
     expect(await fails("send", "test:#general", "hi", "--bot", "coworker")).toMatch(/^ERROR\n {2}the bot is not running \(.*\); start it with pots service install or pots start$/);
     expect(await pots("send", "test:#general", "hi", "--bot", "coworker", "--help")).toContain("Send a message.");
+  });
+
+  it("tells a bot that another bot made that this bot passes messages for it", async () => {
+    const made = await gateway.run(["bot", "new", "Helper", "--model", "fake/coworker", "--about", "answers questions"], { env: { POTS_BOT: "coworker" } });
+    expect(made).toMatchObject({ status: 0, stderr: "" });
+    const wake = readFileSync(join(gateway.home, "bots", "helper", "first-wake.md"), "utf8");
+    expect(wake).toContain(`This is your first start. Coworker, the bot whose folder is ${join(gateway.home, "bots", "coworker")}, created you with pots bot new`);
+    expect(wake).toContain("Until you join a chat app, Coworker passes messages both ways");
+    expect(wake).toContain('pots wake --bot coworker --from helper --note "<what to pass on>"');
+    expect(wake).toContain('Coworker described you in one sentence: "answers questions".');
+    expect(wake).toContain("Say hello in your terminal channel; Coworker passes it on.");
+    expect(wake).toContain("Other bots already work on this computer: Coworker (coworker), Second Bot (second-bot), Second Bot (second-bot-2)");
   });
 
   it("init checks that pi can use the model before it makes a bot", async () => {

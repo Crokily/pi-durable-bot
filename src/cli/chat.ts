@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { Writable } from "node:stream";
@@ -65,6 +65,42 @@ function readFrom(terminal: Terminal, offset: number): { lines: Line[]; offset: 
   return { lines, offset: offset + Buffer.byteLength(text.slice(0, end + 1)) };
 }
 
+/**
+ * How far pots chat has shown the bot's messages, in bytes of its file. pots chat -m prints first what the bot sent
+ * after that, such as a new bot's hello, or what it sent after the last pots chat -m ended. Kept in the terminal folder;
+ * when it is missing, or does not point to the end of a line of the file as it is now, the end of the person's last
+ * message.
+ */
+function shownUntil(terminal: Terminal): number {
+  if (!existsSync(terminal.file)) return 0;
+  const file = readFileSync(terminal.file);
+  try {
+    const offset = Number(readFileSync(join(dirname(terminal.file), "shown"), "utf8").trim());
+    if (Number.isInteger(offset) && offset > 0 && offset <= file.length && file[offset - 1] === 0x0a) return offset;
+  } catch {
+    // Not written yet.
+  }
+  let after = 0;
+  for (let start = 0, end = file.indexOf(0x0a); end >= 0; start = end + 1, end = file.indexOf(0x0a, start)) {
+    try {
+      const line = JSON.parse(file.subarray(start, end).toString("utf8")) as Line;
+      if (line.place === terminal.place && line.person === terminal.person) after = end + 1;
+    } catch {
+      // Not a line of the channel.
+    }
+  }
+  return after;
+}
+
+function markShown(terminal: Terminal, offset: number): void {
+  try {
+    mkdirSync(dirname(terminal.file), { recursive: true });
+    writeFileSync(join(dirname(terminal.file), "shown"), `${offset}\n`);
+  } catch {
+    // Only a convenience: without it, the next pots chat -m starts after the person's last message.
+  }
+}
+
 function render(terminal: Terminal, line: Line): string | undefined {
   const fromBot = line.person === "bot";
   const who = fromBot ? bold(terminal.name) : dim("you");
@@ -111,6 +147,7 @@ export const chatInteractive = (id: string) =>
       const text = render(terminal, line);
       if (text) console.log(text);
     }
+    markShown(terminal, start.offset);
     const since = Date.now();
     if ((yield* Effect.promise(() => statusOf(id))) === undefined) console.log(dim(`${terminal.name} is not running. Messages wait until it starts (pots service install, or pots start).`));
     console.log(dim(`Talking to ${terminal.name}. Ctrl+C to leave.`));
@@ -185,6 +222,7 @@ export const chatInteractive = (id: string) =>
       askNext();
       const watch = setInterval(() => {
         const next = readFrom(terminal, offset);
+        if (next.offset !== offset) markShown(terminal, next.offset);
         offset = next.offset;
         for (const line of next.lines) {
           const text = line.person === "bot" ? render(terminal, line) : undefined;
@@ -211,11 +249,20 @@ export const chatInteractive = (id: string) =>
     });
   });
 
-/** Send one message and print the bot's answers until it is done working, or until the timeout. For scripts and tests. */
+/**
+ * Print what the bot sent since pots chat last showed it, send one message, and print the bot's answers until it is done
+ * working, or until the timeout. For scripts, tests, and a bot that passes messages for a new bot.
+ */
 const chatOnce = (id: string, text: string, timeoutMs: number) =>
   Effect.gen(function* () {
     const terminal = yield* terminalOf(id);
-    let offset = readFrom(terminal, 0).offset;
+    const earlier = readFrom(terminal, shownUntil(terminal));
+    for (const line of earlier.lines.filter((item) => item.person === "bot")) {
+      const shown = render(terminal, line);
+      if (shown) console.log(shown);
+    }
+    let offset = earlier.offset;
+    markShown(terminal, offset);
     const since = Date.now();
     say(terminal, text);
     const deadline = Date.now() + timeoutMs;
@@ -224,6 +271,7 @@ const chatOnce = (id: string, text: string, timeoutMs: number) =>
     while (Date.now() < deadline) {
       yield* Effect.sleep("500 millis");
       const next = readFrom(terminal, offset);
+      if (next.offset !== offset) markShown(terminal, next.offset);
       offset = next.offset;
       for (const line of next.lines.filter((item) => item.person === "bot")) {
         const shown = render(terminal, line);
@@ -243,7 +291,7 @@ export const chatCommand = Command.make(
   "chat",
   {
     bot: Flag.String("bot").pipe(Flag.optional, Flag.withDescription("Which bot. Default: the only bot.")),
-    message: Flag.String("message").pipe(Flag.withAlias("m"), Flag.optional, Flag.withDescription("Send this, print the answer and leave.")),
+    message: Flag.String("message").pipe(Flag.withAlias("m"), Flag.optional, Flag.withDescription("Print what the bot sent since pots chat last showed it, send this, print the answer and leave.")),
     timeout: Flag.Int("timeout").pipe(Flag.withDefault(600), Flag.withDescription("With --message: seconds to wait for the answer.")),
   },
   (input) =>

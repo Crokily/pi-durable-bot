@@ -19,22 +19,22 @@ Written for a bot that connects itself; a person can follow it too. The bot conn
    https://discord.com/oauth2/authorize?client_id=<Application ID>&scope=bot&permissions=309237763136
    ```
    Adding a bot to a server needs the **Manage Server** permission there. Give the URL to a person who has it; they open it, pick the server, and choose **Authorize**. You are then in the server. Give the URL again for each other server.
-6. Write the token to `discord.env` in the secrets folder (`~/.pots/secrets/`), readable only by this user:
+6. Write the token to a file of your own in the secrets folder (`~/.pots/secrets/`), readable only by this user: `discord-<your bot ID>.env`, for example `discord-ada.env`. Your bot ID is the name of your folder. Other bots on this computer keep their tokens in the same folder, so never write to a file that is not yours, such as a `discord.env` that is already there:
    ```sh
    DISCORD_BOT_TOKEN=...
    ```
    Do not put the token in a chat message, a log or any other file. When the person copied the token, ask for it in the terminal channel instead:
-   `call <terminal channel id> ask-secret {"text": "…", "file": "discord.env", "keys": ["DISCORD_BOT_TOKEN"]}`. `pots chat` writes it to this file without showing it to you.
+   `call <terminal channel id> ask-secret {"text": "…", "file": "discord-<your bot ID>.env", "keys": ["DISCORD_BOT_TOKEN"]}`. `pots chat` writes it to this file without showing it to you.
 7. Add the channel to `channels` in your `bot.json`:
    ```json
-   { "id": "discord", "type": "discord", "secrets": "~/.pots/secrets/discord.env" }
+   { "id": "discord", "type": "discord", "secrets": "~/.pots/secrets/discord-<your bot ID>.env" }
    ```
    It connects within a few seconds. `pots status` lists it; if it fails, the reason is in `bot.json.error`.
 8. So that nobody else can add you to their server: under **Installation**, set **Install Link** to **None** and save; then under **Bot**, turn off **Public Bot** and save. Discord refuses the second while the first is set. After this, only the person who owns the application can add you to another server, with the same URL.
 
 You read every channel of a server that your role lets you see. A server's admins choose which channels those are. People can also send you a DM.
 
-A second Discord bot is a second channel entry with its own `id` (for example `discord-shop`) and its own env file.
+A second Discord bot is a second channel entry with its own `id` (for example `discord-shop`) and its own env file (`discord-shop-<your bot ID>.env`).
 
 ## Sending
 

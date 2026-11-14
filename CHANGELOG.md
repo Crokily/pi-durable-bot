@@ -2,6 +2,22 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
+## Unreleased
+
+A second or third bot sets itself up as the first one does, and offers to set up a screen of its own.
+
+### Added
+- **`pots bot new` gives the new bot a first start, as `pots init` does.** The bot says hello, checks the screen, connects the chat apps the person wants, as an app of its own, and asks which models to use for which work. Its first wake says who made it and where that person is. When a bot made it, from its own shell, the new bot learns that this bot passes messages both ways with `pots chat` until it joins a chat app, and that it can wake that bot with `pots wake --bot` when something cannot wait. When other bots already work on the computer, it learns that bots on one screen wait for each other. Where another bot already uses the screen, it asks the person whether to set up a screen of its own, and recommends it: on Linux a virtual desktop such as TigerVNC's Xvnc, which takes about 0.5–1 GB of memory with its own browser, and a one-time package install with sudo when none is installed yet; on macOS and Windows a second screen is not practical, so it tells them that the bots take turns. `pots init` says the same when it makes another bot.
+- **`pots bot new` waits until the running gateway has started the new bot**, so a `pots chat --bot <id>` right after finds it running.
+- **"Add another bot" in the setup page for AI agents ([docs/for-agents.md](docs/for-agents.md))**: the person asks a bot they have to make one, or their agent runs `pots bot new`; the new bot then sets itself up.
+
+### Changed
+- **The prompt tells the bot how to make another bot**: `pots bot new --about …`, then pass messages between it and the person until it has a chat app of its own, starting with who asked for it and where. It used to say only that a new folder with a bot.json is a new bot, so a bot made the folder itself, and the new bot got no first start. The screen facts now also say that bots that share a screen wait for each other, and that a screen per bot works best.
+- **The bot confirms before an action that may cost money.** Its actions still need no approval, with one exception that the prompt now gives: before an action, it makes sure whether the action may cost money, and if it may, it confirms with the person before it does it.
+- **A token file for each bot.** The Slack, Discord and Telegram skills, the pages skill and the prompt name the file for the bot, such as `slack-<bot ID>.env`, instead of one fixed `slack.env`, which another bot on the computer may already use: a second bot that followed the old text could write over the first one's tokens. Files that bots use now stay as they are. The Slack skill also says how to give the app an icon, which a manifest cannot do.
+- **`pots chat -m` prints first what the bot sent since the last time**, such as a new bot's hello, or what the bot sent after the last `pots chat -m` ended. Before, it printed only the answers to its own message.
+- **A mistyped command gets the command it most likely means**, for example `pots bot new Ada` for `pots bots new Ada`, instead of the whole help.
+
 ## 0.7.2 (2026-11-13)
 
 The bot sees what its children are doing and can free a stuck one, chooses each child's model, and `pots login` sets up everything in one run.

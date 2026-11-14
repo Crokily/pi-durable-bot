@@ -172,8 +172,10 @@ The answers of the example page look like this:
 ## The password page
 
 ```sh
-pots page secret --file slack.env --keys SLACK_APP_TOKEN,SLACK_BOT_TOKEN --text "Paste the two Slack tokens from step 5" --for slack:@U123
+pots page secret --file slack-ada.env --keys SLACK_APP_TOKEN,SLACK_BOT_TOKEN --text "Paste the two Slack tokens from step 5" --for slack:@U123
 ```
+
+Name the file for yourself, as here for the bot `ada`: other bots on this computer keep their secrets in the same folder.
 
 It prints JSON: `{"link": "<link ID>", "url": "https://…/s/<token>", "expires": "<time>", "via": …, "note": …}`. The page is Pots' own; you choose only the text, the keys and the file. One person submits it once: the values go straight into that file in the secrets folder (`~/.pots/secrets/`), and the link stops working. A link that nobody submits stops working after 1 hour. Opening the page does not use it up, so a platform's link preview cannot either; still turn previews off.
 
@@ -183,7 +185,7 @@ You are woken with:
 secret page: someone used link <link ID> (made for <person address | anyone>) and wrote <KEY1>, <KEY2> to <file> in the secrets folder
 ```
 
-You never see the values; they are not in the log, the wake or a trace. Then use the file as after ask-secret, for example as `secrets` of a channel in bot.json. The file has the values exactly as they were typed, one `KEY=value` line each, so never `source` it or `.` it in a shell: a value can hold `$(…)`. To use one value in a command, read just that line, for example `"$(grep '^SLACK_BOT_TOKEN=' ~/.pots/secrets/slack.env | cut -d= -f2-)"`, and never print it. Send the link in a DM to that person when you can. With a Quick Tunnel, tell them every time that Cloudflare can see what they type into the page (see below), and offer Tailscale Funnel.
+You never see the values; they are not in the log, the wake or a trace. Then use the file as after ask-secret, for example as `secrets` of a channel in bot.json. The file has the values exactly as they were typed, one `KEY=value` line each, so never `source` it or `.` it in a shell: a value can hold `$(…)`. To use one value in a command, read just that line, for example `"$(grep '^SLACK_BOT_TOKEN=' ~/.pots/secrets/slack-ada.env | cut -d= -f2-)"`, and never print it. Send the link in a DM to that person when you can. With a Quick Tunnel, tell them every time that Cloudflare can see what they type into the page (see below), and offer Tailscale Funnel.
 
 ## Where links point: a Quick Tunnel or your own address
 

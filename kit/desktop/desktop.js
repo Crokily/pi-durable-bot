@@ -163,36 +163,47 @@ function icon(paths, extra = []) {
 const keyboardIcon = () => icon(["M6.5 10h.01M9.5 10h.01M12.5 10h.01M15.5 10h.01M18 10h.01M8 14.2h8"], [["rect", { x: "2.5", y: "6", width: "19", height: "12", rx: "2.5" }]]);
 const moreIcon = () => icon([], [["circle", { cx: "5.5", cy: "12", r: "1.2" }], ["circle", { cx: "12", cy: "12", r: "1.2" }], ["circle", { cx: "18.5", cy: "12", r: "1.2" }]]);
 const checkIcon = () => icon(["M5 12.5l4.5 4.5L19 7.5"]);
+const linesIcon = () => icon(["M5 7h14M5 12h14M5 17h9"]);
+const closeIcon = () => icon(["M6.5 6.5l11 11M17.5 6.5l-11 11"]);
+const fitIcon = () => icon(["M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"]);
 
 function buildSession() {
   const session = h("div", { id: "session", class: touch ? "" : "desktop" });
-  const pill = h(
-    "div",
-    { id: "pill", class: "glass", role: "button", tabindex: "0" },
-    h("i", { class: "dot", id: "dot" }),
-    h("span", { class: "time", id: "time" }),
-    h("span", { class: "txt", text: facts.text }),
-    h("span", { class: "more-text", id: "pill-more" }),
-    h(
-      "span",
-      { class: "actions" },
-      h("button", { type: "button", class: "done", id: "pill-done", onclick: (event) => (event.stopPropagation(), openSheet("hand-back")) }, checkIcon(), h("span", { text: W.done })),
-      h("button", { type: "button", class: "ib", "aria-label": W.more, title: W.more, onclick: (event) => (event.stopPropagation(), toggleMenu()) }, moreIcon()),
-    ),
-  );
-  pill.addEventListener("click", () => {
-    if (!touch) return expandPill();
-    pill.classList.remove("short");
-    pill.classList.toggle("open");
-  });
+  // One group of controls that floats on the picture: the task button (the connection's dot and the time left; a tap
+  // shows the bot's words), keyboard, more and Done.
   const dock = h(
     "div",
     { id: "dock", class: "glass" },
-    h("button", { type: "button", class: "ib", id: "keyboard-button", "aria-label": W.keyboard, title: W.keyboard, onclick: () => openKeyboard() }, keyboardIcon()),
-    h("button", { type: "button", class: "ib", "aria-label": W.more, title: W.more, onclick: () => openSheet("more") }, moreIcon()),
-    h("button", { type: "button", class: "done", onclick: () => openSheet("hand-back") }, checkIcon(), h("span", { text: W.done })),
+    h(
+      "button",
+      { type: "button", class: "chip", id: "chip", "aria-label": W.task, title: W.task, "aria-expanded": "false", "aria-controls": "hint", onclick: () => toggleHint() },
+      h("i", { class: "dot", id: "dot" }),
+      h("span", { class: "time", id: "time" }),
+      linesIcon(),
+    ),
+    h("button", { type: "button", class: "zoomed", id: "zoom", hidden: true, onclick: () => setMode(view.mode === "actual" ? "whole" : view.mode, true) }),
+    touch ? h("button", { type: "button", class: "ib", id: "keyboard-button", "aria-label": W.keyboard, title: W.keyboard, onclick: () => openKeyboard() }, keyboardIcon()) : null,
+    h("button", { type: "button", class: "ib", id: "more-button", "aria-label": W.more, title: W.more, onclick: () => (touch ? openSheet("more") : toggleMenu()) }, moreIcon()),
+    h("button", { type: "button", class: "done", title: W.done, onclick: () => openSheet("hand-back") }, checkIcon(), h("span", { text: W.done })),
   );
-  makeDraggable(dock);
+  dragDock(dock);
+
+  // The bot's words in full, as the start screen showed them, and how to use the page.
+  const words = h("div", { class: "hint-text words", id: "hint-text" });
+  for (const node of $("ask").childNodes) words.append(node.cloneNode(true));
+  const inputHint = facts.input === "password" ? W.hintPassword : facts.input === "code" ? W.hintCode : facts.input === "text" ? W.hintText : null;
+  const tips = touch ? [W.gestures, inputHint] : [cmdIsCtrl ? W.keysHintMac : W.keysHint];
+  const hint = h(
+    "div",
+    { id: "hint", class: "glass away", role: "dialog", "aria-label": W.task, hidden: true },
+    h("div", { class: "hint-top" }, h("span", { text: W.asks }), h("button", { type: "button", class: "x", "aria-label": W.fold, title: W.fold, onclick: () => closeHint() }, closeIcon())),
+    words,
+    h("div", { class: "hint-tips" }, ...tips.filter(Boolean).map((tip) => h("p", { text: tip }))),
+    h("div", { class: "hint-meta", id: "hint-meta" }),
+  );
+  // Read in its own time: a touch, a scroll or the mouse on it keeps it open.
+  for (const type of ["pointerdown", "wheel"]) hint.addEventListener(type, holdHint, { passive: true });
+  words.addEventListener("scroll", () => (holdHint(), markOverflow()), { passive: true });
 
   const typed = h("input", { id: "typed", autocomplete: "off", autocapitalize: "off", autocorrect: "off", spellcheck: "false", enterkeyhint: "send", "aria-label": fill(W.typeInto, {}) });
   const strip = h(
@@ -301,10 +312,10 @@ function buildSession() {
   session.append(
     h("div", { id: "screen" }),
     h("div", { id: "dim", hidden: true, onclick: () => !connected && reconnect(true) }, h("p", { id: "dim-text" })),
-    pill,
-    h("button", { type: "button", id: "zoom", class: "glass", hidden: true, onclick: () => setMode(view.mode === "actual" ? "whole" : view.mode, true) }),
-    h("div", { id: "toast", class: "glass", hidden: true }),
+    h("div", { id: "safe", "aria-hidden": "true" }),
     dock,
+    hint,
+    h("div", { id: "toast", class: "glass", hidden: true }),
     strip,
     h("div", { id: "scrim", hidden: true, onclick: closeSheets }),
     more,
@@ -328,12 +339,18 @@ function buildSession() {
     visualViewport.addEventListener("resize", placeForKeyboard);
     visualViewport.addEventListener("scroll", placeForKeyboard);
   }
-  window.addEventListener("resize", () => placeForKeyboard());
+  window.addEventListener("resize", () => (placeForKeyboard(), placeDock()));
+  // The dock keeps its edge when it changes size, as when the zoom shows or the time loses a digit.
+  new ResizeObserver(() => placeDock()).observe(dock);
+  // A press anywhere else folds the task panel and the menu; on the picture, the press goes on to the desktop too.
+  document.addEventListener("pointerdown", onPressAnywhere, true);
   if (!touch) {
-    // Captured before noVNC, which keeps the mouse's events to itself.
-    document.addEventListener("mousemove", onDesktopMouse, true);
+    // Captured before noVNC, which keeps the keyboard's events to itself.
     window.addEventListener("keydown", onDesktopKey, true);
   }
+  dockPlace = loadDockPlace();
+  tick();
+  placeDock();
   setInterval(tick, 1000);
   setInterval(() => {
     if (!over) refresh();
@@ -484,11 +501,8 @@ async function dropped() {
 }
 
 function firstConnect() {
-  pillShort(3500);
-  if (touch) toast(W.gestures, 4500);
-  else toast(cmdIsCtrl ? W.keysHintMac : W.keysHint, 5000);
-  const hint = facts.input === "password" ? W.hintPassword : facts.input === "code" ? W.hintCode : facts.input === "text" ? W.hintText : null;
-  if (hint && touch) setTimeout(() => toast(hint, 5000), 4800);
+  // The bot's words and the tips show for a while, then fold into the task button.
+  openHint(true);
 }
 
 // ---- The picture: size, zoom and pan ----
@@ -554,8 +568,14 @@ function applyView() {
   r._screen.scrollTop = view.y;
   const zoom = $("zoom");
   if (zoom) {
+    const n = Math.round(view.zoom * 10) / 10;
     zoom.hidden = !touch || view.zoom < 1.05 || view.mode === "actual";
-    zoom.textContent = fill(W.zoom, { n: Math.round(view.zoom * 10) / 10 });
+    if (zoom.dataset.n !== String(n)) {
+      zoom.dataset.n = String(n);
+      zoom.replaceChildren(`${n}×`, fitIcon());
+      zoom.title = fill(W.zoom, { n });
+      zoom.setAttribute("aria-label", zoom.title);
+    }
   }
   if (trackpad && pointer) showPointer(r);
   updatePictureControls();
@@ -779,6 +799,13 @@ function hookKeyboard(r) {
 
 function onDesktopKey(event) {
   if (event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLInputElement) return;
+  const hint = $("hint");
+  if (event.key === "Escape" && !hint.hidden && !hint.classList.contains("away")) {
+    // Esc folds the task panel first; the next one goes to the desktop.
+    event.preventDefault();
+    event.stopPropagation();
+    return closeHint();
+  }
   if (!$("menu").hidden) {
     // With the menu open, these keys are the menu's, not the desktop's.
     if (event.key === "Escape" || event.key === "f" || event.key === "F") {
@@ -886,7 +913,7 @@ function openKeyboard() {
   $("dock").hidden = true;
   keyboardOpen = true;
   $("typed").focus();
-  pillShort(0);
+  closeHint();
   if (matchMedia("(orientation: landscape)").matches && !sessionStorage.getItem("pots-upright")) {
     sessionStorage.setItem("pots-upright", "1");
     toast(W.upright, 3000);
@@ -901,6 +928,7 @@ function closeKeyboard() {
   keyboardOpen = false;
   clearTyped();
   placeForKeyboard();
+  placeDock();
   requestSize();
 }
 
@@ -926,52 +954,332 @@ function placeForKeyboard() {
     shift = Math.max(0, lastTap.y - visibleBottom);
   }
   $("screen").style.transform = shift > 0 ? `translateY(${-shift}px)` : "";
+  placeToast();
 }
 
 // ---- The floating controls ----
 
-let pillTimer;
-/** Fold the task strip after a while: on a phone to its dot and time, on a computer to a tab at the top edge. */
-function pillShort(after) {
-  const pill = $("pill");
-  clearTimeout(pillTimer);
-  pillTimer = setTimeout(() => {
-    if (touch) {
-      if (!pill.classList.contains("open")) pill.classList.add("short");
-    } else if (!$("menu").hidden || pill.matches(":hover") || !$("scrim").hidden) pillShort(3000);
-    else pill.classList.add("tab");
-  }, after);
+/** The size of the page, where the controls float. */
+function area() {
+  const session = $("session");
+  return { width: session.clientWidth, height: session.clientHeight };
 }
 
-function expandPill() {
-  $("pill").classList.remove("tab");
-  pillShort(3000);
+/** How far the controls keep from each edge: a little, and more where a phone's notch or rounded corners are. */
+function margins() {
+  const safe = getComputedStyle($("safe"));
+  const gap = 12;
+  return {
+    top: gap + (parseFloat(safe.paddingTop) || 0),
+    right: gap + (parseFloat(safe.paddingRight) || 0),
+    bottom: gap + (parseFloat(safe.paddingBottom) || 0),
+    left: gap + (parseFloat(safe.paddingLeft) || 0),
+  };
 }
 
-function onDesktopMouse(event) {
-  // The mouse at the top edge brings the strip back.
-  if (event.clientY < 14 && $("pill").classList.contains("tab")) expandPill();
+const DOCK_KEY = "pots-desktop-dock";
+const EDGES = ["top", "right", "bottom", "left"];
+/** The edge the dock is on, and where along it its middle is, from 0 to 1. Null: where it starts. */
+let dockPlace = null;
+/** Where the dock is, or is going: the panel, the menu and messages go next to it. */
+let dockBox = null;
+let dragging = false;
+
+function loadDockPlace() {
+  try {
+    const place = JSON.parse(localStorage.getItem(DOCK_KEY) || "null");
+    if (place && EDGES.includes(place.edge) && place.at >= 0 && place.at <= 1) return place;
+  } catch {
+    // no storage, or not ours
+  }
+  return null;
+}
+
+function saveDockPlace() {
+  try {
+    localStorage.setItem(DOCK_KEY, JSON.stringify(dockPlace));
+  } catch {
+    // the browser keeps nothing; the dock starts where it starts next time
+  }
+}
+
+/** At the bottom; upright on the right on a phone held sideways, where the screen is short. Until it is moved. */
+function startPlace() {
+  const { width, height } = area();
+  return touch && width > height && height <= 520 ? { edge: "right", at: 0.5 } : { edge: "bottom", at: 0.5 };
+}
+
+const upright = (edge) => edge === "left" || edge === "right";
+
+/** Put the dock on its edge, and what goes with it next to it. */
+function placeDock() {
+  const dock = $("dock");
+  if (!dock || dragging || dock.hidden) return;
+  const place = dockPlace ?? startPlace();
+  dock.classList.toggle("side", upright(place.edge));
+  const { width, height } = area();
+  const m = margins();
+  // On a narrow screen the dock leaves out what it can do without, first the small icons, then Done's word.
+  dock.classList.remove("tight", "tighter");
+  const room = upright(place.edge) ? height - m.top - m.bottom : width - m.left - m.right;
+  const length = () => (upright(place.edge) ? dock.offsetHeight : dock.offsetWidth);
+  if (length() > room) dock.classList.add("tight");
+  if (length() > room) dock.classList.add("tighter");
+  const w = dock.offsetWidth;
+  const h = dock.offsetHeight;
+  let left;
+  let top;
+  if (upright(place.edge)) {
+    left = place.edge === "left" ? m.left : width - w - m.right;
+    top = clamp(place.at * height - h / 2, m.top, height - h - m.bottom);
+  } else {
+    top = place.edge === "top" ? m.top : height - h - m.bottom;
+    left = clamp(place.at * width - w / 2, m.left, width - w - m.right);
+  }
+  dock.style.left = `${Math.round(left)}px`;
+  dock.style.top = `${Math.round(top)}px`;
+  dockBox = { left, top, right: left + w, bottom: top + h, width: w, height: h };
+  placeHint();
+  placeMenu();
+  placeToast();
+}
+
+/** The edge nearest to a point, for the screen's shape: a point a fifth of the way across is as near as one a fifth of the way down. */
+function nearestEdge(x, y) {
+  const { width, height } = area();
+  const distance = { left: x / width, right: (width - x) / width, top: y / height, bottom: (height - y) / height };
+  return EDGES.reduce((best, edge) => (distance[edge] < distance[best] ? edge : best));
+}
+
+/**
+ * The dock moves with a finger or the mouse, from anywhere on it, and stays on the edge it is let go nearest to:
+ * upright on the left or right, lying on the top or bottom. A drag is not a press of the button it started on.
+ */
+function dragDock(dock) {
+  let start = null;
+  const move = (event) => {
+    if (!start || event.pointerId !== start.id) return;
+    if (!start.moved && Math.hypot(event.clientX - start.x, event.clientY - start.y) < 10) return;
+    if (!start.moved) {
+      start.moved = true;
+      dragging = true;
+      // From here the dock has the pointer, also off its edge; a mouse that left the dock before this still drags it.
+      try {
+        dock.setPointerCapture(event.pointerId);
+      } catch {
+        // the pointer is gone already
+      }
+      dock.classList.add("dragging");
+      closeHint();
+      closeMenu();
+    }
+    start.edge = nearestEdge(event.clientX, event.clientY);
+    dock.classList.toggle("side", upright(start.edge));
+    const { width, height } = area();
+    const w = dock.offsetWidth;
+    const h = dock.offsetHeight;
+    const left = upright(start.edge) ? event.clientX - w / 2 : event.clientX - start.along * w;
+    const top = upright(start.edge) ? event.clientY - start.along * h : event.clientY - h / 2;
+    dock.style.left = `${clamp(left, 4, width - w - 4)}px`;
+    dock.style.top = `${clamp(top, 4, height - h - 4)}px`;
+  };
+  const listen = (on) => {
+    for (const [type, handler] of [["pointermove", move], ["pointerup", end], ["pointercancel", end]]) {
+      if (on) window.addEventListener(type, handler, true);
+      else window.removeEventListener(type, handler, true);
+    }
+  };
+  const end = (event) => {
+    if (!start || event.pointerId !== start.id) return;
+    listen(false);
+    if (start.moved) {
+      const swallow = (click) => (click.stopPropagation(), click.preventDefault());
+      dock.addEventListener("click", swallow, { capture: true, once: true });
+      setTimeout(() => dock.removeEventListener("click", swallow, true), 300);
+      const rect = dock.getBoundingClientRect();
+      const { width, height } = area();
+      const at = upright(start.edge) ? (rect.top + rect.height / 2) / height : (rect.left + rect.width / 2) / width;
+      dockPlace = { edge: start.edge, at: clamp(Math.round(at * 1000) / 1000, 0, 1) };
+      saveDockPlace();
+      dragging = false;
+      dock.classList.remove("dragging");
+      placeDock();
+    }
+    start = null;
+  };
+  dock.addEventListener("pointerdown", (event) => {
+    if (event.button > 0) return;
+    if (start) {
+      // The last press never ended here, as when it was let go outside the window: this one starts anew.
+      listen(false);
+      dragging = false;
+      dock.classList.remove("dragging");
+    }
+    const rect = dock.getBoundingClientRect();
+    const side = dock.classList.contains("side");
+    // Where along the dock it was taken, kept when it turns, so the finger stays on the same button.
+    const along = side ? (event.clientY - rect.top) / rect.height : (event.clientX - rect.left) / rect.width;
+    start = { x: event.clientX, y: event.clientY, id: event.pointerId, moved: false, along, edge: null };
+    listen(true);
+  });
+  // A drag let go at speed is no fling for the browser, which would let the next tap only stop that fling.
+  dock.addEventListener("touchmove", (event) => start?.moved && event.preventDefault(), { passive: false });
+}
+
+/**
+ * Put a floating element next to the dock: beside it when the dock stands upright on a side, else above it when the
+ * dock is in the lower half, below it when in the upper half. It gets no larger than the room there.
+ */
+function placeNear(element, anchor, beside, tallest = Infinity) {
+  const { width, height } = area();
+  const m = margins();
+  const gap = 10;
+  element.style.maxWidth = "";
+  element.style.maxHeight = "";
+  let left;
+  let top;
+  if (beside) {
+    const toLeft = anchor.left + anchor.width / 2 > width / 2;
+    element.style.maxWidth = `${Math.max(120, toLeft ? anchor.left - gap - m.left : width - anchor.right - gap - m.right)}px`;
+    element.style.maxHeight = `${Math.min(tallest, height - m.top - m.bottom)}px`;
+    const w = element.offsetWidth;
+    const h = element.offsetHeight;
+    left = toLeft ? anchor.left - gap - w : anchor.right + gap;
+    top = clamp(anchor.top + anchor.height / 2 - h / 2, m.top, height - m.bottom - h);
+  } else {
+    const above = anchor.top + anchor.height / 2 > height / 2;
+    element.style.maxHeight = `${Math.min(tallest, Math.max(80, above ? anchor.top - gap - m.top : height - anchor.bottom - gap - m.bottom))}px`;
+    const w = element.offsetWidth;
+    const h = element.offsetHeight;
+    top = above ? anchor.top - gap - h : anchor.bottom + gap;
+    left = clamp(anchor.left + anchor.width / 2 - w / 2, m.left, width - m.right - w);
+  }
+  element.style.left = `${Math.round(left)}px`;
+  element.style.top = `${Math.round(top)}px`;
+  return { left, top, right: left + element.offsetWidth, bottom: top + element.offsetHeight, width: element.offsetWidth, height: element.offsetHeight };
+}
+
+// The task panel: the bot's words in full. It opens by itself at the start for a while, and with the task button.
+
+let hintTimer;
+let hintBox = null;
+let hintFolding;
+
+/** How long the panel stays open by itself at the start: longer for more words, from 5 to 10 seconds. */
+const hintMs = () => clamp(3500 + 45 * Array.from(facts.text).length, 5000, 10_000);
+
+function placeHint() {
+  const hint = $("hint");
+  if (!hint || hint.hidden || !dockBox) return;
+  // Open by itself, it leaves at least half of a phone's screen to the picture; opened with the button, it may be taller.
+  const side = $("dock").classList.contains("side");
+  hintBox = placeNear(hint, dockBox, side, hint.classList.contains("auto") && !side ? Math.max(200, area().height / 2) : Infinity);
+  markOverflow();
+  // It grows out of the task button, and folds back into it.
+  const chip = $("chip");
+  const x = dockBox.left + chip.offsetLeft + chip.offsetWidth / 2 - hintBox.left;
+  const y = dockBox.top + chip.offsetTop + chip.offsetHeight / 2 - hintBox.top;
+  hint.style.setProperty("--from-x", `${Math.round(x)}px`);
+  hint.style.setProperty("--from-y", `${Math.round(y)}px`);
+}
+
+/** Long words fade at the edge where there is more to scroll to. */
+function markOverflow() {
+  const words = $("hint-text");
+  words.classList.toggle("more-above", words.scrollTop > 2);
+  words.classList.toggle("more-below", words.scrollTop + words.clientHeight < words.scrollHeight - 2);
+}
+
+function openHint(byItself) {
+  const hint = $("hint");
+  if (!hint || over) return;
+  closeMenu();
+  clearTimeout(hintTimer);
+  clearTimeout(hintFolding);
+  hint.hidden = false;
+  hint.classList.toggle("auto", !!byItself);
+  $("chip").classList.add("on");
+  $("chip").classList.remove("pulse");
+  $("chip").setAttribute("aria-expanded", "true");
+  placeHint();
+  hint.getBoundingClientRect();
+  hint.classList.remove("away");
+  placeToast();
+  if (byItself) hintTimer = setTimeout(() => closeHint(true), hintMs());
+  if (rfb && !touch) rfb.focus();
+}
+
+/** Fold the panel into the task button. byItself: its time at the start is up, unless the person is reading it. */
+function closeHint(byItself) {
+  const hint = $("hint");
+  if (!hint || hint.hidden || hint.classList.contains("away")) return;
+  clearTimeout(hintTimer);
+  if (byItself && !touch && hint.matches(":hover")) {
+    hintTimer = setTimeout(() => closeHint(true), 2000);
+    return;
+  }
+  hint.classList.add("away");
+  const chip = $("chip");
+  chip.classList.remove("on");
+  chip.setAttribute("aria-expanded", "false");
+  if (byItself) {
+    // Where the words went: the task button glows twice.
+    chip.classList.remove("pulse");
+    chip.getBoundingClientRect();
+    chip.classList.add("pulse");
+  }
+  hintFolding = setTimeout(() => {
+    hint.hidden = true;
+    hintBox = null;
+    placeToast();
+  }, 230);
+  if (rfb && !touch) rfb.focus();
+}
+
+function toggleHint() {
+  const hint = $("hint");
+  if (hint.hidden || hint.classList.contains("away")) openHint(false);
+  else closeHint();
+}
+
+/** The person reads the panel: it stays open until they fold it or press somewhere else. */
+function holdHint() {
+  clearTimeout(hintTimer);
+}
+
+function onPressAnywhere(event) {
+  const target = event.target;
+  const hint = $("hint");
+  if (hint && !hint.hidden && !hint.contains(target) && !$("chip").contains(target)) closeHint();
+  const menu = $("menu");
+  if (menu && !menu.hidden && !menu.contains(target) && !$("more-button").contains(target)) closeMenu();
+}
+
+function placeMenu() {
+  const menu = $("menu");
+  if (!menu || menu.hidden || !dockBox) return;
+  placeNear(menu, dockBox, $("dock").classList.contains("side"));
 }
 
 function toggleMenu() {
   const menu = $("menu");
   if (!menu.hidden) return closeMenu();
+  closeHint();
   menu.hidden = false;
-  clearTimeout(pillTimer);
-  $("pill").classList.remove("tab");
   updatePictureControls();
+  placeMenu();
 }
 
 function closeMenu() {
   const menu = $("menu");
   if (!menu || menu.hidden) return;
   menu.hidden = true;
-  pillShort(3000);
   if (rfb && !touch) rfb.focus();
 }
 
 function openSheet(id) {
   closeMenu();
+  closeHint();
   if (id !== "more" && keyboardOpen) closeKeyboard();
   for (const sheet of document.querySelectorAll(".sheet")) sheet.hidden = sheet.id !== id;
   $("scrim").hidden = false;
@@ -995,10 +1303,28 @@ function toast(text, ms) {
   element.textContent = text;
   element.hidden = false;
   element.style.opacity = "1";
+  placeToast();
   toastTimer = setTimeout(() => {
     element.style.opacity = "0";
     toastTimer = setTimeout(() => (element.hidden = true), 700);
   }, ms);
+}
+
+/** A message goes next to the controls, past the panel when it is open: above the typing strip while the keyboard is up. */
+function placeToast() {
+  const element = $("toast");
+  if (!element || element.hidden) return;
+  const strip = $("strip");
+  let anchor = !strip.hidden ? strip.getBoundingClientRect() : dockBox;
+  if (!anchor) return;
+  if (strip.hidden && hintBox) {
+    const left = Math.min(anchor.left, hintBox.left);
+    const top = Math.min(anchor.top, hintBox.top);
+    const right = Math.max(anchor.right, hintBox.right);
+    const bottom = Math.max(anchor.bottom, hintBox.bottom);
+    anchor = { left, top, right, bottom, width: right - left, height: bottom - top };
+  }
+  placeNear(element, anchor, false);
 }
 
 function dim(text) {
@@ -1026,7 +1352,7 @@ function tick() {
   const seconds = Math.ceil(left / 1000);
   $("time").textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
   $("time").classList.toggle("low", left < 120_000);
-  $("pill-more").textContent = fill(W.pillMore, { time: localTime(link.expires) });
+  $("hint-meta").textContent = fill(W.hintMeta, { time: localTime(link.expires) });
   if (left < 60_000 && !warnedMinute) {
     warnedMinute = true;
     toast(W.oneMinute, 4000);
@@ -1037,35 +1363,6 @@ function fullscreen() {
   const element = document.documentElement;
   if (document.fullscreenElement) document.exitFullscreen?.();
   else element.requestFullscreen?.().catch(() => {});
-}
-
-function makeDraggable(element) {
-  let start = null;
-  element.addEventListener("pointerdown", (event) => {
-    start = { x: event.clientX, y: event.clientY, rect: element.getBoundingClientRect(), moved: false, id: event.pointerId };
-  });
-  element.addEventListener("pointermove", (event) => {
-    if (!start || event.pointerId !== start.id) return;
-    const dx = event.clientX - start.x;
-    const dy = event.clientY - start.y;
-    if (!start.moved && Math.hypot(dx, dy) < 12) return;
-    if (!start.moved) element.setPointerCapture(event.pointerId);
-    start.moved = true;
-    element.style.left = `${clamp(start.rect.left + dx, 4, window.innerWidth - start.rect.width - 4)}px`;
-    element.style.top = `${clamp(start.rect.top + dy, 4, window.innerHeight - start.rect.height - 4)}px`;
-    element.style.right = "auto";
-    element.style.bottom = "auto";
-    element.style.transform = "none";
-  });
-  const end = (event) => {
-    if (start?.moved) {
-      // A drag is not a tap on the button under the finger.
-      element.addEventListener("click", (click) => (click.stopPropagation(), click.preventDefault()), { capture: true, once: true });
-    }
-    if (start && event.pointerId === start.id) start = null;
-  };
-  element.addEventListener("pointerup", end);
-  element.addEventListener("pointercancel", end);
 }
 
 // ---- Handing back, and the end ----

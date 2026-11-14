@@ -164,7 +164,7 @@ describe("desktop pages", { timeout: 120_000 }, () => {
     expect(page.headers["x-frame-options"]).toBe("DENY");
     expect(page.headers["cache-control"]).toBe("no-store");
     expect(page.headers["referrer-policy"]).toBe("no-referrer");
-    expect(page.body).toContain('<div class="ask">Solve the CAPTCHA, then press Done</div>');
+    expect(page.body).toContain('<div class="ask words" id="ask"><p>Solve the CAPTCHA, then press Done</p></div>');
     expect(page.body).toContain('<script type="module" src="../../__pots/kit/desktop/desktop.js"></script>');
     expect(page.body).not.toContain("Cloudflare");
     // The page's files are in the kit.

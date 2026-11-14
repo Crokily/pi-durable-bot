@@ -6,7 +6,7 @@ import { type Database, openDatabase } from "../src/agent/agent.ts";
 import { renderBusy, ScreenLeases } from "../src/agent/screen.ts";
 import { readDefinition, type VncSetting } from "../src/bot/definition.ts";
 import { BotDesktop, DESKTOP_UNOPENED_MS, desktopTimes } from "../src/pages/desktop.ts";
-import { desktopHeaders, pickLang, renderDesktopEnded, renderDesktopPage } from "../src/pages/desktop-page.ts";
+import { desktopHeaders, isLongText, pickLang, renderDesktopEnded, renderDesktopPage, textHtml } from "../src/pages/desktop-page.ts";
 import { readDesktopLayout, readVncPassword, restoreDesktopLayout, type VncTarget } from "../src/pages/rfb.ts";
 import { FakeVnc } from "./support/vnc.ts";
 import { waitFor } from "./support/gateway.ts";
@@ -366,7 +366,7 @@ describe("the desktop page", () => {
     };
     const html = renderDesktopPage(view, "Ada <x>", { lang: "en", quickTunnel: true, remote: "linux" });
     expect(html).not.toContain("<script>alert");
-    expect(html).toContain('<div class="ask">&lt;/script&gt;&lt;script&gt;alert(1)&lt;/script&gt; &amp; &lt;b&gt;</div>');
+    expect(html).toContain('<div class="ask words" id="ask"><p>&lt;/script&gt;&lt;script&gt;alert(1)&lt;/script&gt; &amp; &lt;b&gt;</p></div>');
     expect(html).toContain('"text":"\\u003c/script>\\u003cscript>alert(1)\\u003c/script> & \\u003cb>"');
     expect(html).toContain("Cloudflare can see the screen and what you type.");
     expect(html).not.toContain("style=");
@@ -377,5 +377,20 @@ describe("the desktop page", () => {
       "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' wss://pages.example.test ws://pages.example.test; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
     );
     expect(headers["x-frame-options"]).toBe("DENY");
+  });
+
+  it("keeps the bot's lines, and hangs a numbered or bulleted line under its mark", () => {
+    expect(textHtml("Sign in to <X>, then press Done.")).toBe("<p>Sign in to &lt;X&gt;, then press Done.</p>");
+    expect(textHtml("Sign in, in this order:\r\n1. Google <a@b.c>\n2) X\n\n③ 点 Done\n- the code\n（1）密码")).toBe(
+      '<p>Sign in, in this order:</p><p class="step"><span class="n">1.</span><span>Google &lt;a@b.c&gt;</span></p>' +
+        '<p class="step"><span class="n">2)</span><span>X</span></p><p class="gap"></p><p class="step"><span class="n">③</span><span>点 Done</span></p>' +
+        '<p class="step"><span class="n">-</span><span>the code</span></p><p class="step"><span class="n">（1）</span><span>密码</span></p>',
+    );
+    // Not a step: a number that goes on, a time, a dash in a word.
+    expect(textHtml("1.5 GB are free\n12:30 is the time\n-5 degrees")).toBe("<p>1.5 GB are free</p><p>12:30 is the time</p><p>-5 degrees</p>");
+    expect(isLongText("Solve the CAPTCHA, then press Done")).toBe(false);
+    expect(isLongText("登录谷歌 crokily@gmail.com，完成后点 Done。")).toBe(false);
+    expect(isLongText("请在 Chrome 里登录 X 的 @PotsSh：用户名 PotsSh 已填好，点 Continue，再输入密码；如果 X 要验证码，也在这里填。")).toBe(true);
+    expect(isLongText("Step one\nStep two")).toBe(true);
   });
 });

@@ -47,8 +47,10 @@ const WORDS = {
     noscript: "This page needs JavaScript.",
     connecting: "Connecting…",
     reconnecting: "Reconnecting…",
-    pillMore: "Tap to fold · the link ends at {time} · only this device can use it",
-    zoom: "{n}× · tap for the whole screen",
+    task: "What to do",
+    fold: "Fold",
+    hintMeta: "The link ends at {time} · only this device can use it",
+    zoom: "Zoomed in {n}× · tap for the whole screen",
     gestures: "Tap = click · drag with two fingers = scroll · pinch = zoom",
     keyboard: "Keyboard",
     more: "More",
@@ -123,8 +125,10 @@ const WORDS = {
     noscript: "这个页面需要 JavaScript。",
     connecting: "正在连接…",
     reconnecting: "正在重连…",
-    pillMore: "点一下收起 · 链接 {time} 后失效 · 只有这台设备能用",
-    zoom: "放大 {n}× · 点此看整屏",
+    task: "要做什么",
+    fold: "收起",
+    hintMeta: "链接 {time} 后失效 · 只有这台设备能用",
+    zoom: "已放大 {n}× · 点一下看整屏",
     gestures: "点 = 点击 · 双指拖 = 滚动 · 双指捏 = 放大",
     keyboard: "键盘",
     more: "更多",
@@ -215,6 +219,36 @@ export interface DesktopFacts {
   words: Omit<Words, "tunnel">;
 }
 
+/** A line that starts with a number or a bullet, such as "1.", "2)", "(3)", "①" or "- ": the mark, and the rest. */
+const STEP = /^\s*(\d{1,2}[.)、）:：](?!\d)|[(（]\d{1,2}[)）]|[\u2460-\u2473\u2776-\u2793]|[-*•·–](?=\s))\s*(\S.*)$/;
+
+/**
+ * The bot's text as HTML, for the start screen and the page's panel: a paragraph per line as the bot wrote it, and a
+ * line that starts with a number or a bullet hangs under its mark, so steps read as a list.
+ */
+export function textHtml(text: string): string {
+  return text
+    .replace(/\r\n?/g, "\n")
+    .trim()
+    .split("\n")
+    .map((line) => {
+      const step = STEP.exec(line);
+      if (step) return `<p class="step"><span class="n">${escape(step[1]!)}</span><span>${escape(step[2]!)}</span></p>`;
+      return line.trim() ? `<p>${escape(line.trimEnd())}</p>` : `<p class="gap"></p>`;
+    })
+    .join("");
+}
+
+/** Text of more than one line, or longer than about two lines of a phone, reads better in the regular weight. */
+export function isLongText(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.includes("\n")) return true;
+  let width = 0;
+  // A Chinese, Japanese or Korean character is about as wide as two Latin letters.
+  for (const char of trimmed) width += /[\u1100-\u11ff\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff\uff00-\uffef]/.test(char) ? 2 : 1;
+  return width > 90;
+}
+
 /** The kit's folder, relative to a desktop link's page (/d/<token>/), which keeps any path a proxy puts in front. */
 const KIT = "../../__pots/kit/desktop/";
 
@@ -261,13 +295,15 @@ export function renderDesktopPage(view: DesktopView, botName: string, options: {
     `<script type="application/json" id="pots-facts">${json}</script>
 <main id="start" class="page">
   <div class="who"><span class="ava" aria-hidden="true">${initial}</span><span>${escape(words.asks)}</span></div>
-  <div class="ask">${escape(view.text)}</div>
+  <div class="ask words${isLongText(view.text) ? " long" : ""}" id="ask">${textHtml(view.text)}</div>
   <div class="meta" id="start-meta"></div>
   <details class="fold"><summary>${escape(words.whatTitle)}</summary><p>${escape(words.what)}${options.quickTunnel ? ` ${escape(tunnel)}` : ""}</p></details>
-  <p class="msg" id="start-msg" role="alert"></p>
-  <button type="button" class="big" id="start-button" disabled>${escape(words.start)}</button>
-  <p class="fine">${escape(view.resizable ? words.fineResize : words.fineWhole)}</p>
   <noscript><p class="msg">${escape(words.noscript)}</p></noscript>
+  <div class="go">
+    <p class="msg" id="start-msg" role="alert"></p>
+    <button type="button" class="big" id="start-button" disabled>${escape(words.start)}</button>
+    <p class="fine">${escape(view.resizable ? words.fineResize : words.fineWhole)}</p>
+  </div>
 </main>`,
     `<link rel="modulepreload" href="${KIT}novnc.js">\n<script type="module" src="${KIT}desktop.js"></script>\n`,
   );

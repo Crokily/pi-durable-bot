@@ -21,7 +21,7 @@ pots page desktop --text "Sign in to LinkedIn with your password. If a check com
 
 | Flag | What it does |
 |---|---|
-| `--text` | What they should do, and that they press Done when it is done. Their page shows it at the top. |
+| `--text` | What they should do, and that they press Done when it is done. Line breaks show as you write them: put each of several steps on its own line (a newline in the argument), and a line that starts with a number or a bullet reads as a list. |
 | `--for <person address>` | The person the link is for. The wake then says which link was used, never who used it. |
 | `--input password\|code\|text` | What the step asks them to type. On a phone, their typing field becomes a password field that their password manager can fill, a one-time code field (phones offer a code that came by text message), or a text field. |
 | `--area x,y,width,height` | A part of your screen in its pixels now, such as the sign-in box from a screenshot. When the desktop cannot change size, their page starts zoomed in there. |
@@ -35,7 +35,7 @@ It prints JSON: `{"link": "D1", "url": "https://…/d/<token>/", "expires": "<ti
 
 - Your text, when the link ends, what the link can do, and a Start button. Nothing of the desktop shows before Start, so a platform's link preview shows nothing; still turn previews off.
 - The first browser that presses Start keeps the link. It can open the link again, after a reload or when the phone was in another app, until the link ends; any other browser is told that the link is open on another device.
-- The picture fills their screen, with a strip that shows your text and the time left, and three buttons. On a phone: a tap clicks, a drag drags, a long press right-clicks, two fingers scroll, and a pinch zooms the picture, not the page under it. The keyboard button opens a field that sends each character as they type it; an input method's characters, such as Chinese, go when they are chosen. More gives Esc, Tab, Enter, arrows, select all, paste, a trackpad mode and the picture's size. On a computer, their keyboard types straight in, and ⌘ on a Mac becomes Ctrl.
+- The picture fills their screen. A group of buttons floats on it: one with the time left, keyboard (on a phone), more, and Done. At the start your text shows in full next to them for a few seconds, then folds into the first button; a tap on it shows the text again. They can drag the group to any edge of the screen, and it stays there. On a phone: a tap clicks, a drag drags, a long press right-clicks, two fingers scroll, and a pinch zooms the picture, not the page under it. The keyboard button opens a field that sends each character as they type it; an input method's characters, such as Chinese, go when they are chosen. More gives Esc, Tab, Enter, arrows, select all, paste, a trackpad mode and the picture's size. On a computer, their keyboard types straight in, and ⌘ on a Mac becomes Ctrl.
 - Done asks whether the step is done or they could not do it, with an optional note for you. Then the page says they can close it.
 - With a Quick Tunnel, the page says that Cloudflare can see the screen and what they type.
 

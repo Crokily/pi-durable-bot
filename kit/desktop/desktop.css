@@ -101,9 +101,46 @@ button {
   font-size: 19px;
   line-height: 1.45;
   font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+/* Long text, or text of several lines, in the regular weight: easier to read than a big bold block. */
+.ask.long {
+  font-size: 16.5px;
+  line-height: 1.6;
+  font-weight: 450;
+  padding: 16px 18px;
+}
+
+/* The bot's words: a paragraph per line, and a numbered or bulleted line hangs under its mark. */
+.words p {
+  margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.words p + p {
+  margin-top: 0.4em;
+}
+
+.words .gap {
+  height: 0.2em;
+}
+
+.words .step {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 0.45em;
+}
+
+.words .n {
+  min-width: 1.1em;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.ask .n {
+  color: var(--go);
 }
 
 .meta {
@@ -134,8 +171,29 @@ button {
   margin: 14px 0 0;
 }
 
-.big {
+#start.page {
+  padding-bottom: 0;
+}
+
+/* Start stays in sight at the bottom while long text scrolls under it. */
+.go {
   margin-top: auto;
+  position: sticky;
+  bottom: 0;
+  padding: 18px 0 calc(16px + env(safe-area-inset-bottom));
+  background: linear-gradient(to bottom, color-mix(in srgb, var(--bg), transparent 100%), var(--bg) 18px);
+}
+
+.go .msg {
+  margin: 0 0 10px;
+  min-height: 0;
+}
+
+.go .msg:empty {
+  display: none;
+}
+
+.big {
   width: 100%;
   text-align: center;
   background: var(--go);
@@ -246,21 +304,97 @@ button {
   padding: 24px;
 }
 
-/* The task strip: dot, time left, the bot's words. Folds to dot and time. */
-#pill {
+/* Where the floating controls keep clear of: the phone's notch and rounded corners. Read by the page's script. */
+#safe {
   position: absolute;
-  top: calc(12px + env(safe-area-inset-top));
-  left: calc(12px + env(safe-area-inset-left));
-  max-width: min(300px, calc(100% - 24px));
-  min-height: 36px;
-  border-radius: 18px;
+  visibility: hidden;
+  pointer-events: none;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+/*
+ * The dock: one group of floating controls, on an edge of the screen. First the task button (a dot for the
+ * connection, the time left), then keyboard, more and Done. It can be dragged to any edge; on the left or right edge it
+ * stands upright. The page's script places it.
+ */
+#dock {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: max-content;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px;
+  border-radius: 30px;
+  z-index: 5;
+  touch-action: none;
+  cursor: grab;
+  transition: left 0.22s ease, top 0.22s ease;
+}
+
+#dock.dragging {
+  transition: none;
+  cursor: grabbing;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+}
+
+#dock.side {
+  flex-direction: column;
+}
+
+.chip {
+  height: 46px;
+  border-radius: 23px;
+  padding: 0 11px 0 13px;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 12px 0 10px;
-  font-size: 13.5px;
-  z-index: 5;
-  text-align: left;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  font-size: 14px;
+}
+
+.chip:hover,
+.chip.on {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.chip svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  opacity: 0.85;
+}
+
+#dock.side .chip {
+  width: 46px;
+  height: auto;
+  padding: 9px 0 8px;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+
+#dock.side .chip svg {
+  display: none;
+}
+
+/* After the text folds away, the task button glows once, so the eye follows it there. */
+.chip.pulse {
+  animation: pulse 1.1s ease-out 2;
+}
+
+@keyframes pulse {
+  from {
+    box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.55);
+  }
+  to {
+    box-shadow: 0 0 0 12px rgba(255, 255, 255, 0);
+  }
 }
 
 .dot {
@@ -292,70 +426,6 @@ button {
   color: #ffb347;
 }
 
-#pill .txt {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-  opacity: 0.92;
-}
-
-#pill .more-text {
-  display: none;
-}
-
-#pill.short .txt {
-  display: none;
-}
-
-#pill.open {
-  right: calc(12px + env(safe-area-inset-right));
-  max-width: none;
-  border-radius: 16px;
-  padding: 10px 12px;
-  flex-wrap: wrap;
-  align-items: flex-start;
-}
-
-#pill.open .txt {
-  white-space: pre-wrap;
-  flex-basis: 100%;
-  font-size: 14.5px;
-  line-height: 1.45;
-  order: 3;
-  max-height: 40vh;
-  overflow: auto;
-}
-
-#pill.open .more-text {
-  display: block;
-  order: 4;
-  flex-basis: 100%;
-  font-size: 12px;
-  opacity: 0.7;
-  margin-top: 2px;
-}
-
-#pill .actions {
-  display: none;
-}
-
-/* The three buttons at the bottom: keyboard, more, done. They can be dragged out of the way. */
-#dock {
-  position: absolute;
-  left: 50%;
-  bottom: calc(18px + env(safe-area-inset-bottom));
-  transform: translateX(-50%);
-  width: max-content;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 5px;
-  border-radius: 30px;
-  z-index: 5;
-  touch-action: none;
-}
-
 .ib {
   width: 46px;
   height: 46px;
@@ -370,7 +440,9 @@ button {
 }
 
 .ib svg,
-.done svg {
+.done svg,
+.zoomed svg,
+.x svg {
   width: 23px;
   height: 23px;
   fill: none;
@@ -400,40 +472,183 @@ button {
   stroke-width: 2.6;
 }
 
-@media (orientation: landscape) and (max-height: 520px) {
-  #dock {
-    left: auto;
-    right: calc(14px + env(safe-area-inset-right));
-    bottom: 50%;
-    transform: translateY(50%);
-    flex-direction: column;
-  }
-  .done {
-    padding: 0;
-    width: 46px;
-    justify-content: center;
-  }
-  .done span {
-    display: none;
-  }
+#dock.side .done {
+  width: 46px;
+  padding: 0;
+  justify-content: center;
 }
 
-#zoom {
-  position: absolute;
-  right: calc(12px + env(safe-area-inset-right));
-  top: calc(56px + env(safe-area-inset-top));
+#dock.side .done span {
+  display: none;
+}
+
+#dock.tight .chip svg,
+#dock.tight .zoomed svg {
+  display: none;
+}
+
+#dock.tight .chip {
   padding: 0 12px;
-  height: 32px;
-  border-radius: 16px;
+}
+
+#dock.tight .zoomed {
+  padding: 0 8px;
+}
+
+#dock.tighter .done {
+  width: 46px;
+  padding: 0;
+  justify-content: center;
+}
+
+#dock.tighter .done span {
+  display: none;
+}
+
+/* Zoomed in: how far, and a tap shows the whole screen again. */
+.zoomed {
+  height: 46px;
+  border-radius: 23px;
+  padding: 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
   font-size: 13px;
-  z-index: 5;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+}
+
+.zoomed svg {
+  width: 16px;
+  height: 16px;
+}
+
+#dock.side .zoomed {
+  width: 46px;
+  padding: 0;
+  justify-content: center;
+}
+
+#dock.side .zoomed svg {
+  display: none;
+}
+
+/*
+ * The task panel: the bot's words in full, with tips, next to the dock. Open for a few seconds at the start, then it
+ * folds into the task button; a tap on that button opens it again, and a tap anywhere else folds it.
+ */
+#hint {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 6;
+  width: min(400px, calc(100% - 24px));
+  display: flex;
+  flex-direction: column;
+  border-radius: 18px;
+  padding: 12px 14px;
+  background: rgba(22, 22, 24, 0.84);
+  user-select: text;
+  -webkit-user-select: text;
+  transform-origin: var(--from-x, 50%) var(--from-y, 100%);
+  transition: opacity 0.18s ease, transform 0.22s ease;
+}
+
+#hint.away {
+  opacity: 0;
+  transform: scale(0.25);
+}
+
+.hint-top {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 12.5px;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.x {
+  width: 32px;
+  height: 32px;
+  margin: -7px -9px -7px 0;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  flex: none;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.x:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.x svg {
+  width: 18px;
+  height: 18px;
+}
+
+.hint-text {
+  min-height: 0;
+  flex: 0 1 auto;
+  overflow: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.hint-text.more-below {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
+}
+
+.hint-text.more-above {
+  -webkit-mask-image: linear-gradient(to top, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to top, #000 calc(100% - 28px), transparent);
+}
+
+.hint-text.more-above.more-below {
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to bottom, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+}
+
+.hint-text .n {
+  color: #7fdcb5;
+}
+
+.hint-tips {
+  flex: none;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.hint-tips p {
+  margin: 0;
+}
+
+.hint-tips p + p {
+  margin-top: 3px;
+}
+
+.hint-meta {
+  flex: none;
+  margin-top: 6px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.55);
 }
 
 #toast {
   position: absolute;
-  left: 50%;
-  bottom: calc(86px + env(safe-area-inset-bottom));
-  transform: translateX(-50%);
+  left: 0;
+  top: 0;
   width: max-content;
   max-width: calc(100vw - 32px);
   padding: 8px 14px;
@@ -704,82 +919,49 @@ button {
   margin: 8px 0 0;
 }
 
-/* ---- On a computer: one strip at the top, with Done and a menu; the keyboard types straight in. ---- */
+/* ---- On a computer: the same dock without the keyboard button, a menu instead of the More sheet; the keyboard types straight in. ---- */
 
-#session.desktop #dock,
 #session.desktop #strip {
   display: none !important;
 }
 
-#session.desktop #pill {
-  left: 50%;
-  right: auto;
-  transform: translateX(-50%);
-  top: 12px;
+#session.desktop .ib,
+#session.desktop .chip,
+#session.desktop .done,
+#session.desktop .zoomed {
   height: 40px;
-  border-radius: 20px;
-  gap: 10px;
-  padding: 0 6px 0 14px;
-  font-size: 14px;
-  max-width: min(760px, calc(100% - 24px));
-  transition: top 0.3s ease, height 0.3s ease;
 }
 
-#session.desktop #pill .txt {
-  display: block;
-  max-width: 430px;
+#session.desktop .ib {
+  width: 40px;
 }
 
-#session.desktop #pill .actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex: none;
+#session.desktop .ib svg {
+  width: 21px;
+  height: 21px;
 }
 
-#session.desktop #pill .done {
-  height: 30px;
-  font-size: 14px;
-  padding: 0 14px 0 10px;
+#session.desktop .done {
+  font-size: 14.5px;
+  padding: 0 16px 0 12px;
 }
 
-#session.desktop #pill .done svg {
-  width: 15px;
-  height: 15px;
+#session.desktop #dock.side .chip {
+  width: 40px;
+  height: auto;
 }
 
-#session.desktop #pill .ib {
-  width: 32px;
-  height: 32px;
-}
-
-#session.desktop #pill .ib svg {
-  width: 19px;
-  height: 19px;
-}
-
-#session.desktop #pill.tab {
-  top: 0;
-  height: 22px;
-  border-radius: 0 0 12px 12px;
-  padding: 0 10px;
-  font-size: 12px;
-  gap: 8px;
-}
-
-#session.desktop #pill.tab .txt,
-#session.desktop #pill.tab .actions {
-  display: none;
+#session.desktop #dock.side .done {
+  width: 40px;
 }
 
 #menu {
   position: absolute;
-  top: 58px;
-  left: 50%;
-  transform: translateX(calc(min(760px, 100vw - 24px) / 2 - 100%));
+  left: 0;
+  top: 0;
   width: 290px;
   border-radius: 12px;
-  overflow: hidden;
+  overflow: auto;
   z-index: 9;
   background: var(--tile);
   color: var(--text);
@@ -825,8 +1007,4 @@ button {
 
 #session.desktop .sheet .grab {
   display: none;
-}
-
-#session.desktop #toast {
-  bottom: 18px;
 }

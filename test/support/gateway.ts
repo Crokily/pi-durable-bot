@@ -1,8 +1,8 @@
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { platformFile, readPlatform } from "../../src/channels/test/index.ts";
@@ -33,6 +33,8 @@ export interface BotOptions {
    * that changes is then sent at the end, and the leading system message stays as it was.
    */
   readonly laterSystemMessages?: boolean;
+  /** Changes to the gateway's environment; undefined takes a variable out. */
+  readonly env?: Record<string, string | undefined>;
 }
 
 export interface PlatformRecord {
@@ -58,9 +60,11 @@ export class TestGateway {
   readonly output: Record<string, unknown>[] = [];
   #process: ChildProcess | undefined;
   #exited: Promise<number | null> = Promise.resolve(null);
+  readonly #env: Record<string, string | undefined>;
 
   constructor(options: BotOptions) {
     this.home = mkdtempSync(join(tmpdir(), "pots-test-"));
+    this.#env = options.env ?? {};
     this.botDir = join(this.home, "bots", BOT);
     this.platformDir = join(this.home, "platform");
     mkdirSync(this.botDir, { recursive: true });
@@ -105,8 +109,10 @@ export class TestGateway {
   async start(): Promise<void> {
     if (this.#process) throw new Error("already running");
     const from = this.output.length;
+    const env: Record<string, string | undefined> = { ...process.env, POTS_HOME: this.home, PI_CODING_AGENT_DIR: join(this.home, "pi"), NO_COLOR: "1", ...this.#env };
+    for (const [key, value] of Object.entries(env)) if (value === undefined) delete env[key];
     const child = spawn(process.execPath, [POTS, "start"], {
-      env: { ...process.env, POTS_HOME: this.home, PI_CODING_AGENT_DIR: join(this.home, "pi"), NO_COLOR: "1" },
+      env,
       stdio: ["ignore", "pipe", "pipe"],
     });
     this.#process = child;
@@ -167,8 +173,24 @@ export class TestGateway {
     return this.#process !== undefined;
   }
 
+  /**
+   * The slice of this home's systemd scopes, in which each command of the bot runs on Linux with a systemd user manager
+   * (src/agent/scopes.ts).
+   */
+  get slice(): string {
+    return `app-pots-${createHash("sha256").update(resolve(this.home)).digest("hex").slice(0, 8)}.slice`;
+  }
+
   async dispose(): Promise<void> {
     await this.kill();
+    // What the bot's commands still run, as a crash leaves it.
+    if (process.platform === "linux") {
+      try {
+        execFileSync("systemctl", ["--user", "stop", this.slice], { stdio: "ignore", timeout: 10_000 });
+      } catch {
+        // no user manager, or nothing ran
+      }
+    }
     rmSync(this.home, { recursive: true, force: true });
   }
 

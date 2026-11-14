@@ -12,23 +12,24 @@ Written for a bot that connects itself; a person can follow it too. The app uses
 1. Open https://api.slack.com/apps?new_app=1 in the browser on your screen. If Slack asks to sign in, ask the person to sign in there; they can take over the screen.
    If this computer has no screen, ask the person how they want to do it (your instructions, under the screen, say what each way costs): a virtual desktop they can watch over VNC, a browser-only tool such as agent-browser, or steps 1 to 4 in the browser on their own computer while you guide them. In the last case, give them the manifest with your name already in it, and ask for the two tokens with ask-secret in the terminal channel (step 5).
 2. Choose **From a manifest**, pick the workspace, and paste [slack-app-manifest.yaml](slack-app-manifest.yaml). Change `name` and `display_name` to your own name first. Create the app.
+   A manifest cannot set the app's icon. To give it one, go to **Basic Information → Display Information**, choose **Add App Icon**, and upload a square image file from this computer; the page says which sizes it takes. In the file dialog you can type or paste the file's path instead of clicking through folders: Ctrl+L opens a field for it on Linux, Cmd+Shift+G on a Mac; on Windows, use the file name field. The icon is saved at once.
 3. **Basic Information → App-Level Tokens → Generate Token and Scopes**: add the scope `connections:write` and generate. This is the app token (`xapp-…`).
 4. **Install App → Install to workspace → Allow**. Some workspaces need an admin to approve; then ask the person. Copy the **Bot User OAuth Token** (`xoxb-…`).
-5. Write both tokens to `slack.env` in the secrets folder (`~/.pots/secrets/`), readable only by this user:
+5. Write both tokens to a file of your own in the secrets folder (`~/.pots/secrets/`), readable only by this user: `slack-<your bot ID>.env`, for example `slack-ada.env`. Your bot ID is the name of your folder. Other bots on this computer keep their tokens in the same folder, so never write to a file that is not yours, such as a `slack.env` that is already there:
    ```sh
    SLACK_APP_TOKEN=xapp-...
    SLACK_BOT_TOKEN=xoxb-...
    ```
    Do not put tokens in a chat message, a log or any other file. When the person copied the tokens, ask for them in the terminal channel instead:
-   `call <terminal channel id> ask-secret {"text": "…", "file": "slack.env", "keys": ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN"]}`. `pots chat` writes them to this file without showing them to you.
+   `call <terminal channel id> ask-secret {"text": "…", "file": "slack-<your bot ID>.env", "keys": ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN"]}`. `pots chat` writes them to this file without showing them to you.
 6. Add the channel to `channels` in your `bot.json`:
    ```json
-   { "id": "slack", "type": "slack", "secrets": "~/.pots/secrets/slack.env" }
+   { "id": "slack", "type": "slack", "secrets": "~/.pots/secrets/slack-<your bot ID>.env" }
    ```
    It connects within a few seconds. `pots status` lists it; if it fails, the reason is in `bot.json.error`.
 7. You join only the places you are invited to. Ask the person to invite you to the right channels (`/invite @yourname`) or to send you a DM in Slack.
 
-A second Slack workspace is a second channel entry with its own `id` (for example `slack-acme`) and its own env file.
+A second Slack workspace is a second channel entry with its own `id` (for example `slack-acme`) and its own env file (`slack-acme-<your bot ID>.env`).
 
 ## Sending
 
@@ -107,7 +108,7 @@ EOF
 The files of a message are saved for you, and the wake gives their paths. The message log keeps each file's `url_private`. Downloading it needs the bot token (scope `files:read`), so Pots downloads only from Slack's own hosts. To download a file again later, read the token from its line of the env file in the shell, so that it stays out of messages and logs, and send it in the `Authorization` header:
 
 ```sh
-curl -sS -o plan.png -H "Authorization: Bearer $(grep '^SLACK_BOT_TOKEN=' ~/.pots/secrets/slack.env | cut -d= -f2-)" "<url_private>"
+curl -sS -o plan.png -H "Authorization: Bearer $(grep '^SLACK_BOT_TOKEN=' ~/.pots/secrets/slack-<your bot ID>.env | cut -d= -f2-)" "<url_private>"
 ```
 
 Never `source` the env file or `.` it in a shell, and never print the token: the file holds each value exactly as it was typed, and a value with `$(…)` in it would run as a command.

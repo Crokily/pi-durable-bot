@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Console, Effect, Layer, Option, Runtime } from "effect";
-import { Command, Flag } from "effect/cli";
+import { CliError, CliOutput, Command, Flag } from "effect/cli";
 import { POTS_HOME, runningGateway } from "../core/home.ts";
 import { agentCommands } from "./agent.ts";
 import { botCommand } from "./bots.ts";
@@ -134,11 +134,34 @@ const pots = Command.make("pots").pipe(
   Command.withSubcommands([initCommand, loginCommand, mcpCommand, chatCommand, start, status, service, botCommand, traceCommand, ...agentCommands, pageCommand]),
 );
 
+/**
+ * A mistyped command, such as pots bots new: the error and the whole command it most likely means (pots bot new), not
+ * the whole help. Other mistakes, and a mistyped command with no close match, get the help and the errors, as before.
+ */
+const presenter = CliOutput.layerPresenter({
+  present: (event) =>
+    Effect.gen(function* () {
+      // The words after a mistyped command do not fit it, so their errors say nothing more.
+      const error = event._tag === "InvalidInvocation" ? event.errors.find((item) => item._tag === "UnknownSubcommand") : undefined;
+      if (error?._tag !== "UnknownSubcommand" || error.suggestions.length === 0) return yield* CliOutput.defaultPresenter.present(event);
+      const args = process.argv.slice(2);
+      const at = args.indexOf(error.subcommand);
+      const commands = error.suggestions.map((name) => ["pots", ...args.slice(0, at), name, ...args.slice(at + 1)].map(shellWord).join(" "));
+      const formatter = yield* CliOutput.Formatter;
+      yield* Console.error(formatter.formatErrors([new CliError.UnknownSubcommand({ ...error, suggestions: at < 0 ? error.suggestions : commands })]));
+    }),
+});
+
+/** A word as a shell takes it back: as it is when it is plain, else in single quotes. */
+function shellWord(word: string): string {
+  return /^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replace(/'/g, "'\\''")}'`;
+}
+
 /** Resolves once stdout and stderr have written all they were given. On macOS a pipe takes writes asynchronously. */
 const written = () => Promise.all([process.stdout, process.stderr].map((stream) => new Promise<void>((resolve) => stream.write("", () => resolve()))));
 
 Command.run(pots, { version }).pipe(
-  Effect.provide(Layer.mergeAll(NodeServices.layer, ServiceLayer.layer)),
+  Effect.provide(Layer.mergeAll(NodeServices.layer, ServiceLayer.layer, presenter)),
   NodeRuntime.runMain({
     disableErrorReporting: true,
     // A command that has finished ends the process, also when something it used left a handle open. A browser sign-in

@@ -82,9 +82,24 @@ Tell your person:
 | `pots service logs` | The gateway's output |
 | `pots trace` | What a bot did: its last wakes, or one wake from its events to the messages it sent |
 | `pots routine list` | The work a bot repeats on a schedule, with each routine's next time and last run |
-| `pots bot new` / `pots bot list` | More bots on the same computer |
+| `pots bot new` / `pots bot list` | More bots on the same computer ([below](#add-another-bot)) |
 | `npm install -g pi-durable-bot@latest`, then `pots service restart` | Upgrade |
 | `pots service uninstall`, then `npm uninstall -g pi-durable-bot` | Remove it. The bots stay in `~/.pots/` until that folder is deleted. So does the screen lease file, `/tmp/pots-screens-<uid>.sqlite` (on Windows, `pots-screens.sqlite` in the temporary folder) |
+
+## Add another bot
+
+One computer can run several bots, each with its own name, persona, memory and chat apps, for example one for the team's support and one for marketing. There are two ways to add one:
+
+- **Your person asks a bot they already have**, for example "make us a marketing bot". That bot runs `pots bot new` itself. Until the new bot has joined a chat app, the bot that made it passes messages between them with `pots chat`, so your person can stay in the chat app where they asked.
+- **You run it**, the way you made the first one:
+  ```sh
+  pots bot new "Bloom" --about "marketing for our product" --model openai/gpt-6.1-sol
+  ```
+  Choose the model as in step 5 above. When the gateway runs, `pots bot new` waits until the bot has started, and prints its folder; the folder name is its ID. Check it with `pots chat --bot <id> -m "hi" --timeout 60`, then tell your person to meet it with `pots chat --bot <id>`.
+
+Either way, the new bot sets itself up as the first one did. It says hello, checks the screen, connects the chat apps your person wants, as an app of its own with a token file of its own, and asks which models to use for which work. When another bot already uses the screen, it tells your person that bots on one screen wait for each other, and offers to set up a screen of its own. On Linux that is a virtual desktop with its own browser: about 0.5–1 GB of memory, and a one-time install of packages with sudo when none is installed yet. On macOS and Windows a second screen is not practical, so the bots take turns.
+
+A real example: on 2026-11-14, Probe, the bot that develops Pots, made Bloom, a marketing bot, this way. Bloom created its own Slack app and its own desktop; the only step a person did was typing the password of an X account.
 
 ## When something goes wrong
 

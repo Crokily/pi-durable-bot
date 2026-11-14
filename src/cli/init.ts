@@ -1,14 +1,13 @@
 import { existsSync } from "node:fs";
 import { userInfo } from "node:os";
 import { join } from "node:path";
-import { Console, Effect, Option, Schedule } from "effect";
+import { Console, Effect, Option } from "effect";
 import { Command, Flag, Prompt } from "effect/cli";
-import { terminalPerson } from "../channels/terminal/index.ts";
 import { runningGateway } from "../core/home.ts";
 import { checkJudge, checkModel, setUpJudge, setUpModel } from "./ai.ts";
-import { createBot, idFor } from "./bots.ts";
+import { createBot, firstWake, idFor, makerOf, waitForBot } from "./bots.ts";
 import { chatInteractive } from "./chat.ts";
-import { control, listBots, userError } from "./control.ts";
+import { listBots, userError } from "./control.ts";
 import { Service } from "./service.ts";
 
 // pots init: 1 create your first bot, 2 give it an AI, 3 choose who decides on group messages that do not mention it
@@ -24,25 +23,6 @@ function gitBashMissing(): boolean {
   const candidates = [process.env.ProgramFiles, process.env["ProgramFiles(x86)"]].filter(Boolean).map((dir) => join(dir!, "Git", "bin", "bash.exe"));
   return !candidates.some((file) => existsSync(file)) && !(process.env.PATH ?? "").split(";").some((dir) => existsSync(join(dir, "bash.exe")));
 }
-
-function firstWake(user: string, address: string, about: string | undefined): string {
-  return [
-    `This is your first start. ${user} just created you with pots init on this computer and is waiting in their terminal: ${address}. You talk there until you join other chat apps.`,
-    about
-      ? `They described you in one sentence: "${about}". Write your AGENTS.md and responsibilities.md from it, and refine them as you learn more.`
-      : "They did not say what you are for yet. Ask them, then write your AGENTS.md and responsibilities.md.",
-    `Say hello there. Then check that you can see and use this computer's screen. If something that only ${user} can do stands in the way, such as a permission the system asks for, help them do it now, step by step. If there is no desktop, tell them, and work without one until you need a screen.`,
-    `Then find out which chat apps you should work in, for example Slack, and connect them yourself with this computer. Ask ${user} only for what you cannot do yourself, such as signing in or approving an install.`,
-    `Also ask ${user} whether they want particular models for particular work. You do longer work in children and choose each child's model when you start it; without a choice, it has your model. Write what they say in your AGENTS.md.`,
-  ].join("\n");
-}
-
-/** Wait until the new bot answers on its control endpoint. */
-const waitForBot = (id: string) =>
-  control(id, "GET", "/status").pipe(
-    Effect.retry({ times: 90, schedule: Schedule.spaced("1 second") }),
-    Effect.mapError(() => userError(`${id} did not start within 90 seconds; see pots service logs`)),
-  );
 
 export const initCommand = Command.make(
   "init",
@@ -102,8 +82,7 @@ export const initCommand = Command.make(
           ? (yield* Prompt.run(Prompt.String({ message: "For example: our team's research and ops assistant, calm and direct", default: "" }))).trim()
           : "";
 
-      const address = `terminal:@${terminalPerson()}`;
-      const dir = yield* createBot({ id, name, model, judge, ...(about ? { about } : {}), firstWake: firstWake(user, address, about || undefined) });
+      const dir = yield* createBot({ id, name, model, judge, ...(about ? { about } : {}), firstWake: firstWake({ id, ...(about ? { about } : {}) }, makerOf("pots init"), others) });
       yield* Console.log(`Created ${dir}`);
 
       if (input.noService) {

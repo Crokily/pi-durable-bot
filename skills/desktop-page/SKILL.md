@@ -1,6 +1,6 @@
 ---
 name: desktop-page
-description: "The desktop page, a one-time link with which a person sees and controls your screen from their phone or computer, does one step, and hands it back to you. Use when a step needs a person on your screen, such as a sign-in with their password or a code, a CAPTCHA, an approval or a choice only they can make. Also how to set up the VNC server it needs, on Linux, macOS and Windows."
+description: "The desktop page, a one-time link with which a person sees and controls your screen from their phone or computer, does one step, and hands it back to you. Use when a step needs a person on your screen, such as a sign-in with their password or a code, a CAPTCHA, an approval or a choice only they can make. Also how to set up the VNC server it needs, on Linux, macOS and Windows, how to set up a screen of your own on a Linux computer whose desktop other bots already use, and what to know when you drive a Linux desktop."
 ---
 
 # The desktop page
@@ -26,6 +26,8 @@ pots page desktop --text "Sign in to LinkedIn with your password. If a check com
 | `--input password\|code\|text` | What the step asks them to type. On a phone, their typing field becomes a password field that their password manager can fill, a one-time code field (phones offer a code that came by text message), or a text field. |
 | `--area x,y,width,height` | A part of your screen in its pixels now, such as the sign-in box from a screenshot. When the desktop cannot change size, their page starts zoomed in there. |
 | `--minutes <1-60>` | How long the link works after they press Start. Default 15. |
+
+Make the link for the person where they will open it, and send it there. When their request reached you through another bot or the terminal, but they work in Slack, that is their Slack address, and a DM to it.
 
 It prints JSON: `{"link": "D1", "url": "https://…/d/<token>/", "expires": "<time>", "via": …, "note": …}`. `expires` is when the link stops working if nobody presses Start: one hour after you made it. Pots checks first that it reaches the VNC server of bot.json; when it does not, the command fails with the reason, and no link is made. `note` comes with a Quick Tunnel.
 
@@ -90,3 +92,62 @@ Then add to bot.json, next to `screen`:
 | Windows | A VNC server such as TightVNC, with a password. TightVNC refuses connections from the same computer until "Allow loopback connections" is on in its Access Control settings; "Allow only loopback connections" keeps it off the network. |
 
 What the desktop page cannot do: sound, file transfer, and copying from the desktop to a phone. Whether a phone's Chinese, Japanese or Korean characters arrive depends on the VNC server: TigerVNC's do.
+
+## A screen of your own on a computer that already has a desktop
+
+Only one agent can use a screen at a time, also across bots, so bots that share the desktop wait for each other. On Linux you can have a screen of your own next to it: a virtual desktop with its own browser, which the person reaches with a desktop page link like any other. It takes about 0.5–1 GB of memory with its browser. On macOS and Windows a second screen is not practical: bots take turns on the one desktop.
+
+Here is a setup that works on a Linux computer with systemd, from a bot that runs its own screen this way on display `:2`. Below, `<id>` is your bot ID (your folder's name), and `:2` and port 5902 stand for a display and a port that nothing else uses: `ls /tmp/.X11-unix/` lists the displays in use (`X0` is `:0`), and the VNC port is 5900 plus the display's number.
+
+- **Packages**, once, with sudo: TigerVNC's Xvnc and a light window manager, on Ubuntu and Debian `tigervnc-standalone-server` and `openbox`. Check first with `command -v Xvnc openbox`: when they are installed, there is nothing to install. Without a window manager, windows have no frames and do not take focus as they should. Installing one can change the system's `x-window-manager` alternative; if it did (`update-alternatives --display x-window-manager`), set it back, so the person's desktop stays as it was.
+- **A VNC password of your own**, in a file in the secrets folder, readable only by you: `vncpasswd -f > ~/.pots/secrets/<id>-vnc.passwd` reads the password from standard input. VNC uses its first 8 characters.
+- **A D-Bus session bus of your own.** Without one, programs on your screen use the session bus of the person's desktop, and the keyring's password prompt, file choosers from a portal and notifications open on their screen, not yours. Run a `dbus-daemon` with a config file of your own: `<type>session</type>`, `<listen>unix:path=/run/user/<uid>/<id>-bus</listen>`, `<auth>EXTERNAL</auth>`, a policy that allows everything, and no service directories, so that no service starts on it by itself. Then set `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/<uid>/<id>-bus` for everything on your screen.
+- **A browser profile of your own.** For Chrome: `--user-data-dir=~/.config/<id>-chrome`, not the person's profile: with theirs, Chrome opens the window in the browser that already runs, on their desktop; `--password-store=basic`, so it asks for no keyring, whose prompt would open on the other desktop; `--no-first-run --no-default-browser-check`. What you sign in to stays in that profile. One browser is enough; open tabs in it.
+- **systemd user units**, one each for the bus, Xvnc, the window manager and the browser, so that they start again when the computer restarts and do not stop with Pots: what your commands leave running stops when Pots' service is stopped, and does not come back after the computer restarts. Turn on lingering, so that they run without a login: `loginctl show-user $USER -p Linger`, and `sudo loginctl enable-linger $USER` when it says no.
+
+```ini
+# ~/.config/systemd/user/<id>-xvnc.service
+[Unit]
+Description=<Name>'s desktop: Xvnc on :2, VNC on 127.0.0.1:5902
+
+[Service]
+ExecStart=/usr/bin/Xvnc :2 -geometry 1280x800 -depth 24 -nolisten tcp -localhost -rfbport 5902 -SecurityTypes VncAuth -PasswordFile %h/.pots/secrets/<id>-vnc.passwd -AlwaysShared
+ExecStartPost=/bin/sh -c 'for i in $(seq 100); do [ -S /tmp/.X11-unix/X2 ] && exit 0; sleep 0.1; done; exit 1'
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+```ini
+# ~/.config/systemd/user/<id>-chrome.service
+[Unit]
+Description=<Name>'s Chrome on :2
+BindsTo=<id>-xvnc.service
+After=<id>-xvnc.service <id>-dbus.service <id>-openbox.service
+Wants=<id>-dbus.service <id>-openbox.service
+
+[Service]
+Environment=DISPLAY=:2 DBUS_SESSION_BUS_ADDRESS=unix:path=%t/<id>-bus
+UnsetEnvironment=XAUTHORITY GTK_IM_MODULE QT_IM_MODULE XMODIFIERS XDG_CURRENT_DESKTOP DESKTOP_SESSION SSH_AUTH_SOCK
+ExecStart=/usr/bin/google-chrome-stable --user-data-dir=%h/.config/<id>-chrome --password-store=basic --no-first-run --no-default-browser-check --start-maximized
+Restart=always
+MemoryHigh=1536M
+
+[Install]
+WantedBy=<id>-xvnc.service
+```
+
+`<id>-openbox.service` is like the browser's, with `ExecStart=/usr/bin/openbox`, `After=<id>-xvnc.service <id>-dbus.service`, `Wants=<id>-dbus.service` and `Restart=on-failure`. `<id>-dbus.service` runs `/usr/bin/dbus-daemon --nofork --nopidfile --config-file=<your config file>`, with `WantedBy=default.target`. `UnsetEnvironment` keeps the person's desktop session and input method out of your screen. Above `MemoryHigh`, the kernel takes memory back from the browser, not from other programs. Then `systemctl --user daemon-reload`, `systemctl --user enable --now <id>-dbus <id>-xvnc <id>-openbox <id>-chrome`, and in bot.json:
+
+```json
+"screen": {"DISPLAY": ":2", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/<uid>/<id>-bus"},
+"vnc": {"port": 5902, "passwordFile": "<id>-vnc.passwd"}
+```
+
+Check it: a screenshot of `:2` shows the browser, `pots page desktop` makes a link, and after `systemctl --user restart <id>-xvnc` it all comes back.
+
+## When you drive a Linux desktop
+
+- An input method, such as fcitx5 or IBus, can change or drop text that `xdotool type` sends. Paste instead: put the text on the clipboard (`printf '%s' "$text" | xclip -selection clipboard`) and press Ctrl+V. Or turn the input method off while you type, with `fcitx5-remote -c`, and on again after, with `fcitx5-remote -o`. After you paste a secret, put something else on the clipboard.
+- `gnome-screenshot` can give a picture 10 to 30 seconds old. Take the picture from the X server itself, for example with Python's PIL, `ImageGrab.grab(xdisplay=":2")`, or with `xwd -root -display :2`, converted to PNG. When a browser's window is slow to draw, a small mouse move makes it draw before the picture.

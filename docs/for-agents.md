@@ -27,7 +27,7 @@ The same goes for its other tools: the bot adds its own routines, and skills for
 
 On a computer without a desktop, such as a cloud server reached over SSH, the bot still does this. It explains the choices and lets the person pick:
 
-- a virtual desktop they can watch and sign in to over VNC;
+- a virtual desktop they can watch and sign in to from a link, on Pots' desktop page;
 - a browser-only tool, which is lighter but cannot be watched;
 - the person clicks through a few browser steps on their own computer while the bot guides them.
 

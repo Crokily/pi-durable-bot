@@ -21,7 +21,19 @@ export interface BotDefinition {
    * when it sets up or finds a desktop. Unset: the gateway's own screen variables.
    */
   screen?: Record<string, string>;
+  /** The VNC server that shows the bot's screen on this computer, for desktop pages. The bot writes it when it sets one up. */
+  vnc?: VncSetting;
   settings: BotSettings;
+}
+
+/** bot.json's vnc: a VNC server on this computer (127.0.0.1) and the file with its password. */
+export interface VncSetting {
+  port: number;
+  /**
+   * KEY=value lines with VNC_PASSWORD, or a password file as vncpasswd writes it. A bare file name is in the secrets
+   * folder; a path may start with ~/. Unset: the server asks for no password.
+   */
+  passwordFile?: string;
 }
 
 export interface BotSettings {
@@ -117,6 +129,12 @@ const Definition = Schema.Struct({
     ]),
   ),
   screen: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  vnc: Schema.optionalKey(
+    Schema.Struct({
+      port: Schema.Finite.check(Schema.makeFilter((port) => Number.isInteger(port) && port >= 1 && port <= 65_535)),
+      passwordFile: Schema.optionalKey(Schema.String.check(Schema.isNonEmpty())),
+    }),
+  ),
   settings: Schema.Struct({
     debounceMs: Schema.Finite.pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_SETTINGS.debounceMs))),
     debounceMaxMs: Schema.Finite.pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_SETTINGS.debounceMaxMs))),
@@ -150,6 +168,8 @@ function problem(raw: unknown, issue: { message: string; path?: readonly (Proper
       return `"judge" must be "main", "off" or "provider/modelId"`;
     case "screen":
       return `"screen" must be an object of environment variables with text values, such as {"DISPLAY": ":99"}`;
+    case "vnc":
+      return `"vnc" must be {"port": <the port of the VNC server on this computer>, "passwordFile": "<a file in the secrets folder>"}, such as {"port": 5900, "passwordFile": "vnc.env"}`;
     case "thinking":
       return `"thinking" must be off, minimal, low, medium, high, xhigh or max`;
     case "channels":
@@ -202,6 +222,7 @@ export function readDefinition(file: string): { definition: BotDefinition; text:
       judge: decoded.judge,
       channels: decoded.channels.map((channel) => ({ ...channel })),
       ...(decoded.screen === undefined ? {} : { screen: { ...decoded.screen } }),
+      ...(decoded.vnc === undefined ? {} : { vnc: { port: decoded.vnc.port, ...(decoded.vnc.passwordFile === undefined ? {} : { passwordFile: decoded.vnc.passwordFile }) } }),
       settings: { ...decoded.settings, compaction: { ...decoded.settings.compaction } },
     },
   };

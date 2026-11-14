@@ -2,8 +2,9 @@ import { Effect, Option } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 import { control, printResult, resolveBot } from "./control.ts";
 
-// Pages: web pages the bot writes in its pages/ folder, served by the gateway, with links it gives out; and the password
-// page, Pots's own, that writes what a person types to a file in the secrets folder.
+// Pages: web pages the bot writes in its pages/ folder, served by the gateway, with links it gives out; the password
+// page, Pots's own, that writes what a person types to a file in the secrets folder; and the desktop page, Pots's own,
+// with which a person sees and controls the bot's screen.
 
 const bot = Flag.String("bot").pipe(Flag.optional, Flag.withDescription("Which bot. Default: $POTS_BOT, or the only bot."));
 const person = Flag.String("for").pipe(
@@ -31,20 +32,20 @@ const link = Command.make(
 
 const unlink = Command.make(
   "unlink",
-  { link: Argument.String("link").pipe(Argument.withDescription("A link ID such as L3 or S2, or the link's URL.")), bot },
+  { link: Argument.String("link").pipe(Argument.withDescription("A link ID such as L3, S2 or D1, or the link's URL.")), bot },
   (input) =>
     Effect.gen(function* () {
       const id = yield* resolveBot(input.bot);
       yield* printResult(yield* control(id, "POST", "/page/unlink", { link: input.link }));
     }),
-).pipe(Command.withDescription("Take a link back: it shows Not found from then on."));
+).pipe(Command.withDescription("Take a link back: it shows Not found from then on. A desktop link that is in use ends at once."));
 
 const list = Command.make("list", { bot }, (input) =>
   Effect.gen(function* () {
     const id = yield* resolveBot(input.bot);
     yield* printResult(yield* control(id, "GET", "/page/list"));
   }),
-).pipe(Command.withDescription("The bot's pages with their links, last opened and last changed, and its password links."));
+).pipe(Command.withDescription("The bot's pages with their links, last opened and last changed, its password links and its desktop links."));
 
 const secret = Command.make(
   "secret",
@@ -75,7 +76,41 @@ const secret = Command.make(
   ),
 );
 
+const desktop = Command.make(
+  "desktop",
+  {
+    text: Flag.String("text").pipe(Flag.withDescription("What the person should do on your screen, and that they press Done when it is done.")),
+    input: Flag.Literals("input", ["password", "code", "text"]).pipe(
+      Flag.optional,
+      Flag.withDescription("What the step asks them to type: their page's typing field becomes a password field (password managers fill it), a one-time code field (phones offer the code from a text message), or a text field."),
+    ),
+    area: Flag.String("area").pipe(
+      Flag.optional,
+      Flag.withDescription("x,y,width,height in your screen's pixels, such as the sign-in box: when the desktop cannot take the shape of their screen, their page starts zoomed in there."),
+    ),
+    minutes: Flag.Int("minutes").pipe(Flag.optional, Flag.withDescription("How long the link works after they press Start: 1 to 60. Default 15.")),
+    person,
+    bot,
+  },
+  (input) =>
+    Effect.gen(function* () {
+      const id = yield* resolveBot(input.bot);
+      const body = {
+        text: input.text,
+        ...(Option.isSome(input.input) ? { input: input.input.value } : {}),
+        ...(Option.isSome(input.area) ? { area: input.area.value } : {}),
+        ...(Option.isSome(input.minutes) ? { minutes: input.minutes.value } : {}),
+        ...(Option.isSome(input.person) ? { for: input.person.value } : {}),
+      };
+      yield* printResult(yield* control(id, "POST", "/page/desktop", body));
+    }),
+).pipe(
+  Command.withDescription(
+    "Make a desktop link: Pots' own page, where one person sees and controls your screen through the VNC server of bot.json's vnc, and hands it back. Nothing shows before they press Start, and only the browser that pressed Start first can use it. It works for an hour unopened, then --minutes after Start. You are woken when they hand it back, with their note, or when it ends otherwise.",
+  ),
+);
+
 export const pageCommand = Command.make("page").pipe(
-  Command.withDescription("Web pages the bot writes in its pages/ folder, the links to them, and password pages."),
-  Command.withSubcommands([link, unlink, list, secret]),
+  Command.withDescription("Web pages the bot writes in its pages/ folder, the links to them, password pages and desktop pages."),
+  Command.withSubcommands([link, unlink, list, secret, desktop]),
 );

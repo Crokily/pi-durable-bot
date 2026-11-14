@@ -2,6 +2,7 @@ import { basename } from "node:path";
 import type { CacheUse, ContextStatus } from "../agent/agent.ts";
 import { age, type ChildEnd, type ChildInfo, describeChild } from "../agent/children.ts";
 import type { MemoryFolders, MemoryNote, MemoryProgress } from "../agent/memory.ts";
+import type { LeftScope } from "../agent/scopes.ts";
 import type { PersonInfo } from "../core/channel.ts";
 import { formatTime } from "../core/time.ts";
 import type { PlaceWake, WakeEvent, WakeFile } from "../core/wake.ts";
@@ -28,6 +29,8 @@ export interface PromptFacts {
   fallbackWakeMinutes: number;
   /** The memory all bots of this computer share. */
   sharedMemory: string;
+  /** Where each command runs in a systemd scope of its own: the slice of this Pots home and the start of the bot's scopes. */
+  scopes?: { slice: string; prefix: string };
 }
 
 export function identitySection(facts: PromptFacts): string {
@@ -72,6 +75,7 @@ export function workSection(facts: PromptFacts): string {
   pots page link <name> [--for <person address>]   a link to your page pages/<name>/ for people; the pages skill says more
   pots page unlink <link ID or URL> | list
   pots page secret --file <name>.env --keys A,B [--text <text>] [--for <person address>]   a one-time Pots page where a person writes secrets into that file
+  pots page desktop --text <text> [--for <person address>] [--input password|code|text] [--area x,y,w,h] [--minutes 15]   a one-time Pots page where a person sees and controls your screen, and hands it back; the desktop-page skill says more
   pots form add <name> <JSON, or -> | remove <name> | list   a Slack or Discord form that a button with the ID form:<name> opens
   pots context
   pots turn-page --note <text>
@@ -85,11 +89,28 @@ function computerSection(facts: PromptFacts): string {
   return `# This computer
 - It is yours to work on: ${facts.machine.os}, host ${facts.machine.hostname}, user ${facts.machine.user}. The bash tool runs ${facts.machine.shell}.
 - You have all the permissions of this user${facts.machine.os.startsWith("Windows") ? "" : "; sudo -n true tells you whether sudo works without a password"}. Your actions need no approval, with one exception: before an action, make sure whether it may cost money; if it may, confirm with the person before you do it. You can install what you need.
-- MCP servers are pi's, set in ~/.pi/agent/mcp.json and in .pi/mcp.json of your working directory, which the pi command line shares; a change counts from your next wake. Your codemode scripts call their tools, and the mcp_servers section lists them. pots mcp list shows the servers and whether they connect. A person signs in to a server with pots mcp login <server>, in their own terminal.
+${facts.scopes ? `${scopesLine(facts.scopes)}\n` : ""}- MCP servers are pi's, set in ~/.pi/agent/mcp.json and in .pi/mcp.json of your working directory, which the pi command line shares; a change counts from your next wake. Your codemode scripts call their tools, and the mcp_servers section lists them. pots mcp list shows the servers and whether they connect. A person signs in to a server with pots mcp login <server>, in their own terminal.
 - The screen: before you use it for a job, look on this computer for a CLI, an API or an MCP server that does the job; they are usually faster and surer than the screen. If this computer has a desktop, use it like a person. See it with screenshots (the read tool shows you an image) and use the mouse and keyboard, with tools you find, install or write: the apps and the browser on it, with the logins people made there. People can watch it and take over at any time.
 - The screen tool is for anything on the screen. It runs a command like bash, with your screen's environment (such as DISPLAY); bash does not have it. Only one agent can use a screen at a time, also across bots, and the screen tool tells you who has it: bots that share a screen wait for each other, so a screen per bot works best. Your screen is the screen setting in bot.json; without it, the gateway's own environment. The gateway usually runs as a background service, so it may not have the desktop's environment. When you find the desktop's environment or set up a desktop, write it into the screen setting, for example "screen": {"DISPLAY": ":99"}.
-- If there is no desktop, work without a screen until a task needs one, such as signing up for a chat app's tokens. Then ask the person which way they want, and say what each costs: a virtual desktop (for example Xvfb and a browser, with a VNC or noVNC server) works like a real one, and they can watch it and sign in themselves over VNC, but it needs sudo, several hundred MB of packages, and an SSH tunnel or an open port for them to see it; a browser-only tool such as agent-browser is lighter, but it drives only the browser, they cannot watch it or take over, sites detect it more often, and sign-ins go through you; or they do the browser steps on their own computer while you guide them, and give you what you need.
+- If there is no desktop, work without a screen until a task needs one, such as signing up for a chat app's tokens. Then ask the person which way they want, and say what each costs: a virtual desktop (for example TigerVNC's Xvnc and a browser) works like a real one, and they can watch it and sign in themselves from a desktop page link (pots page desktop), but it needs sudo and several hundred MB of packages; a browser-only tool such as agent-browser is lighter, but it drives only the browser, they cannot watch it or take over, sites detect it more often, and sign-ins go through you; or they do the browser steps on their own computer while you guide them, and give you what you need.
 - Working directory: ${facts.paths.workspace}`;
+}
+
+function scopesLine({ slice, prefix }: { slice: string; prefix: string }): string {
+  return `- Each command you run with bash or screen, and each command of your routines, runs in a systemd scope of its own, ${prefix}-<process ID>-<id>.scope, in ${slice}. When memory runs out, what the system stops is the command that uses the most, not Pots. What a command leaves running when it returns, such as a browser, a server or a nohup job, stays in its scope and runs on, also when Pots restarts; a command that Pots still waits on when it stops is stopped, with what it started. When Pots' service is stopped on purpose (systemctl stop, pots service uninstall), everything in ${slice} stops. systemctl --user list-units '${prefix}-*' lists your scopes, systemctl --user status <scope> shows what runs in one, and systemctl --user stop <scope> stops it. After Pots starts again, your next wake lists the scopes your commands left running.`;
+}
+
+/** What the bot's commands left running when the gateway started, for the next wake. */
+export function renderLeftScopes(scopes: readonly LeftScope[], now: number): string {
+  const lines = scopes.map((scope) => {
+    const processes = `${scope.processes} ${scope.processes === 1 ? "process" : "processes"}`;
+    return `- ${scope.unit}: started ${formatTime(scope.started)}, ${processes}${scope.first ? `; the oldest: ${scope.first}` : ""}`;
+  });
+  return [
+    `When Pots started at ${formatTime(now)}, commands you ran before it stopped had left these running, each in its systemd scope:`,
+    ...lines,
+    "They run until they end or you stop them (systemctl --user stop <scope>).",
+  ].join("\n");
 }
 
 /**
@@ -129,7 +150,7 @@ export function folderSection(facts: PromptFacts, child = false): string {
     ? ""
     : ` When the person has to give you secrets, such as tokens they copied, ask in the terminal channel with call <its channel id> ask-secret {"text": "…", "file": "<app>-${facts.id}.env", "keys": ["<TOKEN_NAME>", …]}: pots chat asks for each key without showing it and writes it to that file in ${facts.secretsDir}, and you get a message that names the keys it wrote. You never see the values, so they stay out of your log. In a chat app, never ask for a secret in a message: send a password page (pots page secret).`;
   return `# Your folder: ${paths.dir}
-- bot.json: your definition: name, model, thinking, judge, channels (channel accounts), screen (the environment of your screen, which the screen tool runs with), settings (settings.maxChildren: how many children may work at once; settings.autoMemory: false turns your memory off). model is "provider/modelId". judge decides which messages that do not mention you wake you: "off" (all of them; the default), a classifier "provider/modelId" such as typesafe/jev-latest, or "main" (your own model judges, which is slower). Models and logins are pi's: ~/.pi/agent/auth.json, and ~/.pi/agent/models.json for OpenAI-compatible and local endpoints. Changes take effect within a few seconds. If it has an error, the error goes into bot.json.error and the old definition stays in use.
+- bot.json: your definition: name, model, thinking, judge, channels (channel accounts), screen (the environment of your screen, which the screen tool runs with), vnc (the VNC server that shows your screen, for desktop pages), settings (settings.maxChildren: how many children may work at once; settings.autoMemory: false turns your memory off). model is "provider/modelId". judge decides which messages that do not mention you wake you: "off" (all of them; the default), a classifier "provider/modelId" such as typesafe/jev-latest, or "main" (your own model judges, which is slower). Models and logins are pi's: ~/.pi/agent/auth.json, and ~/.pi/agent/models.json for OpenAI-compatible and local endpoints. Changes take effect within a few seconds. If it has an error, the error goes into bot.json.error and the old definition stays in use.
 - AGENTS.md: your personality, how you talk, and anything else you want to know at every request. Context files are found as pi finds them: AGENTS.md (or AGENTS.override.md, CLAUDE.md) in ~/.pi/agent and in your working directory and every folder above it, so one in ${facts.botsDir} is for every bot there. They are read before each request, so changes take effect at once.
 - Skills, as in pi: a skill is a folder with a SKILL.md. They are found in ~/.pi/agent/skills, ~/.agents/skills, .pi/skills in your working directory, .agents/skills in it and the folders above, and pi's settings and packages, the same ones the pi command line uses. The ones found are listed below with where they are. You can write or install your own; new ones show at the next request.
 - A CLI on this computer is managed when it has a skill. When you find a CLI that has no skill, suggest to the person that you bring it under management: collect its docs and write one skill for it in ~/.agents/skills/<name>/SKILL.md, which says when to use the CLI, how to use it, and how to check its sign-in. pi finds skills in that folder, so every bot and every pi terminal sees them. When a CLI is removed, remove its skill too.
@@ -477,7 +498,7 @@ export function renderTimerWake(timer: DueTimer, status: ContextStatus, fallback
     if (timer.set_by === "fallback") why = `fallback check-in: no wake set with pots wake is pending, so one comes every ${fallbackMinutes} minutes`;
     else if (timer.set_by === "routine")
       why = `routine ${timer.source ?? "?"}${timer.routine ? `, ${describeSchedule(timer.routine)}` : " (removed since)"}: its time came. Its note was given with pots routine add`;
-    else if (timer.source === "pages") why = "an answer came from one of your pages: Pots set this wake when it arrived. The note says which link and page";
+    else if (timer.source === "pages") why = "one of your page links was used or ended: Pots set this wake when it happened. The note says which link and what happened";
     else if (timer.source)
       why = `timed wake from ${timer.source}: a command on this computer, not a person in a channel, set it with pots wake at ${formatTime(timer.created_at)}. Its note is what that command wrote`;
     else why = `timed wake, set with pots wake at ${formatTime(timer.created_at)}`;

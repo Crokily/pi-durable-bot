@@ -1,0 +1,1010 @@
+/*
+ * The desktop page of Pots: a person sees and controls the bot's screen. The picture fills the screen; a few controls
+ * float on it. Phone first, also for computers. Pots' own page; bots do not use this file.
+ */
+
+:root {
+  color-scheme: light dark;
+  --bg: #f6f6f3;
+  --card: #ffffff;
+  --text: #1d1d1f;
+  --muted: #5f6368;
+  --line: #dcdcd7;
+  --go: #1f9d6b;
+  --bad: #c0392b;
+  --sheet: #f4f4f2;
+  --tile: #ffffff;
+  --soft: #e6e6e3;
+  --font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans CJK SC", "Segoe UI", system-ui, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141516;
+    --card: #1f2022;
+    --text: #ececea;
+    --muted: #a2a6ab;
+    --line: #34373a;
+    --bad: #ff8a7e;
+    --sheet: #1f2022;
+    --tile: #2c2d30;
+    --soft: #2c2d30;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  font: 15px/1.4 var(--font);
+  color: var(--text);
+  background: var(--bg);
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ---- Start and end pages ---- */
+
+.page {
+  max-width: 520px;
+  min-height: 100%;
+  margin: 0 auto;
+  padding: calc(40px + env(safe-area-inset-top)) 22px calc(22px + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+}
+
+.who {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.ava {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  flex: none;
+  background: linear-gradient(135deg, #4fb3a5, #1f7a70);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+}
+
+.ask {
+  margin: 18px 0 14px;
+  background: var(--card);
+  border-radius: 18px;
+  padding: 16px;
+  font-size: 19px;
+  line-height: 1.45;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+/* Long text, or text of several lines, in the regular weight: easier to read than a big bold block. */
+.ask.long {
+  font-size: 16.5px;
+  line-height: 1.6;
+  font-weight: 450;
+  padding: 16px 18px;
+}
+
+/* The bot's words: a paragraph per line, and a numbered or bulleted line hangs under its mark. */
+.words p {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.words p + p {
+  margin-top: 0.4em;
+}
+
+.words .gap {
+  height: 0.2em;
+}
+
+.words .step {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 0.45em;
+}
+
+.words .n {
+  min-width: 1.1em;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.ask .n {
+  color: var(--go);
+}
+
+.meta {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.fold {
+  font-size: 13px;
+  margin-top: 12px;
+  color: var(--muted);
+}
+
+.fold summary {
+  cursor: pointer;
+}
+
+.fold p {
+  margin: 6px 0 0;
+  line-height: 1.5;
+}
+
+.msg {
+  color: var(--bad);
+  font-size: 14px;
+  min-height: 1.4em;
+  margin: 14px 0 0;
+}
+
+#start.page {
+  padding-bottom: 0;
+}
+
+/* Start stays in sight at the bottom while long text scrolls under it. */
+.go {
+  margin-top: auto;
+  position: sticky;
+  bottom: 0;
+  padding: 18px 0 calc(16px + env(safe-area-inset-bottom));
+  background: linear-gradient(to bottom, color-mix(in srgb, var(--bg), transparent 100%), var(--bg) 18px);
+}
+
+.go .msg {
+  margin: 0 0 10px;
+  min-height: 0;
+}
+
+.go .msg:empty {
+  display: none;
+}
+
+.big {
+  width: 100%;
+  text-align: center;
+  background: var(--go);
+  color: #fff;
+  font-weight: 700;
+  font-size: 18px;
+  border-radius: 16px;
+  padding: 16px;
+}
+
+.big:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.fine {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+  margin: 10px 0 0;
+  line-height: 1.5;
+}
+
+.ended {
+  text-align: center;
+}
+
+.ended h1 {
+  font-size: 21px;
+  margin: 0 0 8px;
+}
+
+.check {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  margin: 100px auto 18px;
+  display: grid;
+  place-items: center;
+}
+
+.check.good {
+  background: var(--go);
+}
+
+.check.gone {
+  background: var(--muted);
+}
+
+.check::after {
+  content: "";
+  width: 22px;
+  height: 12px;
+  border: solid #fff;
+  border-width: 0 0 3px 3px;
+  transform: translateY(-3px) rotate(-45deg);
+}
+
+.check.gone::after {
+  width: 26px;
+  height: 0;
+  border-width: 0 0 3px 0;
+  transform: none;
+}
+
+/* ---- The session: the picture fills the screen ---- */
+
+#session {
+  position: fixed;
+  inset: 0;
+  background: #000;
+  overflow: hidden;
+  color: #fff;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+#screen {
+  position: absolute;
+  inset: 0;
+  touch-action: none;
+  transition: transform 0.25s ease;
+}
+
+#screen canvas {
+  touch-action: none;
+}
+
+.glass {
+  background: rgba(22, 22, 24, 0.66);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  backdrop-filter: blur(14px) saturate(1.4);
+  color: #fff;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+#dim {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: grid;
+  place-items: center;
+  z-index: 3;
+  font-size: 16px;
+  text-align: center;
+  padding: 24px;
+}
+
+/* Where the floating controls keep clear of: the phone's notch and rounded corners. Read by the page's script. */
+#safe {
+  position: absolute;
+  visibility: hidden;
+  pointer-events: none;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+/*
+ * The dock: one group of floating controls, on an edge of the screen. First the task button (a dot for the
+ * connection, the time left), then keyboard, more and Done. It can be dragged to any edge; on the left or right edge it
+ * stands upright. The page's script places it.
+ */
+#dock {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: max-content;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px;
+  border-radius: 30px;
+  z-index: 5;
+  touch-action: none;
+  cursor: grab;
+  transition: left 0.22s ease, top 0.22s ease;
+}
+
+#dock.dragging {
+  transition: none;
+  cursor: grabbing;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+}
+
+#dock.side {
+  flex-direction: column;
+}
+
+.chip {
+  height: 46px;
+  border-radius: 23px;
+  padding: 0 11px 0 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  font-size: 14px;
+}
+
+.chip:hover,
+.chip.on {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.chip svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  opacity: 0.85;
+}
+
+#dock.side .chip {
+  width: 46px;
+  height: auto;
+  padding: 9px 0 8px;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+
+#dock.side .chip svg {
+  display: none;
+}
+
+/* After the text folds away, the task button glows once, so the eye follows it there. */
+.chip.pulse {
+  animation: pulse 1.1s ease-out 2;
+}
+
+@keyframes pulse {
+  from {
+    box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.55);
+  }
+  to {
+    box-shadow: 0 0 0 12px rgba(255, 255, 255, 0);
+  }
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #f5b041;
+  flex: none;
+  box-shadow: 0 0 0 3px rgba(245, 176, 65, 0.25);
+}
+
+.dot.on {
+  background: #3ddc84;
+  box-shadow: 0 0 0 3px rgba(61, 220, 132, 0.25);
+}
+
+.dot.off {
+  background: #ff6b5e;
+  box-shadow: 0 0 0 3px rgba(255, 107, 94, 0.25);
+}
+
+.time {
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  flex: none;
+}
+
+.time.low {
+  color: #ffb347;
+}
+
+.ib {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: #fff;
+}
+
+.ib:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.ib svg,
+.done svg,
+.zoomed svg,
+.x svg {
+  width: 23px;
+  height: 23px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.done {
+  height: 46px;
+  padding: 0 18px 0 14px;
+  border-radius: 23px;
+  background: var(--go);
+  color: #fff;
+  font-weight: 650;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 15.5px;
+}
+
+.done svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 2.6;
+}
+
+#dock.side .done {
+  width: 46px;
+  padding: 0;
+  justify-content: center;
+}
+
+#dock.side .done span {
+  display: none;
+}
+
+#dock.tight .chip svg,
+#dock.tight .zoomed svg {
+  display: none;
+}
+
+#dock.tight .chip {
+  padding: 0 12px;
+}
+
+#dock.tight .zoomed {
+  padding: 0 8px;
+}
+
+#dock.tighter .done {
+  width: 46px;
+  padding: 0;
+  justify-content: center;
+}
+
+#dock.tighter .done span {
+  display: none;
+}
+
+/* Zoomed in: how far, and a tap shows the whole screen again. */
+.zoomed {
+  height: 46px;
+  border-radius: 23px;
+  padding: 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+}
+
+.zoomed svg {
+  width: 16px;
+  height: 16px;
+}
+
+#dock.side .zoomed {
+  width: 46px;
+  padding: 0;
+  justify-content: center;
+}
+
+#dock.side .zoomed svg {
+  display: none;
+}
+
+/*
+ * The task panel: the bot's words in full, with tips, next to the dock. Open for a few seconds at the start, then it
+ * folds into the task button; a tap on that button opens it again, and a tap anywhere else folds it.
+ */
+#hint {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 6;
+  width: min(400px, calc(100% - 24px));
+  display: flex;
+  flex-direction: column;
+  border-radius: 18px;
+  padding: 12px 14px;
+  background: rgba(22, 22, 24, 0.84);
+  user-select: text;
+  -webkit-user-select: text;
+  transform-origin: var(--from-x, 50%) var(--from-y, 100%);
+  transition: opacity 0.18s ease, transform 0.22s ease;
+}
+
+#hint.away {
+  opacity: 0;
+  transform: scale(0.25);
+}
+
+.hint-top {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 12.5px;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.x {
+  width: 32px;
+  height: 32px;
+  margin: -7px -9px -7px 0;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  flex: none;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.x:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.x svg {
+  width: 18px;
+  height: 18px;
+}
+
+.hint-text {
+  min-height: 0;
+  flex: 0 1 auto;
+  overflow: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.hint-text.more-below {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
+}
+
+.hint-text.more-above {
+  -webkit-mask-image: linear-gradient(to top, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to top, #000 calc(100% - 28px), transparent);
+}
+
+.hint-text.more-above.more-below {
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to bottom, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+}
+
+.hint-text .n {
+  color: #7fdcb5;
+}
+
+.hint-tips {
+  flex: none;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.hint-tips p {
+  margin: 0;
+}
+
+.hint-tips p + p {
+  margin-top: 3px;
+}
+
+.hint-meta {
+  flex: none;
+  margin-top: 6px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+#toast {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  padding: 8px 14px;
+  border-radius: 14px;
+  font-size: 13px;
+  z-index: 6;
+  text-align: center;
+  transition: opacity 0.6s;
+  pointer-events: none;
+}
+
+/* The typing strip, above the phone's keyboard. */
+#strip {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px env(safe-area-inset-bottom);
+  background: rgba(32, 33, 36, 0.97);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  z-index: 7;
+}
+
+#strip .k {
+  min-width: 40px;
+  height: 38px;
+  padding: 0 8px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.12);
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  color: #fff;
+  flex: none;
+}
+
+#strip .k.on {
+  background: #4fb3a5;
+  color: #0c1a18;
+}
+
+#strip label {
+  flex: 1;
+  min-width: 0;
+  height: 38px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  gap: 6px;
+  font-size: 12.5px;
+  color: rgba(255, 255, 255, 0.75);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+#typed {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #fff;
+  /* 16px keeps iOS from zooming the page when the field gets the focus. */
+  font: 16px var(--font);
+  letter-spacing: 0.5px;
+}
+
+/* Sheets from the bottom: more, and handing back. */
+#scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.42);
+  z-index: 8;
+}
+
+.sheet {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 9;
+  background: var(--sheet);
+  color: var(--text);
+  border-radius: 22px 22px 0 0;
+  padding: 8px 16px calc(22px + env(safe-area-inset-bottom));
+  box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.25);
+  max-height: 85%;
+  overflow: auto;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.grab {
+  width: 38px;
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(128, 128, 128, 0.45);
+  margin: 0 auto 12px;
+}
+
+.sheet h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+
+.sheet p {
+  margin: 0 0 12px;
+  font-size: 13.5px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.tile {
+  background: var(--tile);
+  border-radius: 12px;
+  padding: 9px 4px 7px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.25;
+  color: var(--text);
+}
+
+.tile i {
+  display: block;
+  font-style: normal;
+  font-size: 18px;
+  margin-bottom: 3px;
+}
+
+.list {
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 14px;
+  background: var(--tile);
+  font-size: 14.5px;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.12);
+  color: var(--text);
+  text-align: left;
+}
+
+.li:last-child {
+  border-bottom: 0;
+}
+
+.li small {
+  display: block;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.li.red {
+  color: var(--bad);
+}
+
+.tog {
+  width: 40px;
+  height: 24px;
+  border-radius: 12px;
+  background: #c9c9c9;
+  position: relative;
+  flex: none;
+}
+
+.tog::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  transition: left 0.2s;
+}
+
+.tog.on {
+  background: var(--go);
+}
+
+.tog.on::after {
+  left: 18px;
+}
+
+.seg {
+  display: inline-flex;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  flex: none;
+}
+
+.seg button {
+  padding: 4px 9px;
+  font-size: 12.5px;
+}
+
+.seg button.on {
+  background: var(--go);
+  color: #fff;
+}
+
+.seg button:disabled {
+  opacity: 0.4;
+}
+
+.pri {
+  display: block;
+  width: 100%;
+  text-align: center;
+  background: var(--go);
+  color: #fff;
+  font-weight: 650;
+  border-radius: 14px;
+  padding: 13px;
+  font-size: 16px;
+  margin-top: 10px;
+}
+
+.sec {
+  display: block;
+  width: 100%;
+  text-align: center;
+  background: var(--soft);
+  color: var(--text);
+  border-radius: 14px;
+  padding: 11px;
+  font-size: 15px;
+  margin-top: 8px;
+}
+
+.sheet textarea {
+  display: block;
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+  background: var(--tile);
+  color: var(--text);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font: 16px/1.4 var(--font);
+  border: 1px solid rgba(128, 128, 128, 0.25);
+}
+
+.sheet .msg {
+  margin: 8px 0 0;
+}
+
+/* ---- On a computer: the same dock without the keyboard button, a menu instead of the More sheet; the keyboard types straight in. ---- */
+
+#session.desktop #strip {
+  display: none !important;
+}
+
+#session.desktop .ib,
+#session.desktop .chip,
+#session.desktop .done,
+#session.desktop .zoomed {
+  height: 40px;
+}
+
+#session.desktop .ib {
+  width: 40px;
+}
+
+#session.desktop .ib svg {
+  width: 21px;
+  height: 21px;
+}
+
+#session.desktop .done {
+  font-size: 14.5px;
+  padding: 0 16px 0 12px;
+}
+
+#session.desktop #dock.side .chip {
+  width: 40px;
+  height: auto;
+}
+
+#session.desktop #dock.side .done {
+  width: 40px;
+}
+
+#menu {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 290px;
+  border-radius: 12px;
+  overflow: auto;
+  z-index: 9;
+  background: var(--tile);
+  color: var(--text);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+}
+
+#menu .li {
+  padding: 9px 14px;
+  font-size: 13.5px;
+}
+
+#menu .li kbd {
+  font: 12px var(--font);
+  color: var(--muted);
+}
+
+#menu .keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 14px 10px;
+  background: var(--tile);
+  border-bottom: 1px solid rgba(128, 128, 128, 0.12);
+}
+
+#menu .keys button {
+  background: var(--soft);
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 12.5px;
+}
+
+#session.desktop .sheet {
+  left: 50%;
+  right: auto;
+  bottom: auto;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(420px, calc(100% - 32px));
+  border-radius: 18px;
+  padding: 18px;
+}
+
+#session.desktop .sheet .grab {
+  display: none;
+}

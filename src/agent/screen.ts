@@ -1,5 +1,5 @@
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { formatTime } from "../core/time.ts";
 
@@ -190,6 +190,35 @@ export class ScreenLeases {
     };
   }
 
+  /**
+   * Take the screen for a person who uses it through a desktop page: also from an agent that holds it now, since the
+   * person comes first. Their lease stays in force until done() and release(), as a running screen command keeps an
+   * agent's.
+   */
+  seize(screen: string, holder: Holder, now = Date.now()): { done(): void } {
+    this.#transaction(() => {
+      this.#db
+        .prepare(
+          `INSERT INTO leases (screen, bot, name, agent, conversation, pid, since, last_use, running) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+           ON CONFLICT (screen) DO UPDATE SET bot = excluded.bot, name = excluded.name, agent = excluded.agent, conversation = excluded.conversation,
+             pid = excluded.pid, since = excluded.since, last_use = excluded.last_use, running = 1`,
+        )
+        .run(screen, holder.bot, holder.name, holder.agent, holder.conversation, process.pid, now, now);
+    });
+    const key = JSON.stringify([screen, holder.bot, holder.conversation]);
+    this.#running.set(key, 1);
+    this.#beat();
+    let done = false;
+    return {
+      done: () => {
+        if (done) return;
+        done = true;
+        this.#running.delete(key);
+        this.#beat();
+      },
+    };
+  }
+
   /** Give up the leases this process holds for the bot: of one conversation, or all of them. */
   release(bot: string, conversation?: string): void {
     if (conversation === undefined) this.#db.prepare("DELETE FROM leases WHERE bot = ? AND pid = ?").run(bot, process.pid);
@@ -255,8 +284,19 @@ function lease(row: Row): Lease {
   };
 }
 
-/** What an agent learns when another agent has the screen. */
+/** The conversation of a person's lease on a screen, taken through a desktop page link. */
+export const desktopHolder = (link: string) => `desktop:${link}`;
+
+/** What an agent learns when another agent, or a person on a desktop page, has the screen. */
 export function renderBusy(screen: Screen, lease: Lease, idleMs: number, self: string): string {
+  const link = /^desktop:(D\d+)$/.exec(lease.conversation)?.[1];
+  if (link) {
+    const whose = lease.bot === self ? "your" : `${lease.name}'s (bot folder ${lease.bot})`;
+    return (
+      `Not run: ${screen.label} is in use by a person, through ${whose} desktop page link ${link}, since ${formatTime(lease.since)}. ` +
+      `It frees when they hand the desktop back or the link ends; pots page list shows when it ends, and pots page unlink ${link}${lease.bot === self ? "" : ` --bot ${basename(lease.bot)}`} ends it now.`
+    );
+  }
   const who = lease.bot === self ? lease.agent : `${lease.agent} of ${lease.name} (bot folder ${lease.bot})`;
   return (
     `Not run: ${screen.label} is in use by ${who}, since ${formatTime(lease.since)}. ` +

@@ -153,10 +153,22 @@ ${gateway.home ? `Environment=${quote(`POTS_HOME=${gateway.home}`)}\n` : ""}Rest
 RestartSec=5
 KillSignal=SIGTERM
 TimeoutStopSec=30
+OOMPolicy=continue
 
 [Install]
 WantedBy=${system ? "multi-user.target" : "default.target"}
 `;
+}
+
+/**
+ * A unit that an older pots service install wrote, brought up to date; undefined when it needs nothing or Pots did not
+ * write it. OOMPolicy=continue: when the kernel kills a process of the service for memory, such as an MCP server, the
+ * gateway goes on; with systemd's default, the whole service stops and starts again.
+ */
+export function upgradeUnit(text: string): string | undefined {
+  if (!text.startsWith("# Written by pots service install.") || /^OOMPolicy=/m.test(text)) return undefined;
+  const upgraded = text.replace(/^TimeoutStopSec=.*$/m, (line) => `${line}\nOOMPolicy=continue`);
+  return upgraded === text ? undefined : upgraded;
 }
 
 /** The user a system unit runs the gateway as: its User=, or root without one. Undefined when it cannot be read. */
@@ -229,8 +241,25 @@ export function systemdManager(files = { user: userUnit, system: systemUnit }, e
           yield* exec("systemctl", ["--user", "daemon-reload"]);
         }
       }),
+    // After an upgrade people run pots service restart, so it also brings a unit that an older version wrote up to date.
     restart: () =>
-      (ownSystem() ? exec("sudo", ["systemctl", "restart", "pots.service"]) : exec("systemctl", ["--user", "restart", "pots.service"])).pipe(Effect.asVoid),
+      Effect.gen(function* () {
+        if (ownSystem()) {
+          const upgraded = upgradeUnit(readFileSync(files.system, "utf8"));
+          if (upgraded) {
+            yield* exec("sudo", ["tee", files.system], { input: upgraded });
+            yield* exec("sudo", ["systemctl", "daemon-reload"]);
+          }
+          yield* exec("sudo", ["systemctl", "restart", "pots.service"]);
+          return;
+        }
+        const upgraded = existsSync(files.user) ? upgradeUnit(readFileSync(files.user, "utf8")) : undefined;
+        if (upgraded) {
+          writeFileSync(files.user, upgraded);
+          yield* exec("systemctl", ["--user", "daemon-reload"]);
+        }
+        yield* exec("systemctl", ["--user", "restart", "pots.service"]);
+      }),
     logs: ({ lines, follow }) =>
       passthrough("journalctl", [...(ownSystem() ? [] : ["--user"]), "-u", "pots.service", "-n", String(lines), "-o", "cat", ...(follow ? ["-f"] : [])]),
   };

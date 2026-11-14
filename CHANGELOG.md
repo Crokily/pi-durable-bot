@@ -26,6 +26,7 @@ A person can take over the bot's screen from a link, on a phone or a computer, d
 - **A token file for each bot.** The Slack, Discord and Telegram skills, the pages skill and the prompt name the file for the bot, such as `slack-<bot ID>.env`, instead of one fixed `slack.env`, which another bot on the computer may already use: a second bot that followed the old text could write over the first one's tokens. Files that bots use now stay as they are. The Slack skill also says how to give the app an icon, which a manifest cannot do.
 - **`pots chat -m` prints first what the bot sent since the last time**, such as a new bot's hello, or what the bot sent after the last `pots chat -m` ended. Before, it printed only the answers to its own message.
 - **A mistyped command gets the command it most likely means**, for example `pots bot new Ada` for `pots bots new Ada`, instead of the whole help.
+- **The bot knows that plain text is only one way to reply.** Its prompt says that pages, and the channel's own buttons, menus, forms and tables, often read and answer better, so it chooses what fits each time, and that a reply that runs to several messages goes out one message after another, since messages sent at the same time can arrive out of order.
 
 ## 0.7.2 (2026-11-13)
 

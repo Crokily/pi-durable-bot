@@ -2,7 +2,7 @@
   "name": "pi-durable-bot",
   "version": "0.7.2",
   "description": "Open-source AI coworkers that read every channel, decide what matters, and act on their own computer. Self-hosted, any model.",
-  "license": "MIT",
+  "license": "MIT AND MPL-2.0",
   "type": "module",
   "homepage": "https://github.com/Crokily/pi-durable-bot#readme",
   "repository": {
@@ -70,7 +70,8 @@
     "@effect/platform-node-shared": "4.1.2",
     "chat": "4.44.0",
     "discord.js": "14.28.1",
-    "effect": "4.1.2"
+    "effect": "4.1.2",
+    "ws": "8.22.1"
   },
   "devDependencies": {
     "@effect/vitest": "4.1.2",
@@ -78,8 +79,7 @@
     "@types/ws": "8.18.2",
     "fast-check": "4.10.2",
     "typescript": "7.0.2",
-    "vitest": "5.1.0",
-    "ws": "8.22.1"
+    "vitest": "5.1.0"
   },
   "overrides": {
     "@earendil-works/chord": {

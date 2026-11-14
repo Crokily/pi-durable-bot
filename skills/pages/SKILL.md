@@ -18,6 +18,7 @@ A guide, not a rule; you decide.
 | Show something large: a plan, a report, a table, a chart | A display page | Long content does not fit a chat window |
 | Many inputs at once: choices, text, a comment on each step, approve or reject | An answer page | One page, one submit |
 | A secret: a password, a token, a key | The Pots password page (`pots page secret`) | The value goes straight to a file in the secrets folder, never into the chat, the log or your conversation |
+| A step only a person can do on your screen: a sign-in, a CAPTCHA, an approval | The Pots desktop page (`pots page desktop`): the desktop-page skill | They see and control your screen from their phone or computer, and hand it back |
 
 Never ask for a secret in a chat message, and never write your own page for one. If someone pastes a secret into a chat, tell them that the chat keeps it, and suggest they replace it. In the terminal channel (`pots chat`), ask-secret works as before.
 
@@ -43,6 +44,8 @@ pots page link deploy-plan --for slack:@U123      # a link made for one person
 pots page unlink <link ID or URL>                 # the link stops working at once
 pots page list                                    # your pages, their links, when each was last opened and changed
 ```
+
+`pots page list` also lists your password links (`secretLinks`, IDs S1, S2, …) and desktop links (`desktopLinks`, D1, D2, …), and `pots page unlink` takes those back too.
 
 `pots page link` prints JSON: `{"link": "<link ID>", "url": "https://…/p/<token>/", "via": "public-url" or "quick-tunnel", "note": "…"}`. `note` comes with a Quick Tunnel and gives its facts (see below). Nobody can guess a link, but anyone who has it can open it, and a link can be forwarded.
 
@@ -190,7 +193,7 @@ You never see the values; they are not in the log, the wake or a trace. Then use
 Pots serves pages on this computer only (127.0.0.1, at `pagePort` in `~/.pots/settings.json`). The internet reaches them in one of two ways:
 
 - `publicUrl` in `~/.pots/settings.json` is set (a Tailscale Funnel address, a domain, a reverse proxy): links use it, and no Quick Tunnel starts. `via` is `public-url`.
-- `publicUrl` is not set: Pots starts a Cloudflare [Quick Tunnel](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/) at the first `pots page link` or `pots page secret`, and keeps it until the gateway stops. `via` is `quick-tunnel`. All bots of this computer share it.
+- `publicUrl` is not set: Pots starts a Cloudflare [Quick Tunnel](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/) at the first `pots page link`, `pots page secret` or `pots page desktop`, and keeps it until the gateway stops. `via` is `quick-tunnel`. All bots of this computer share it.
 
 What a Quick Tunnel means, from Cloudflare's docs and how it works:
 
@@ -237,6 +240,6 @@ All pages of this computer, of every bot, are under one address, so the browser 
 ## Cleanup
 
 - Pots deletes a page, with its links, when nobody opened it, you made no link to it and you did not change it for 30 days. Pages in `pages/keep/` are never deleted that way.
-- A password page link expires 1 hour after you made it, unless it was used before.
+- A password page link expires 1 hour after you made it, unless it was used before. A desktop page link ends as the desktop-page skill says.
 - Deleting a bot deletes its pages and links.
 - `pages/keep/` grows until you tidy it. Look through it now and then and ask the people whether old pages can go; a routine helps, for example `pots routine add tidy-pages --cron "0 10 1 * *" --note "Look through pages/keep/"`.

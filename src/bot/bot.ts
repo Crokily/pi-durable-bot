@@ -245,9 +245,12 @@ export class Bot implements WakeTarget {
       name: () => current().name,
       wake: (note, requestId) => timers.add(Date.now(), note, { source: "pages", requestId }),
       print,
+      desktop: { vnc: () => current().vnc, screen: () => screenOf(current().screen, process.env) },
     });
     // Crash tests: between the steps of a password page's submission. The next start must finish the sequence.
     Object.assign(pages.crashTests, secretCrashTests(paths.dir, print));
+    // A person who had the screen through a desktop page before a stop keeps it, before any agent runs again.
+    await pages.desktop.holdScreens();
     const machine = await MACHINE;
     const facts = (): PromptFacts => ({
       id,
@@ -427,6 +430,7 @@ export class Bot implements WakeTarget {
     this.#env.pages.unregister(this.id);
     try {
       await this.#pages.stopCleanup();
+      await this.#pages.desktop.stop();
       await this.#control.stop();
       await this.#gateway.pauseWakes();
       await this.#agent.close();
@@ -700,6 +704,14 @@ export class Bot implements WakeTarget {
           file: text(body.file, "file"),
           keys: Array.isArray(body.keys) ? body.keys.map(String) : [],
           ...(optional(body.text) ? { text: optional(body.text)! } : {}),
+          ...(optional(body.for) ? { person: optional(body.for)! } : {}),
+        }),
+      "POST /page/desktop": async (body: Record<string, unknown>) =>
+        this.#env.pages.desktop(this.#pages, {
+          text: typeof body.text === "string" ? body.text : "",
+          ...(optional(body.input) ? { input: optional(body.input)! } : {}),
+          ...(optional(body.area) ? { area: optional(body.area)! } : {}),
+          ...(typeof body.minutes === "number" ? { minutes: body.minutes } : {}),
           ...(optional(body.for) ? { person: optional(body.for)! } : {}),
         }),
       "GET /page/server": async () => this.#env.pages.status(),

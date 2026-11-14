@@ -14,7 +14,7 @@ import { folderSection, type PromptFacts, workSection } from "../src/bot/prompt.
 // Also the skill for pi users (pi-package/skills), which pi loads through the package's pi manifest.
 
 const repo = fileURLToPath(new URL("..", import.meta.url));
-const SKILLS = ["discord-channel", "pages", "slack-channel", "telegram-channel"];
+const SKILLS = ["desktop-page", "discord-channel", "pages", "slack-channel", "telegram-channel"];
 const PI_SKILLS = ["pots-setup"];
 const work = realpathSync(mkdtempSync(join(tmpdir(), "pots-skills-")));
 
@@ -174,6 +174,10 @@ describe("the skills that come with Pots", () => {
       expect(existsSync(join(installed, "skills", "slack-channel", "slack-app-manifest.yaml"))).toBe(true);
       expect(readFileSync(join(installed, "kit", "pots.js"), "utf8")).toBe(readFileSync(join(repo, "kit", "pots.js"), "utf8"));
       expect(readFileSync(join(installed, "kit", "pots.css"), "utf8")).toBe(readFileSync(join(repo, "kit", "pots.css"), "utf8"));
+      // The desktop page's script, noVNC, and noVNC's license texts.
+      for (const file of ["desktop.js", "desktop.css", "novnc.js", "novnc/LICENSE.txt", "novnc/LICENSE.MPL-2.0", "novnc/LICENSE.pako"]) {
+        expect(readFileSync(join(installed, "kit", "desktop", file), "utf8"), file).toBe(readFileSync(join(repo, "kit", "desktop", file), "utf8"));
+      }
       expect(existsSync(join(installed, "docs", "channels"))).toBe(false);
 
       // A pi user who installs the package as a pi package: pi reads it from its settings and finds pots-setup through
@@ -220,11 +224,13 @@ describe("the prompt", () => {
     expect(folderSection(facts, true)).not.toContain("pots page secret");
   });
 
-  it("lists the page and form commands", () => {
+  it("lists the page, desktop and form commands", () => {
     const work = workSection(facts);
     expect(work).toContain("pots page link <name> [--for <person address>]");
     expect(work).toContain("pots page unlink <link ID or URL> | list");
     expect(work).toContain("pots page secret --file <name>.env --keys A,B [--text <text>] [--for <person address>]");
+    expect(work).toContain("pots page desktop --text <text> [--for <person address>] [--input password|code|text] [--area x,y,w,h] [--minutes 15]");
+    expect(work).toContain("the desktop-page skill");
     expect(work).toContain("pots form add <name> <JSON, or -> | remove <name> | list");
   });
 });

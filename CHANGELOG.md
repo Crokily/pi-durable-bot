@@ -2,6 +2,14 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
+## Unreleased
+
+### Changed
+- **The `slack-channel` and `discord-channel` skills point to the desktop page for sign-ins.** When the person is not at the computer, the bot gives them a desktop page link (`pots page desktop`) to sign in on its screen; on a computer without a screen, the virtual desktop choice says they sign in from such a link, as the prompt does, not that they watch it over VNC.
+
+### Fixed
+- **`test/scopes.test.ts` passes when it runs from a bot's shell.** The test for commands without a systemd user manager compared the command's cgroup with `app-pots`, which failed whenever the test itself ran in a Pots scope; it now checks that the command stays in the test's own cgroup.
+
 ## 0.8.0 (2026-11-15)
 
 A person can take over the bot's screen from a link, on a phone or a computer, do one step, and hand it back. A second or third bot sets itself up as the first one does, and offers to set up a screen of its own. On Linux each command runs in a systemd scope of its own, so a command that runs out of memory no longer takes the gateway and every bot down with it, and what commands leave running stays across a restart.

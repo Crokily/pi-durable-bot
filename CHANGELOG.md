@@ -2,9 +2,9 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
-## Unreleased
+## 0.8.0 (2026-11-15)
 
-A person can take over the bot's screen from a link, on a phone or a computer, do one step, and hand it back. A second or third bot sets itself up as the first one does, and offers to set up a screen of its own.
+A person can take over the bot's screen from a link, on a phone or a computer, do one step, and hand it back. A second or third bot sets itself up as the first one does, and offers to set up a screen of its own. On Linux each command runs in a systemd scope of its own, so a command that runs out of memory no longer takes the gateway and every bot down with it, and what commands leave running stays across a restart.
 
 ### Added
 - **A desktop page: `pots page desktop`.** It gives the bot a one-time link to a page of Pots' own, where one person sees the bot's whole screen and controls it, through the VNC server that shows that screen on its computer. Pots signs in to that server itself, so its password never reaches the browser, a link or a log. Nothing of the desktop shows before the person presses Start, so a link preview cannot open it, and only the browser that pressed Start first can use the link; that browser can open it again, after a reload or a switch to another app, until the link ends. An unopened link stops working after an hour, a started one after 15 minutes (`--minutes`, up to 60). It goes through the page server's public address, a Quick Tunnel or your own; with a Quick Tunnel the page and the command's note say that Cloudflare can see the screen and every key typed.

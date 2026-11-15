@@ -867,6 +867,18 @@ describe("sending", () => {
     expect(fake.called("pins.list").length).toBeGreaterThan(1);
   });
 
+  it("gives a request that sends a file more time, by the file's size", async () => {
+    const { fake, channel, dir } = await connect({}, { timeout: 300, retryConfig: { retries: 0 } });
+    // The upload takes 700 ms: longer than the request timeout, shorter than its time for 200 kB (a minute for each 5 MB).
+    fake.uploadDelay = 700;
+    writeFileSync(join(dir, "big.bin"), Buffer.alloc(200_000, 1));
+    expect(await channel.call("files.uploadV2", { channel_id: GENERAL.id, file: join(dir, "big.bin"), filename: "big.bin" })).toMatchObject({ ok: true });
+    expect(fake.uploads.get("F0UPLOAD1")).toHaveLength(200_000);
+    // A small file gets little more time.
+    writeFileSync(join(dir, "small.txt"), "all green");
+    await expect(channel.call("files.uploadV2", { channel_id: GENERAL.id, file: join(dir, "small.txt"), filename: "small.txt" })).rejects.toThrow(/timeout of 30\dms exceeded/);
+  });
+
   it("gives Slack's details when it refuses a call, a send or a reaction, and never a token", async () => {
     const { fake, channel } = await connect();
     const messages = ["[ERROR] must be more than 0 characters [json-pointer:/blocks/0/text/text]", "[ERROR] unsupported type: botton [json-pointer:/blocks/1/elements/0/type]"];

@@ -60,6 +60,8 @@ export class FakeSlack {
   readonly reactions = new Set<string>();
   /** How many times a client connected to the socket. */
   connections = 0;
+  /** How long the file host takes to answer an upload, in ms, as a slow link would. */
+  uploadDelay = 0;
   readonly #messages = new Map<string, SlackMessage[]>();
   readonly #routes: { method: string; answer: Answer }[] = [];
   /** Methods whose next calls fail before an answer: with an HTTP status, or with no answer at all ("silent"). */
@@ -204,6 +206,7 @@ export class FakeSlack {
     if (request.method === "POST" && upload) {
       const form = await new Response(body, { headers: { "content-type": request.headers["content-type"] ?? "" } }).formData().catch(() => undefined);
       const value = form ? [...form.values()][0] : undefined;
+      if (this.uploadDelay) await new Promise((resolve) => setTimeout(resolve, this.uploadDelay));
       this.uploads.set(upload[1]!, typeof value === "string" ? value : value ? await value.text() : body.toString("utf8"));
       response.writeHead(200, { "content-type": "text/plain" }).end(`OK - ${body.length}`);
       return;

@@ -88,19 +88,42 @@ const PLACE_TTL_MS = 60 * 60_000;
 /** Slack's limit for markdown_text, in which the channel posts: https://docs.slack.dev/reference/methods/chat.postMessage */
 const MAX_LENGTH = 12_000;
 
-/** How the Slack SDK sends Web API requests: its retries and the time one request may wait for Slack. */
-export type SlackRequests = Pick<NonNullable<NonNullable<ConstructorParameters<typeof GatewaySlackAdapter>[0]>["webClientOptions"]>, "retryConfig" | "timeout">;
+type WebClientOptions = NonNullable<NonNullable<ConstructorParameters<typeof GatewaySlackAdapter>[0]>["webClientOptions"]>;
+
+/** How the Slack SDK sends Web API requests: its retries and the time one request may take until Slack answers. */
+export type SlackRequests = Required<Pick<WebClientOptions, "retryConfig" | "timeout">>;
 
 /**
- * A request that gets nothing from Slack for 30 seconds fails. One that fails before Slack answers (no answer, an HTTP
- * error, too many requests) is tried again, until a try fails a minute or more after the first began: about 2 minutes at
- * most, plus what Slack asks to wait. The SDK's own default retries for about 30 minutes, and a call, send or reaction
- * held the bot's turn that long.
+ * A request that has no answer 30 seconds after it began fails (the timeout counts from the start of the request, also
+ * while it sends); one that sends a file gets more time, by its size (`uploadTime`). One that fails before Slack
+ * answers (no answer, an HTTP error, too many requests) is tried again, until a try fails a minute or more after the
+ * first began: about 2 minutes at most for a request without a file, plus what Slack asks to wait. The SDK's own
+ * default retries for about 30 minutes, and a call, send or reaction held the bot's turn that long.
  */
 const REQUESTS: SlackRequests = {
   timeout: 30_000,
   retryConfig: { retries: 5, factor: 2, minTimeout: 1_000, maxTimeout: 15_000, randomize: true, maxRetryTime: 60_000 },
 };
+
+/** A request that sends a file gets a minute more for each 5 MB it sends: enough down to about 0.7 Mbit/s. */
+const UPLOAD_MS_PER_BYTE = 60_000 / 5_000_000;
+
+/**
+ * More time for a request that sends a file, by its size, on top of `timeout`. The Slack SDK sends a body with a file
+ * as multipart form data, and makes it before this runs; other bodies are not form data. A body whose size is not known
+ * keeps `timeout`.
+ */
+function uploadTime(timeout: number): NonNullable<WebClientOptions["requestInterceptor"]> {
+  return (config) => {
+    try {
+      const length = (config.data as { getLengthSync?: () => number } | undefined)?.getLengthSync?.();
+      if (typeof length === "number") config.timeout = timeout + Math.ceil(length * UPLOAD_MS_PER_BYTE);
+    } catch {
+      // A stream of unknown length.
+    }
+    return config;
+  };
+}
 
 /**
  * apiUrl: Slack's Web API, by default https://slack.com/api/. Only tests give another one, a fake Slack, and other
@@ -157,7 +180,7 @@ class SlackChannel implements ChannelAdapter {
       botToken: tokens.SLACK_BOT_TOKEN!,
       userName: this.#env.botName,
       logger: quietLogger(sink.log),
-      webClientOptions: this.#requests,
+      webClientOptions: { ...this.#requests, requestInterceptor: uploadTime(this.#requests.timeout) },
       ...(this.#apiUrl ? { apiUrl: this.#apiUrl } : {}),
     });
     sdk.onSocketEvent = async (body, type) => {

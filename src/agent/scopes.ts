@@ -116,6 +116,12 @@ function systemctl(args: readonly string[]): Promise<string> {
 /** A shell word that bash passes on unchanged. */
 const quote = (text: string) => `'${text.replaceAll("'", `'\\''`)}'`;
 
+/**
+ * The environment variable that takes the command through systemd-run to its process in the scope, which takes it out
+ * of the environment before it runs the command.
+ */
+const COMMAND = "POTS_SCOPE_COMMAND";
+
 /** The commands of one bot. */
 export class CommandScopes {
   readonly support: ScopeSupport;
@@ -139,10 +145,14 @@ export class CommandScopes {
     const { systemdRun, bash, slice } = support;
     // The command's process, in its scope, tells the shell below that it started, then runs the command with the real
     // standard error. Until then standard error is /dev/null, so systemd-run's own messages do not mix with the output.
-    const inner = `kill -USR1 "$PPID"; exec ${quote(bash)} -c "$1" 2>&3 3>&-`;
+    const inner = `kill -USR1 "$PPID"; export -n ${COMMAND}; exec ${quote(bash)} -c "$${COMMAND}" 2>&3 3>&-`;
     // $1 is the command, $2 its token. The subshell's process becomes systemd-run, which moves it into the new scope
     // and becomes the command: its process ID is in the scope's name. When systemd-run cannot start the scope, the command
     // runs here, without a scope, as it did before scopes; one that started is never run twice.
+    // The command goes through systemd-run in the environment, not as an argument: systemd-run expands ${NAME}, $$ and an
+    // argument that starts with $ in the command it runs in a scope, by default since systemd 258 (--expand-environment,
+    // from 254), and passes the environment on as it is. What Pots writes in its arguments has none of them: a $NAME
+    // inside an argument stays as it is in every version.
     // The shell stays in the gateway's cgroup while the command runs. It outlives the SIGTERM that systemd sends there
     // when the gateway stops, so the command ends as Pots ends it, as an interrupted command, not by that signal; a
     // trap, unlike an ignored signal, is not passed on to the command.
@@ -150,7 +160,7 @@ export class CommandScopes {
       "exec 3>&2 2>/dev/null",
       "trap 's=1' USR1",
       "trap : TERM",
-      `(exec ${quote(systemdRun)} --user --scope --quiet --collect --slice=${quote(slice)} --unit="${this.prefix}-$BASHPID-$2" --description=${quote(`Command of Pots bot ${bot}`)} -- ${quote(bash)} -c ${quote(inner)} pots "$1")`,
+      `(export ${COMMAND}="$1"; exec ${quote(systemdRun)} --user --scope --quiet --collect --slice=${quote(slice)} --unit="${this.prefix}-$BASHPID-$2" --description=${quote(`Command of Pots bot ${bot}`)} -- ${quote(bash)} -c ${quote(inner)} pots)`,
       "c=$?",
       `[ "$s" = 1 ] && exit "$c"`,
       `exec ${quote(bash)} -c "$1" 2>&3 3>&-`,

@@ -2,7 +2,9 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
-## Unreleased
+## 0.8.2 (2026-11-16)
+
+Upgrade if your computer runs systemd 258 or later (Ubuntu 26.04, Fedora 43 and 44, Debian testing, Arch): there, Pots 0.8.0 and 0.8.1 could rewrite `${…}` in the bot's commands, so a command ran changed or not at all. 0.8.2 fixes that. A Slack call with a file ID no longer hangs, and Slack requests give up within about 2 minutes.
 
 ### Fixed
 - **On systemd 258 and later, a command in a scope could run changed, or not at all.** Since 258, `systemd-run --scope` expands variables in the command it runs by default (`--expand-environment`): in each bash, screen and routine command, `${…}` became the value of an environment variable or nothing (`${f%.txt}`, `${i}` in a loop), `$$` became `$`, and a command that began with `$`, such as `$HOME/bin/tool`, was left out, so nothing ran and the command succeeded with no output. Ubuntu 26.04, Fedora 43 and 44, Debian testing and Arch ship such a systemd. The command now goes through systemd-run in the environment, which systemd-run passes on as it is, so it reaches bash as the bot wrote it with every systemd version; no new option, so older systemd works as before.

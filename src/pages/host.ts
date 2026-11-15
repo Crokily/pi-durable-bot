@@ -30,7 +30,7 @@ export interface PageHostOptions {
   /** POTS_HOME. */
   readonly home: string;
   readonly settingsFile: string;
-  /** POTS_HOME/bin: Pots's own cloudflared. */
+  /** POTS_HOME/bin: Pots' own cloudflared. */
   readonly binDir: string;
   readonly print: Print;
   readonly kitDir?: string;

@@ -47,7 +47,7 @@ const DOWNLOAD_MS = 5 * 60_000;
 
 const programName = (platform: NodeJS.Platform) => (platform === "win32" ? "cloudflared.exe" : "cloudflared");
 
-/** cloudflared in binDir (Pots's own copy), then on PATH; undefined when there is none. */
+/** cloudflared in binDir (Pots' own copy), then on PATH; undefined when there is none. */
 export function findCloudflared(binDir: string, platform = process.platform, path = process.env.PATH ?? ""): string | undefined {
   const name = programName(platform);
   for (const dir of [binDir, ...path.split(delimiter).filter(Boolean)]) {

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
-import { createChannel } from "../src/channels/slack/index.ts";
+import { createChannel, type SlackRequests } from "../src/channels/slack/index.ts";
 import { GatewaySlackAdapter } from "../src/channels/slack/sdk.ts";
 import type { ChannelAdapter, ChannelSink, FormOpening, Happening } from "../src/core/channel.ts";
 import { APP_TOKEN, BOT_TOKEN, FakeSlack, VERIFICATION_TOKEN } from "./support/slack.ts";
@@ -74,13 +74,14 @@ afterEach(async () => {
 });
 
 /** A fake Slack with the workspace Lab: #general, a DM with Alice and a group DM; and a channel for it, not started. */
-async function setUp() {
+/** requests: the channel's retries and request timeout, by default its own. */
+async function setUp(requests?: SlackRequests) {
   const fake = await FakeSlack.start();
   for (const conversation of [GENERAL, DM, GROUP]) fake.conversations.set(conversation.id, conversation);
   for (const user of [ALICE, BOB, POTS]) fake.users.set(user.id, user);
   const dir = mkdtempSync(join(tmpdir(), "pots-slack-"));
   writeFileSync(join(dir, "slack.env"), `SLACK_APP_TOKEN=${APP_TOKEN}\nSLACK_BOT_TOKEN=${BOT_TOKEN}\n`);
-  const channel: ChannelAdapter = createChannel({ id: "slack", type: "slack", secrets: join(dir, "slack.env") }, { botDir: dir, botName: "Pots", log: () => {} }, fake.api);
+  const channel: ChannelAdapter = createChannel({ id: "slack", type: "slack", secrets: join(dir, "slack.env") }, { botDir: dir, botName: "Pots", log: () => {} }, fake.api, requests);
   cleanup.push(async () => {
     await channel.stop();
     await fake.close();
@@ -90,8 +91,8 @@ async function setUp() {
 }
 
 /** A started channel on the fake Slack, and the sink it stores into. */
-async function connect(options: Parameters<typeof memorySink>[0] = {}) {
-  const { fake, channel, dir } = await setUp();
+async function connect(options: Parameters<typeof memorySink>[0] = {}, requests?: SlackRequests) {
+  const { fake, channel, dir } = await setUp(requests);
   const { sink, events, logs, store } = memorySink(options);
   await channel.start(sink);
   /** Send events over the socket and wait until the channel stored `stored` more of them. */
@@ -825,6 +826,57 @@ describe("sending", () => {
     expect(fake.called("files.getUploadURLExternal")[0]!.params).toEqual({ filename: "report.txt", length: "9" });
     expect(fake.uploads.get("F0UPLOAD1")).toBe("all green");
     expect(fake.called("files.completeUploadExternal")[0]!.params).toEqual({ files: JSON.stringify([{ id: "F0UPLOAD1", title: "Report" }]), channel_id: GENERAL.id, thread_ts: TS });
+  });
+
+  it("passes a file ID on as it is, and fails at once for a local file that is not there", async () => {
+    const { fake, channel, dir } = await connect();
+    fake.route("files.delete", () => ({}));
+    // files.delete takes the file's ID. Read as a path, it was a body that never ended, and Slack answered 408.
+    expect(await channel.call("files.delete", { file: "F0TAKE1PDF" })).toMatchObject({ ok: true });
+    expect(fake.called("files.delete")).toEqual([expect.objectContaining({ params: { file: "F0TAKE1PDF" }, files: {} })]);
+    const started = Date.now();
+    await expect(channel.call("files.uploadV2", { channel_id: GENERAL.id, file: join(dir, "missing.pdf"), filename: "missing.pdf" })).rejects.toThrow(
+      `ENOENT: no such file or directory, open '${join(dir, "missing.pdf")}'`,
+    );
+    await expect(
+      channel.call("files.uploadV2", { channel_id: GENERAL.id, file_uploads: [{ file: join(dir, "missing.pdf"), filename: "missing.pdf" }] }),
+    ).rejects.toThrow("ENOENT");
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(fake.called("files.getUploadURLExternal")).toEqual([]);
+  });
+
+  it("tries a request again when Slack does not answer it, for a limited time, and then says how long it tried", async () => {
+    const { fake, channel } = await connect({}, { timeout: 300, retryConfig: { retries: 10, minTimeout: 20, maxTimeout: 20, maxRetryTime: 1_000 } });
+    fake.route("files.info", (params) => ({ file: { id: params.file } }));
+    fake.route("files.delete", () => ({}));
+    // An HTTP error once: the next try gets the answer.
+    fake.fail("files.info", 503, 1);
+    expect(await channel.call("files.info", { file: "F0ONE" })).toMatchObject({ ok: true });
+    expect(fake.called("files.info")).toHaveLength(2);
+    // Slack answers 408 each time: the tries stop after the retry time, not after the SDK's default of about 30 minutes.
+    fake.fail("files.delete", 408);
+    let started = Date.now();
+    await expect(channel.call("files.delete", { file: "F0TAKE1PDF" })).rejects.toThrow(/^An HTTP protocol error occurred: statusCode = 408; tried for \d+ s, then gave up$/);
+    expect(Date.now() - started).toBeLessThan(3_000);
+    expect(fake.called("files.delete").length).toBeGreaterThan(1);
+    // No answer at all: each try ends at the request timeout.
+    fake.fail("pins.list", "silent");
+    started = Date.now();
+    await expect(channel.call("pins.list", { channel: GENERAL.id })).rejects.toThrow(/^A request error occurred: timeout of 300ms exceeded; tried for \d+ s, then gave up$/);
+    expect(Date.now() - started).toBeLessThan(3_000);
+    expect(fake.called("pins.list").length).toBeGreaterThan(1);
+  });
+
+  it("gives a request that sends a file more time, by the file's size", async () => {
+    const { fake, channel, dir } = await connect({}, { timeout: 300, retryConfig: { retries: 0 } });
+    // The upload takes 700 ms: longer than the request timeout, shorter than its time for 200 kB (a minute for each 5 MB).
+    fake.uploadDelay = 700;
+    writeFileSync(join(dir, "big.bin"), Buffer.alloc(200_000, 1));
+    expect(await channel.call("files.uploadV2", { channel_id: GENERAL.id, file: join(dir, "big.bin"), filename: "big.bin" })).toMatchObject({ ok: true });
+    expect(fake.uploads.get("F0UPLOAD1")).toHaveLength(200_000);
+    // A small file gets little more time.
+    writeFileSync(join(dir, "small.txt"), "all green");
+    await expect(channel.call("files.uploadV2", { channel_id: GENERAL.id, file: join(dir, "small.txt"), filename: "small.txt" })).rejects.toThrow(/timeout of 30\dms exceeded/);
   });
 
   it("gives Slack's details when it refuses a call, a send or a reaction, and never a token", async () => {

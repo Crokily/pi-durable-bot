@@ -3,7 +3,7 @@ import { Argument, Command, Flag } from "effect/cli";
 import { control, printResult, resolveBot } from "./control.ts";
 
 // Pages: web pages the bot writes in its pages/ folder, served by the gateway, with links it gives out; the password
-// page, Pots's own, that writes what a person types to a file in the secrets folder; and the desktop page, Pots's own,
+// page, Pots' own, that writes what a person types to a file in the secrets folder; and the desktop page, Pots' own,
 // with which a person sees and controls the bot's screen.
 
 const bot = Flag.String("bot").pipe(Flag.optional, Flag.withDescription("Which bot. Default: $POTS_BOT, or the only bot."));
@@ -72,7 +72,7 @@ const secret = Command.make(
     }),
 ).pipe(
   Command.withDescription(
-    "Make a password link: Pots's own page, one hidden field per key, that writes KEY=value lines to the file. It works for one submission, and for an hour. The values never reach the chat, the log or the wake.",
+    "Make a password link: Pots' own page, one hidden field per key, that writes KEY=value lines to the file. It works for one submission, and for an hour. The values never reach the chat, the log or the wake.",
   ),
 );
 

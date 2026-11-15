@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
@@ -26,6 +27,18 @@ function scopesWork(): boolean {
 }
 const SCOPES = scopesWork();
 
+/** Where this computer's systemd-run expands variables in a scope's command when asked to, as systemd 254 and later do. */
+function expansionWorks(): boolean {
+  if (!SCOPES) return false;
+  try {
+    const out = execFileSync("systemd-run", ["--user", "--scope", "--quiet", "--collect", "--expand-environment=yes", "--", "echo", "${HOME}"], { encoding: "utf8", timeout: 10_000 });
+    return out.trim() === process.env.HOME;
+  } catch {
+    return false;
+  }
+}
+const EXPANSION = expansionWorks();
+
 let model: FakeModel;
 let gateway: TestGateway;
 
@@ -43,14 +56,21 @@ const stay = (file: string) => `${node} -e "require('fs').appendFileSync('${file
 const LEAVE = `setsid ${stay("left.pid")} > /dev/null 2>&1 & echo left one`;
 /** A command that Pots waits on, and that started a process outside its process group, which an interrupt does not end. */
 const WAIT = `setsid ${stay("outside.pid")} > /dev/null 2>&1 & ${stay("waited.pid")}`;
+/**
+ * Commands with what systemd-run expands in a scope's command when it expands: ${…} and $$, and an argument that starts
+ * with $, which it leaves out when what follows is not a variable's name.
+ */
+const DOLLARS = `f=report.txt; echo "\${f%.txt} \${#f} $$ $(cat /proc/self/cgroup)" > dollars.txt`;
+const LEADING_DOLLAR = `$BASH -c 'echo "\${0##*/} $$ $(cat /proc/self/cgroup)"' > leading.txt`;
 
-/** The agent runs a command for "leave one running", "wait long" and "where are you", and answers what comes back with "done". */
+/** The agent runs a command for "leave one running", "wait long", "where are you" and "dollars", and answers what comes back with "done". */
 function script(request: FakeRequest): FakeReply {
   const last = request.messages.at(-1);
   if (last?.role !== "user") return { text: "done" };
   if (last.content.includes("leave one running")) return { call: { name: "bash", arguments: { command: LEAVE } } };
   if (last.content.includes("wait long")) return { call: { name: "bash", arguments: { command: WAIT } } };
   if (last.content.includes("where are you")) return { call: { name: "bash", arguments: { command: "cat /proc/self/cgroup > where.txt" } } };
+  if (last.content.includes("dollars")) return { call: { name: "bash", arguments: { command: DOLLARS } } };
   return { text: "done" };
 }
 
@@ -66,6 +86,23 @@ const pids = (file: string) =>
   existsSync(join(gateway.botDir, "workspace", file)) ? readFileSync(join(gateway.botDir, "workspace", file), "utf8").split("\n").filter(Boolean).map(Number) : [];
 const pid = (file: string) => pids(file)[0]!;
 const key = () => gateway.slice.slice("app-pots-".length, -".slice".length);
+
+/**
+ * The whole line a command wrote to the file with `>`, once it is there. The shell makes the file empty before the
+ * command writes, and a routine's next run empties it again, so the text is read once and kept.
+ */
+async function written(file: string, what: string): Promise<string> {
+  let text = "";
+  await waitFor(
+    () => {
+      const path = join(gateway.botDir, "workspace", file);
+      text = existsSync(path) ? readFileSync(path, "utf8") : "";
+      return text.endsWith("\n");
+    },
+    { what },
+  );
+  return text;
+}
 
 async function setUp(env?: Record<string, string | undefined>): Promise<void> {
   model = await startFakeModel(script);
@@ -87,16 +124,39 @@ describe.runIf(SCOPES)("commands in systemd scopes", { timeout: 60_000 }, () => 
     await setUp();
     const scope = new RegExp(`/app-pots\\.slice/${gateway.slice.replaceAll(".", "\\.")}/pots-${key()}-coworker-\\d+-[0-9a-z]+\\.scope$`, "m");
     gateway.say("dm-alice", "alice", "where are you");
-    await waitFor(() => existsSync(join(gateway.botDir, "workspace", "where.txt")), { what: "the command" });
-    expect(readFileSync(join(gateway.botDir, "workspace", "where.txt"), "utf8")).toMatch(scope);
+    expect(await written("where.txt", "the command")).toMatch(scope);
     const routine = await gateway.run(["routine", "add", "where", "--every", "1s", "--run", "cat /proc/self/cgroup > routine.txt"]);
     expect(routine.status).toBe(0);
-    await waitFor(() => existsSync(join(gateway.botDir, "workspace", "routine.txt")), { what: "the routine's command" });
-    expect(readFileSync(join(gateway.botDir, "workspace", "routine.txt"), "utf8")).toMatch(scope);
+    expect(await written("routine.txt", "the routine's command")).toMatch(scope);
     expect((await gateway.run(["routine", "remove", "where"])).status).toBe(0);
     expect(agentRequests(model)[0]!.system).toContain(
       `- Each command you run with bash or screen, and each command of your routines, runs in a systemd scope of its own, pots-${key()}-coworker-<process ID>-<id>.scope, in ${gateway.slice}.`,
     );
+  });
+
+  it.runIf(EXPANSION)("runs the command as written where systemd-run expands variables in it, as systemd 258 and later do", async () => {
+    // A systemd-run that expands, as the default of systemd 258 and later is.
+    const bin = mkdtempSync(join(tmpdir(), "pots-systemd-run-"));
+    try {
+      const real = execFileSync("sh", ["-c", "command -v systemd-run"], { encoding: "utf8" }).trim();
+      writeFileSync(join(bin, "systemd-run"), `#!/bin/sh\nexec '${real}' --expand-environment=yes "$@"\n`);
+      chmodSync(join(bin, "systemd-run"), 0o755);
+      await setUp({ PATH: `${bin}:${process.env.PATH}` });
+      // In a scope, so through systemd-run.
+      const scope = new RegExp(`/app-pots\\.slice/${gateway.slice.replaceAll(".", "\\.")}/pots-${key()}-coworker-\\d+-[0-9a-z]+\\.scope$`, "m");
+      gateway.say("dm-alice", "alice", "dollars");
+      const dollars = await written("dollars.txt", "the command");
+      expect(dollars).toMatch(/^report 10 \d+ /);
+      expect(dollars).toMatch(scope);
+      const routine = await gateway.run(["routine", "add", "leading", "--every", "1s", "--run", LEADING_DOLLAR]);
+      expect(routine.status).toBe(0);
+      const leading = await written("leading.txt", "the routine's command");
+      expect(leading).toMatch(/^bash \d+ /);
+      expect(leading).toMatch(scope);
+      expect((await gateway.run(["routine", "remove", "leading"])).status).toBe(0);
+    } finally {
+      rmSync(bin, { recursive: true, force: true });
+    }
   });
 
   it("after a crash, stops the commands it waited on, and the next wake tells what commands left running", async () => {
@@ -194,10 +254,9 @@ describe.runIf(process.platform === "linux")("commands without a systemd user ma
     // Without XDG_RUNTIME_DIR and the session bus, systemd-run --user finds no user manager.
     await setUp({ XDG_RUNTIME_DIR: undefined, DBUS_SESSION_BUS_ADDRESS: undefined });
     gateway.say("dm-alice", "alice", "where are you");
-    await waitFor(() => existsSync(join(gateway.botDir, "workspace", "where.txt")), { what: "the command" });
     // The command stays where the gateway runs, which is where this test runs: also inside a Pots scope, when the suite
     // runs from a bot's shell, it is not moved into a scope of its own.
-    expect(readFileSync(join(gateway.botDir, "workspace", "where.txt"), "utf8")).toBe(readFileSync("/proc/self/cgroup", "utf8"));
+    expect(await written("where.txt", "the command")).toBe(readFileSync("/proc/self/cgroup", "utf8"));
     expect(agentRequests(model)[0]!.system).not.toContain("systemd scope");
     await gateway.stop();
     await gateway.start();

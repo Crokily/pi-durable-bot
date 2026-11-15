@@ -1,6 +1,7 @@
+import { possessive } from "./desktop-page.ts";
 import type { SecretView } from "./store.ts";
 
-// The password page: Pots's own HTML, never the bot's. A plain form and no script, so it works in the strictest sandbox.
+// The password page: Pots' own HTML, never the bot's. A plain form and no script, so it works in the strictest sandbox.
 
 /**
  * The headers that keep the password page apart from the bot's pages, which share its address: the browser gives it an
@@ -71,7 +72,7 @@ ${options.problem ? `<p class="problem">${escape(options.problem)}</p>` : ""}${l
 ${fields}
 <button type="submit">Save (this link works once)</button>
 </form>
-<p class="facts">What you type goes only to the file ${escape(link.file)} in the secrets folder on ${escape(botName)}'s computer. It does not go into the chat. ${escape(botName)} is told which keys came, not their values. This link expires in about ${minutes} minute${minutes === 1 ? "" : "s"}.</p>
+<p class="facts">What you type goes only to the file ${escape(link.file)} in the secrets folder on ${escape(possessive(botName))} computer. It does not go into the chat. ${escape(botName)} is told which keys came, not their values. This link expires in about ${minutes} minute${minutes === 1 ? "" : "s"}.</p>
 ${warn}
 </div>`,
   );

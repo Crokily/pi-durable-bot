@@ -14,8 +14,8 @@ import type { BotPages, OpenedLink } from "./store.ts";
 //   GET  /p/<token>/__pots/info       {"page", "version"}
 //   POST /p/<token>/__pots/submit     a page's answers: wakes the bot, once per submission ID
 //   GET  /__pots/kit/<file>           the kit shipped with Pots, also at /p/<token>/__pots/kit/<file> for relative links
-//   GET|POST /s/<token>               the password page, Pots's own, and its form
-//   GET  /d/<token>/                  the desktop page, Pots's own; its script and noVNC are in the kit (kit/desktop/)
+//   GET|POST /s/<token>               the password page, Pots' own, and its form
+//   GET  /d/<token>/                  the desktop page, Pots' own; its script and noVNC are in the kit (kit/desktop/)
 //   GET  /d/<token>/state             the desktop link's state, for its page
 //   POST /d/<token>/start             Start: binds the link to this browser with a cookie
 //   POST /d/<token>/end               {"how": "done" | "cannot", "note"}: the person hands the desktop back

@@ -49,7 +49,8 @@ The `call` tool, with the channel's `id` (`slack`), calls any method of Slack's 
 | `chat.update` | `{"channel": "C123", "ts": "1793080260.000100", "markdown_text": "fixed text"}` | edits your message |
 | `conversations.history` | `{"channel": "C123", "limit": 20}` | reads the last 20 messages |
 | `conversations.replies` | `{"channel": "C123", "ts": "1793080260.000100"}` | reads the thread of that message |
-| `files.uploadV2` | `{"channel_id": "C123", "file": "/path/to/report.pdf", "filename": "report.pdf", "initial_comment": "the report"}` | posts a file: a `file` that is a local path is uploaded; add `thread_ts` to post it in a thread |
+| `files.uploadV2` | `{"channel_id": "C123", "file": "/path/to/report.pdf", "filename": "report.pdf", "initial_comment": "the report"}` | posts a file: a `file` that is a local path (`/…` or `~/…`) is uploaded; add `thread_ts` to post it in a thread |
+| `files.delete` | `{"file": "F0123"}` | deletes a file you uploaded; a `file` that is not a local path, such as this file ID, goes to Slack as it is |
 
 The IDs are in the addresses (`slack:#<channel ID>/<ts>`; a message's `ts` is its ID) and in the raw data in the log. The app has the scopes in [slack-app-manifest.yaml](slack-app-manifest.yaml); a method that needs another scope fails.
 

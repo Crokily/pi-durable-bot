@@ -7,6 +7,7 @@ import { renderBusy, ScreenLeases } from "../src/agent/screen.ts";
 import { readDefinition, type VncSetting } from "../src/bot/definition.ts";
 import { BotDesktop, DESKTOP_UNOPENED_MS, desktopTimes } from "../src/pages/desktop.ts";
 import { desktopHeaders, isLongText, pickLang, renderDesktopEnded, renderDesktopPage, textHtml } from "../src/pages/desktop-page.ts";
+import { renderSecretForm } from "../src/pages/secret-page.ts";
 import { readDesktopLayout, readVncPassword, restoreDesktopLayout, type VncTarget } from "../src/pages/rfb.ts";
 import { FakeVnc } from "./support/vnc.ts";
 import { waitFor } from "./support/gateway.ts";
@@ -372,6 +373,14 @@ describe("the desktop page", () => {
     expect(html).not.toContain("style=");
     expect(renderDesktopPage(view, "Ada", { lang: "en", quickTunnel: false, remote: "linux" })).not.toContain("Cloudflare");
     expect(renderDesktopEnded("done", "Ada", "zh")).toContain("已交还给 Ada");
+    // The bot's name with the English possessive: a name that ends in s takes the apostrophe alone.
+    const pots = renderDesktopPage(view, "Pots", { lang: "en", quickTunnel: false, remote: "linux" });
+    expect(pots).toContain("<title>Pots&#39; desktop</title>");
+    expect(pots).toContain("When you start, Pots&#39; desktop takes the shape of your screen");
+    expect(pots).not.toContain("Pots&#39;s");
+    expect(renderDesktopPage(view, "Ada", { lang: "en", quickTunnel: false, remote: "linux" })).toContain("<title>Ada&#39;s desktop</title>");
+    const secret = { id: "S1", file: "slack.env", keys: ["SLACK_BOT_TOKEN"], text: "", expiresAt: 3_600_000, state: "open" as const };
+    expect(renderSecretForm(secret, "Pots", { quickTunnel: false, now: 0 })).toContain("in the secrets folder on Pots&#39; computer.");
     const headers = desktopHeaders(["pages.example.test", "bad host/x", undefined]);
     expect(headers["content-security-policy"]).toBe(
       "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' wss://pages.example.test ws://pages.example.test; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",

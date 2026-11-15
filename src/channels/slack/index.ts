@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { isAbsolute } from "node:path";
 import { Readable } from "node:stream";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { createMemoryState } from "@chat-adapter/state-memory";
@@ -87,10 +88,27 @@ const PLACE_TTL_MS = 60 * 60_000;
 /** Slack's limit for markdown_text, in which the channel posts: https://docs.slack.dev/reference/methods/chat.postMessage */
 const MAX_LENGTH = 12_000;
 
-/** apiUrl: Slack's Web API, by default https://slack.com/api/. Only tests give another one, a fake Slack. */
-export function createChannel(config: ChannelConfig, env: ChannelEnv, apiUrl?: string): ChannelAdapter {
+/** How the Slack SDK sends Web API requests: its retries and the time one request may wait for Slack. */
+export type SlackRequests = Pick<NonNullable<NonNullable<ConstructorParameters<typeof GatewaySlackAdapter>[0]>["webClientOptions"]>, "retryConfig" | "timeout">;
+
+/**
+ * A request that gets nothing from Slack for 30 seconds fails. One that fails before Slack answers (no answer, an HTTP
+ * error, too many requests) is tried again, until a try fails a minute or more after the first began: about 2 minutes at
+ * most, plus what Slack asks to wait. The SDK's own default retries for about 30 minutes, and a call, send or reaction
+ * held the bot's turn that long.
+ */
+const REQUESTS: SlackRequests = {
+  timeout: 30_000,
+  retryConfig: { retries: 5, factor: 2, minTimeout: 1_000, maxTimeout: 15_000, randomize: true, maxRetryTime: 60_000 },
+};
+
+/**
+ * apiUrl: Slack's Web API, by default https://slack.com/api/. Only tests give another one, a fake Slack, and other
+ * requests, with shorter times.
+ */
+export function createChannel(config: ChannelConfig, env: ChannelEnv, apiUrl?: string, requests: SlackRequests = REQUESTS): ChannelAdapter {
   if (typeof config.secrets !== "string") throw new Error(`channel ${config.id}: "secrets" must name the env file with SLACK_APP_TOKEN and SLACK_BOT_TOKEN`);
-  return new SlackChannel(config.id, expandHome(config.secrets), env, apiUrl);
+  return new SlackChannel(config.id, expandHome(config.secrets), env, apiUrl, requests);
 }
 
 class SlackChannel implements ChannelAdapter {
@@ -98,6 +116,7 @@ class SlackChannel implements ChannelAdapter {
   readonly #secrets: string;
   readonly #env: ChannelEnv;
   readonly #apiUrl: string | undefined;
+  readonly #requests: SlackRequests;
   #sdk?: GatewaySlackAdapter;
   #botToken?: string;
   #botUserId?: string;
@@ -105,11 +124,12 @@ class SlackChannel implements ChannelAdapter {
   /** The newest logged message of each known place, by channel ID, read when the channel started: where its backfill starts. */
   #starts = new Map<string, string>();
 
-  constructor(id: string, secrets: string, env: ChannelEnv, apiUrl: string | undefined) {
+  constructor(id: string, secrets: string, env: ChannelEnv, apiUrl: string | undefined, requests: SlackRequests) {
     this.id = id;
     this.#secrets = secrets;
     this.#env = env;
     this.#apiUrl = apiUrl;
+    this.#requests = requests;
   }
 
   get me(): PersonInfo | undefined {
@@ -137,6 +157,7 @@ class SlackChannel implements ChannelAdapter {
       botToken: tokens.SLACK_BOT_TOKEN!,
       userName: this.#env.botName,
       logger: quietLogger(sink.log),
+      webClientOptions: this.#requests,
       ...(this.#apiUrl ? { apiUrl: this.#apiUrl } : {}),
     });
     sdk.onSocketEvent = async (body, type) => {
@@ -802,7 +823,9 @@ class SlackChannel implements ChannelAdapter {
 
   /**
    * Any Slack Web API method with the bot token, for example chat.update or files.uploadV2.
-   * Methods the Slack SDK implements as helpers (files.uploadV2) run through the helper; a "file" given as a path is read.
+   * Methods the Slack SDK implements as helpers (files.uploadV2) run through the helper. A "file" given as a local path
+   * ("/…" or "~/…"), also in file_uploads, is read first, so a file that is not there fails at once; any other "file",
+   * such as the file ID of files.delete or files.info, goes to Slack as it is.
    */
   call(method: string, params: Record<string, unknown>): Promise<unknown> {
     return explained(this.#call(method, params));
@@ -814,12 +837,9 @@ class SlackChannel implements ChannelAdapter {
     let owner: any = client;
     for (const part of parts.slice(0, -1)) owner = owner?.[part];
     const helper = owner?.[parts.at(-1)!];
-    const args = { ...params };
-    if (typeof args.file === "string") args.file = createReadStream(expandHome(args.file));
+    const args = await withLocalFiles(params);
     if (Array.isArray(args.file_uploads)) {
-      args.file_uploads = args.file_uploads.map((upload: Record<string, unknown>) =>
-        typeof upload.file === "string" ? { ...upload, file: createReadStream(expandHome(upload.file)) } : upload,
-      );
+      args.file_uploads = await Promise.all(args.file_uploads.map((upload: unknown) => (upload && typeof upload === "object" ? withLocalFiles(upload as Record<string, unknown>) : upload)));
     }
     if (typeof helper === "function") return helper.call(owner, args);
     return client.apiCall(method, args);
@@ -839,13 +859,27 @@ function slackError(error: unknown): Error {
   return new Error(`${error.message}. Slack's answer: ${JSON.stringify(answer)}`, { cause: error });
 }
 
-/** The work's result, or its failure with what Slack answered. */
+/**
+ * The work's result, or its failure with what Slack answered. When the Slack SDK tried the request more than once, the
+ * failure also says how long it tried.
+ */
 async function explained<T>(work: Promise<T>): Promise<T> {
+  const started = Date.now();
   try {
     return await work;
   } catch (error) {
-    throw slackError(error);
+    const failed = slackError(error);
+    const tries = (error as { attemptNumber?: unknown } | undefined)?.attemptNumber;
+    if (typeof tries !== "number" || tries < 2) throw failed;
+    throw new Error(`${failed.message}; tried for ${Math.round((Date.now() - started) / 1000)} s, then gave up`, { cause: error });
   }
+}
+
+/** The params with a "file" that is a local path ("/…" or "~/…") read into memory. The Slack SDK reads a file whole too. */
+async function withLocalFiles(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const file = params.file;
+  if (typeof file !== "string" || !(isAbsolute(file) || file.startsWith("~/"))) return { ...params };
+  return { ...params, file: await readFile(expandHome(file)) };
 }
 
 /** A chosen option as text: its label and its value. */

@@ -2,6 +2,15 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
+## Unreleased
+
+### Fixed
+- **`call slack files.delete` (or `files.info`) with a file ID hung for half an hour.** Pots read every `file` param as the path of a file to upload, so the ID became a body that never ended; Slack answered 408, and the Slack SDK tried again for about 30 minutes. Now only a `file` that is a local path (`/…` or `~/…`), also in `file_uploads`, is read, before the call, so a file that is not there fails at once; any other `file` goes to Slack as it is.
+- **A Slack call, send or reaction that Slack does not answer fails within about 2 minutes.** A request that gets nothing from Slack for 30 seconds fails, and one that fails before Slack answers (no answer, an HTTP error, too many requests) is tried again until a try fails a minute or more after the first began. The Slack SDK's default tried for about 30 minutes, and held the bot's turn that long. The error says how long Pots tried, for example `An HTTP protocol error occurred: statusCode = 408; tried for 62 s, then gave up`. Discord and Telegram calls stay as they were, since they had limits already: Discord's client gives up a try after 15 seconds and tries a failed request at most 3 more times, besides the waits Discord asks for when it limits the rate; Telegram's calls try again only when Telegram asks for a wait of up to a minute, at most twice.
+- **"Pots's desktop" on the desktop page.** The page and the password page write the bot's name with the possessive as English does: "Coly's desktop", "Pots' desktop".
+- **The `desktop-page` skill said that a maximized window follows the phone's shape.** It does only when the window can be that narrow: Chrome is at least 500 pixels wide times its scale, 625 at 1.25, more than the 500 of a phone-shaped desktop. Then openbox makes the window as narrow as it can, so it reaches past the edge, and XFCE's xfwm4 leaves it at its old size and stops changing its size until it is maximized again. The skill now says so, and tells the bot to keep its browser at scale 1, zoom sites in instead, and maximize a window again after the link if it needs to.
+- **`test/scopes.test.ts` read a command's file before the command wrote it.** The shell makes the file empty before `cat` writes it, so the test could read an empty file; it now waits for the written line.
+
 ## 0.8.1 (2026-11-15)
 
 The Slack and Discord skills send the person to a desktop page link to sign in, and a test passes when it runs from a bot's shell.

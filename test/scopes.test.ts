@@ -67,6 +67,23 @@ const pids = (file: string) =>
 const pid = (file: string) => pids(file)[0]!;
 const key = () => gateway.slice.slice("app-pots-".length, -".slice".length);
 
+/**
+ * The whole line a command wrote to the file with `>`, once it is there. The shell makes the file empty before the
+ * command writes, and a routine's next run empties it again, so the text is read once and kept.
+ */
+async function written(file: string, what: string): Promise<string> {
+  let text = "";
+  await waitFor(
+    () => {
+      const path = join(gateway.botDir, "workspace", file);
+      text = existsSync(path) ? readFileSync(path, "utf8") : "";
+      return text.endsWith("\n");
+    },
+    { what },
+  );
+  return text;
+}
+
 async function setUp(env?: Record<string, string | undefined>): Promise<void> {
   model = await startFakeModel(script);
   gateway = new TestGateway({ model, ...(env ? { env } : {}) });
@@ -87,12 +104,10 @@ describe.runIf(SCOPES)("commands in systemd scopes", { timeout: 60_000 }, () => 
     await setUp();
     const scope = new RegExp(`/app-pots\\.slice/${gateway.slice.replaceAll(".", "\\.")}/pots-${key()}-coworker-\\d+-[0-9a-z]+\\.scope$`, "m");
     gateway.say("dm-alice", "alice", "where are you");
-    await waitFor(() => existsSync(join(gateway.botDir, "workspace", "where.txt")), { what: "the command" });
-    expect(readFileSync(join(gateway.botDir, "workspace", "where.txt"), "utf8")).toMatch(scope);
+    expect(await written("where.txt", "the command")).toMatch(scope);
     const routine = await gateway.run(["routine", "add", "where", "--every", "1s", "--run", "cat /proc/self/cgroup > routine.txt"]);
     expect(routine.status).toBe(0);
-    await waitFor(() => existsSync(join(gateway.botDir, "workspace", "routine.txt")), { what: "the routine's command" });
-    expect(readFileSync(join(gateway.botDir, "workspace", "routine.txt"), "utf8")).toMatch(scope);
+    expect(await written("routine.txt", "the routine's command")).toMatch(scope);
     expect((await gateway.run(["routine", "remove", "where"])).status).toBe(0);
     expect(agentRequests(model)[0]!.system).toContain(
       `- Each command you run with bash or screen, and each command of your routines, runs in a systemd scope of its own, pots-${key()}-coworker-<process ID>-<id>.scope, in ${gateway.slice}.`,
@@ -194,10 +209,9 @@ describe.runIf(process.platform === "linux")("commands without a systemd user ma
     // Without XDG_RUNTIME_DIR and the session bus, systemd-run --user finds no user manager.
     await setUp({ XDG_RUNTIME_DIR: undefined, DBUS_SESSION_BUS_ADDRESS: undefined });
     gateway.say("dm-alice", "alice", "where are you");
-    await waitFor(() => existsSync(join(gateway.botDir, "workspace", "where.txt")), { what: "the command" });
     // The command stays where the gateway runs, which is where this test runs: also inside a Pots scope, when the suite
     // runs from a bot's shell, it is not moved into a scope of its own.
-    expect(readFileSync(join(gateway.botDir, "workspace", "where.txt"), "utf8")).toBe(readFileSync("/proc/self/cgroup", "utf8"));
+    expect(await written("where.txt", "the command")).toBe(readFileSync("/proc/self/cgroup", "utf8"));
     expect(agentRequests(model)[0]!.system).not.toContain("systemd scope");
     await gateway.stop();
     await gateway.start();

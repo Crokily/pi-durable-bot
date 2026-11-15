@@ -62,6 +62,8 @@ export class FakeSlack {
   connections = 0;
   readonly #messages = new Map<string, SlackMessage[]>();
   readonly #routes: { method: string; answer: Answer }[] = [];
+  /** Methods whose next calls fail before an answer: with an HTTP status, or with no answer at all ("silent"). */
+  readonly #failures = new Map<string, { status: number | "silent"; left: number }>();
   readonly #server: Server;
   readonly #socketServer: WebSocketServer;
   #socket?: WebSocket;
@@ -96,6 +98,14 @@ export class FakeSlack {
   /** Answer a method. A later route goes before an earlier one. */
   route(method: string, answer: Answer): void {
     this.#routes.unshift({ method, answer });
+  }
+
+  /**
+   * Fail the next `times` calls of a method before any answer, as Slack's servers do at times: with an HTTP status such
+   * as 408 or 503 and no body, or "silent", with no answer until the client gives up. The calls are recorded.
+   */
+  fail(method: string, status: number | "silent", times = Number.POSITIVE_INFINITY): void {
+    this.#failures.set(method, { status, left: times });
   }
 
   called(method: string): Call[] {
@@ -220,6 +230,12 @@ export class FakeSlack {
     call.params = params;
     call.auth ??= token ? `Bearer ${token}` : undefined;
     this.calls.push(call);
+    const failure = this.#failures.get(call.method);
+    if (failure && failure.left > 0) {
+      failure.left--;
+      if (failure.status !== "silent") response.writeHead(failure.status).end();
+      return;
+    }
     const result = this.#answer(call);
     // The Web API answers 200 also for an error, with ok false.
     response.writeHead(200, { "content-type": "application/json; charset=utf-8" }).end(JSON.stringify(result));

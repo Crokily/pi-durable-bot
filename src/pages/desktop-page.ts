@@ -26,23 +26,26 @@ export function pickLang(acceptLanguage: string | undefined): Lang {
   return "en";
 }
 
-/** The page's words. {bot}, {time}, {n} and the like are filled in where they are used. */
+/**
+ * The page's words. {bot}, {time}, {n} and the like are filled in where they are used; {bots} is the bot's name with the
+ * possessive, as English writes it: Coly's desktop, Pots' desktop.
+ */
 const WORDS = {
   en: {
-    title: "{bot}'s desktop",
+    title: "{bots} desktop",
     asks: "{bot} needs you for one step",
     linkUntil: "The link works until {time}",
     afterStart: "{n} minutes after Start",
     whatTitle: "What this link can do",
-    what: "It controls the whole desktop of {bot}'s computer, with every site signed in there. Nothing shows before you press Start, and only the first device that presses Start can use the link.",
+    what: "It controls the whole desktop of {bots} computer, with every site signed in there. Nothing shows before you press Start, and only the first device that presses Start can use the link.",
     tunnel: "The picture goes through Cloudflare's free tunnel: Cloudflare can see the screen and what you type.",
     start: "Start",
     continue: "Continue",
-    fineResize: "When you start, {bot}'s desktop takes the shape of your screen if it can, and goes back when you hand it back.",
-    fineWhole: "When you start, you see {bot}'s whole desktop.",
+    fineResize: "When you start, {bots} desktop takes the shape of your screen if it can, and goes back when you hand it back.",
+    fineWhole: "When you start, you see {bots} whole desktop.",
     elsewhere: "This link is open on another device. Only the device that pressed Start first can use it.",
     busy: "Someone is using this desktop through another link right now. Try again when they are done.",
-    unreachable: "Pots could not reach {bot}'s desktop, and has told {bot}. Try again in a moment.",
+    unreachable: "Pots could not reach {bots} desktop, and has told {bot}. Try again in a moment.",
     network: "No connection to {bot}. Check your network and try again.",
     noscript: "This page needs JavaScript.",
     connecting: "Connecting…",
@@ -190,6 +193,9 @@ export type Words = Record<keyof (typeof WORDS)["en"], string>;
 
 const fill = (text: string, values: Record<string, string>) => text.replace(/\{(\w+)\}/g, (all, key: string) => values[key] ?? all);
 
+/** A name with the English possessive: "Coly's", and "Pots'" for a name that ends in s. */
+export const possessive = (name: string) => (/s$/i.test(name) ? `${name}'` : `${name}'s`);
+
 /**
  * The headers of the desktop page and its answers: its scripts and styles come from this address only, it talks only
  * to this address (also by WebSocket, which some browsers do not count as 'self'), no page can frame it, and no other
@@ -273,7 +279,7 @@ ${body}
 
 /** The page of a link that is open or started: the start screen, and the script that does the rest. */
 export function renderDesktopPage(view: DesktopView, botName: string, options: { lang: Lang; quickTunnel: boolean; remote: string }): string {
-  const words = Object.fromEntries(Object.entries(WORDS[options.lang]).map(([key, text]) => [key, fill(text, { bot: botName })])) as Words;
+  const words = Object.fromEntries(Object.entries(WORDS[options.lang]).map(([key, text]) => [key, fill(text, { bot: botName, bots: possessive(botName) })])) as Words;
   // The page says it only when it is so; the script has no use for it.
   const { tunnel, ...scriptWords } = words;
   const facts: DesktopFacts = {

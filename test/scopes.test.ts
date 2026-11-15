@@ -195,7 +195,9 @@ describe.runIf(process.platform === "linux")("commands without a systemd user ma
     await setUp({ XDG_RUNTIME_DIR: undefined, DBUS_SESSION_BUS_ADDRESS: undefined });
     gateway.say("dm-alice", "alice", "where are you");
     await waitFor(() => existsSync(join(gateway.botDir, "workspace", "where.txt")), { what: "the command" });
-    expect(readFileSync(join(gateway.botDir, "workspace", "where.txt"), "utf8")).not.toContain("app-pots");
+    // The command stays where the gateway runs, which is where this test runs: also inside a Pots scope, when the suite
+    // runs from a bot's shell, it is not moved into a scope of its own.
+    expect(readFileSync(join(gateway.botDir, "workspace", "where.txt"), "utf8")).toBe(readFileSync("/proc/self/cgroup", "utf8"));
     expect(agentRequests(model)[0]!.system).not.toContain("systemd scope");
     await gateway.stop();
     await gateway.start();

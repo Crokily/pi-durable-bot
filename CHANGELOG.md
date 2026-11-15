@@ -2,7 +2,9 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
-## Unreleased
+## 0.8.1 (2026-11-15)
+
+The Slack and Discord skills send the person to a desktop page link to sign in, and a test passes when it runs from a bot's shell.
 
 ### Changed
 - **The `slack-channel` and `discord-channel` skills point to the desktop page for sign-ins.** When the person is not at the computer, the bot gives them a desktop page link (`pots page desktop`) to sign in on its screen; on a computer without a screen, the virtual desktop choice says they sign in from such a link, as the prompt does, not that they watch it over VNC.

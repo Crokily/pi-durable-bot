@@ -2,6 +2,17 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
+## Unreleased
+
+### Added
+- **Microsoft Teams, as a preview.** A bot connects Teams itself with the `teams-channel` skill: it runs Microsoft's Teams CLI, gives the person a device code to sign in with their work account on their phone or computer, makes the app, its bot and its secret in one command (the CLI writes the secret straight to `~/.pots/secrets/teams-<bot>.env`, so the bot never sees it), asks for the permissions it reads with (resource-specific consent: all messages of the teams and chats it is added to, not only @mentions), sends the install link, and signs the person out of the CLI again (`teams logout`). For a person who is not an admin, it writes a note for their admin to allow custom apps. The bot.json entry is `{ "id": "teams", "type": "teams", "secrets": "~/.pots/secrets/teams-<bot>.env" }`.
+- **How Teams reaches the bot.** By default over a socket the bot opens (Socket Mode, Microsoft's Teams SDK), so the computer needs no public address. Microsoft calls Socket Mode a preview; `"mode": "http"` instead takes Teams' requests on Pots' page server at `<publicUrl>/channel/<bot>/<channel>`, with Microsoft's signature checked on each. Every activity is stored before Teams gets its answer.
+- **What the bot gets and does on Teams.** Messages in channels (with their threads), group chats and DMs, edits, deletes, reactions on its own messages, people joining and leaving, the app added or removed, and changes to a team's channels. It sends Markdown (through Chat SDK's Teams converter) with real mentions, replies in threads, opens DMs, reacts with the reactions Teams lets a bot use, and calls Teams' API and Microsoft Graph with `call`. Buttons and forms are Adaptive Cards: a click is answered at once and wakes the bot. Files sent in a DM and pasted images are saved; a file in a channel or group chat is a SharePoint link, which needs an admin's permission to read; the bot sends files as page links. After a restart or a dropped socket, Pots reads what it missed in channels and group chats from Microsoft Graph; DMs are not read again.
+- **Not yet tested in a real organisation.** The Teams channel was tested with fakes of Microsoft's services and with Microsoft 365 Agents Playground. The live socket, the permissions people grant at install, the backfill against Microsoft Graph, files, admins' policies and Teams' rate limits have not been tried in a real Microsoft 365 organisation; the skill and the README say so. As on Telegram, a crash at the moment of a send can send a message twice.
+
+### Changed
+- **An older edit no longer replaces a newer one in the log.** An edit that a backfill read before a later edit came live (on any channel) adds nothing; edits with the same time still apply in the order they come.
+
 ## 0.8.3 (2026-11-16)
 
 Sign in to a model from a chat app: the bot sends a login link, and the person signs the bot's computer in to a model provider from a phone or any computer, with no terminal (`pots page login`, or `pots login --link`). Pots runs on pi 1.5.2 (was 1.5.0), Effect 4.1.4 and ws 8.22.2; MCP servers work better: a script no longer fails because of one server's schema, and large or unusual server replies no longer hang or slow down.

@@ -27,7 +27,7 @@ Never ask for a secret in a chat message, and never write your own page for one.
 
 | Kind | Example | Who writes it |
 |---|---|---|
-| Display page | A report, a plan, tables, charts. Only to read | You, freely. The kit's style saves time |
+| Display page | A report, a plan, tables, charts, a calculator. To read and explore | You, freely, in the best form for each piece of information. The kit saves time |
 | Answer page | Feedback, choices, text, a comment on a section, approve or reject | You, with the kit's components, or fully your own. Change the style and layout as you like: the components are a start, not a limit |
 | Password page | A token for an app | Pots. You choose only the text on it, the keys and the file |
 
@@ -54,9 +54,169 @@ pots page list                                    # your pages, their links, whe
 - Turn link previews off when you post a link (the channel skills say how). A platform's preview opens the link from its own servers.
 - With a Quick Tunnel, the address changes each time the gateway starts, so links sent before stop working; `pots page link` again gives a new link to the same page.
 
-## Write a page quickly with the kit
+## The kit
 
-Pots serves a kit for pages: `pots.css`, a clean look for phones and computers, light and dark, and `pots.js`, which sends a form's answers to Pots. Link them relative to the page's link, not its folder on disk: from a page's `index.html`, also in `keep/`, use `../../__pots/kit/`, and add one `../` for each subfolder of the page. A complete answer page:
+Pots serves a kit for pages, all optional:
+
+- `pots.css`: a calm look for reading, light and dark. One column on a phone; on a computer, the contents at the side and blocks that use the width.
+- `pots-ui.js`: charts from tables, tabs, sorting, filtering, and contents that follow the reader. Offline, and it works under the private-page CSP (see Content-Security-Policy).
+- `pots.js`: sends a form's answers to Pots.
+
+Link them relative to the page's link, not its folder on disk: from a page's `index.html`, also in `keep/`, use `../../__pots/kit/`, and add one `../` for each subfolder of the page. The source is in [../../kit/](../../kit/pots.css).
+
+## Display pages
+
+A display page exists to get information across. For each piece of information, pick the form that a reader takes in fastest, the way a good report or a Claude artifact does: a number, a chart, a table, a timeline, a calculator. When a sentence says it faster, write the sentence. Add no decoration for its own sake.
+
+**The text.** Write the page's text in plain words, in the style of ASD-STE100 Simplified Technical English applied to whatever language the reader uses: short sentences, one idea per sentence, common words, active voice. Use the reader's own words for things (the terms they already use), and do not invent new terms. Put the answer first: the title, one sentence with the conclusion, then two to four key numbers.
+
+**The form.** A guide, not a rule:
+
+| Information | A good form | With the kit |
+|---|---|---|
+| The answer, the conclusion | One sentence under the title, then 2 to 4 key numbers | `<header>`, `pots-stats` |
+| How much each of a few things is | A sorted bar chart, with a line for the limit or the target | `<table data-pots-chart="bar" data-marks="10000 Budget">` |
+| Parts of a whole | One bar in parts, with percentages | `data-pots-chart="stack"` |
+| Change over time | A line chart | `data-pots-chart="line"` |
+| Many records to look up | A table; past a dozen rows, sorting and a search box | `data-pots-sort`, `data-pots-filter` |
+| Many items × many properties, on a phone | One property at a time, or one card per row | `data-pots-tabs`, `table.pots-stack` |
+| A plan by day or week | A calendar: side by side on a computer, one day at a time on a phone | `pots-cols` with `data-pots-tabs="phone"` |
+| Steps in order | Numbered steps; a timeline for things at the same time | `ol.pots-steps`, `ul.pots-steps` |
+| A list to work through | A checklist that counts what is left | Your own script |
+| "What if…" | A slider or a field, and the result changes at once | Your own script |
+| A structure, a flow, how something works | An inline SVG drawing, with words on the arrows | Your own SVG |
+| A choice between options | Side by side, the differences marked, then an answer form | `pots-cols`, an answer form |
+| Details that only some readers need | Folded away | `<details>` |
+
+**The layout.** Use the device. On a computer, put text next to its chart, cards in columns and calendars side by side; on a phone, one column. Text keeps a comfortable line length; `pots-wide` lets a block use the full width. The page itself never scrolls sideways; a wide table scrolls inside itself.
+
+### What the kit gives
+
+- Plain HTML already looks right: headings, lists, tables, code, quotes, images, `<details>`.
+- Layout: `pots-cols` (side by side on a computer, one under the other on a phone), `pots-grid` (cards in as many columns as fit), `pots-row` (boxes that wrap), `pots-wide`. `<nav class="pots-toc">` after the header: links to the sections, at the side on a computer and a row at the top on a phone.
+- Blocks: `pots-stats` with `pots-stat` (`<div class="pots-stat"><b>€8,400</b><span>total</span></div>`), `pots-card`, `pots-note`, `pots-steps`, `pots-kv` (a `<dl>` of names and values), `pots-badge`.
+- Colours with a meaning: `pots-good`, `pots-warn`, `pots-bad` on a note, a badge, a stat or a chart row; `pots-info` on a badge. Text: `pots-muted`, `pots-num` (a right-aligned number cell). `pots-hl` highlights anything your script points at.
+- In your own CSS, use the kit's colours so dark mode works: `--pots-bg`, `--pots-soft`, `--pots-text`, `--pots-muted`, `--pots-line`, `--pots-accent`, `--pots-accent-soft`, `--pots-good`, `--pots-warn`, `--pots-bad` (each also `-soft`), and the chart colours `--pots-c1` to `--pots-c7`.
+- With `pots-ui.js`:
+  - `<table data-pots-chart="bar|stack|line">` becomes a chart. Bar and stack: the first column names the rows, the second gives the values. Line: each row is a point on the x axis, each number column a line. `data-marks="380 You; 300 Her"` draws reference lines on bars, `data-max` or `data-min` fixes the scale, a `<caption>` becomes the title, and `data-pots-show="…"` names the button that shows the numbers. The table stays on the page, folded, so the numbers are one tap away.
+  - `<div data-pots-tabs>` with `<section data-tab="Name">` children shows one at a time; `data-pots-tabs="phone"` does so only on a phone and shows all of them on a computer. `data-current` on a section opens it first; `box.potsSelect(i)` opens one from your script, and the box sends a `pots-tab` event.
+  - `<table data-pots-sort>`: a click on a column header sorts it. `<input type="search" data-pots-filter="#list">` hides the rows of that table, or its `[data-pots-item]` elements, that do not contain the text, and sends a `pots-filter` event.
+
+### Your own components
+
+When a form in the table above has no kit part, write it: a calendar, a checklist, a calculator, a diagram. Do it when it lets the reader see or try something that text cannot show; else write the sentence.
+
+- Write the full content in the HTML first, so the page reads well without your script, for example in a phone's reader mode or when the script fails. The script adds the interaction.
+- Put the script in a file of the page, such as `cost.js`, loaded with `defer`. Then the page works under the private-page CSP.
+- Set text with `textContent`, never `innerHTML`, and keep nothing in `localStorage` (see One browser origin).
+- Use the kit's colour variables, and test it with the mouse, a finger and the keyboard.
+
+### An example
+
+A page that compares three cities for a team trip, in `pages/offsite/`:
+
+```html
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'self'">
+  <title>Team offsite: where and what it costs</title>
+  <link rel="stylesheet" href="../../__pots/kit/pots.css">
+  <script src="../../__pots/kit/pots-ui.js" defer></script>
+  <script src="cost.js" defer></script>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Team offsite: where and what it costs</h1>
+    <p>Lisbon is the best choice. It costs €8,400 for 12 people, €1,600 under the budget.</p>
+    <p class="pots-muted">Prices from 16 November. Flight prices change each day.</p>
+  </header>
+  <nav class="pots-toc"><a href="#cities">Cities</a> <a href="#days">The three days</a> <a href="#size">Group size</a></nav>
+
+  <div class="pots-stats pots-wide">
+    <div class="pots-stat"><b>€8,400</b><span>total</span></div>
+    <div class="pots-stat pots-good"><b>€1,600</b><span>under the budget</span></div>
+    <div class="pots-stat"><b>12</b><span>people</span></div>
+  </div>
+
+  <h2 id="cities">Three cities compared</h2>
+  <div class="pots-cols pots-wide">
+    <table data-pots-chart="bar" data-marks="10000 Budget">
+      <caption>Total cost for 12 people</caption>
+      <thead><tr><th>City</th><th class="pots-num">Cost</th></tr></thead>
+      <tbody>
+        <tr><td>Lisbon</td><td class="pots-num">€8,400</td></tr>
+        <tr><td>Porto</td><td class="pots-num">€7,900</td></tr>
+        <tr class="pots-bad"><td>Berlin</td><td class="pots-num">€11,200</td></tr>
+      </tbody>
+    </table>
+    <div>
+      <p>Porto costs less. But two of our offices have no direct flights to Porto.</p>
+      <p>Berlin is over the budget. Hotels in Berlin cost more in March.</p>
+    </div>
+  </div>
+
+  <h2 id="days">The three days</h2>
+  <div class="pots-cols pots-wide" data-pots-tabs="phone">
+    <section data-tab="Thursday"><h3>Thursday</h3>
+      <ol class="pots-steps"><li>Flights arrive before 14:00</li><li>Dinner together at 19:30</li></ol></section>
+    <section data-tab="Friday"><h3>Friday</h3>
+      <ol class="pots-steps"><li>Planning for next year, 9:00 to 12:30</li><li>Free afternoon</li></ol></section>
+    <section data-tab="Saturday"><h3>Saturday</h3>
+      <ol class="pots-steps"><li>Check out by 11:00</li><li>Flights leave from 13:00</li></ol></section>
+  </div>
+
+  <h2 id="size">If more people come</h2>
+  <p id="cost-text">Each extra person adds about €700. With 14 people, the total is €9,800. This is still under the budget.</p>
+  <div id="cost" hidden>
+    <label>People <input type="range" id="people" min="8" max="16" value="12"></label>
+    <p class="pots-note" id="cost-result" aria-live="polite"></p>
+  </div>
+</main>
+</body>
+</html>
+```
+
+`cost.js`, a small calculator. Without it, the sentence above it says the same:
+
+```js
+const people = document.getElementById("people");
+const result = document.getElementById("cost-result");
+function show() {
+  const total = 8400 + (people.value - 12) * 700;
+  const left = 10000 - total;
+  result.textContent = `${people.value} people: €${total.toLocaleString("en")}. ` +
+    (left >= 0 ? `€${left.toLocaleString("en")} under the budget.` : `€${(-left).toLocaleString("en")} over the budget.`);
+  result.classList.toggle("pots-warn", left < 0);
+}
+people.addEventListener("input", show);
+show();
+document.getElementById("cost-text").hidden = true;
+document.getElementById("cost").hidden = false;
+```
+
+### Look at it before you send it
+
+Take screenshots of the page as a phone, as a computer and in dark mode, and look at them. Check that nothing overflows or overlaps, the page does not scroll sideways, the charts and your components drew, and the text is easy to read. Fix what is wrong, then send the link.
+
+A headless browser needs no screen, so use `bash`. Open the page through Pots on this computer, at `http://127.0.0.1:<pagePort>` (`pagePort` in `~/.pots/settings.json`) plus the path of its link (`/p/<token>/`), so the kit loads. With Chrome or Chromium (`google-chrome`, `chromium`; install one if neither is there), each shot in a new temporary profile:
+
+```sh
+url="http://127.0.0.1:<pagePort>/p/<token>/"
+shot() { p=$(mktemp -d); google-chrome --headless=new --hide-scrollbars --user-data-dir="$p" --virtual-time-budget=3000 "$@" "$url"; rm -rf "$p"; }
+shot --window-size=390,2400 --screenshot=/tmp/page-phone.png
+shot --window-size=1440,1800 --screenshot=/tmp/page-computer.png
+shot --window-size=390,2400 --force-dark-mode --blink-settings=preferredColorScheme=0 --screenshot=/tmp/page-dark.png
+```
+
+Make the height big enough for the whole page. Then read the images. If the page is long, look at it in parts, or use Playwright when it is installed, which takes full-page shots and shows script errors.
+
+## Answer pages
+
+The kit's components make an answer page quickly. A complete one:
 
 ```html
 <!doctype html>
@@ -135,7 +295,7 @@ How pots.js sends: it takes the page's version that Pots sent with the HTML file
 
 ### Other classes and attributes
 
-- Plain HTML already looks right: headings, lists, tables (they scroll sideways on a phone), code, quotes, images. Classes: `pots-card` (a box), `pots-note` (a highlighted note; with `pots-warn`, a warning), `pots-row` (boxes side by side that wrap on a phone), `pots-badge` (with `pots-good` or `pots-bad`), `pots-muted`, `pots-num` (a right-aligned table cell for numbers), `pots-secondary` (a quieter button).
+- Everything in "What the kit gives" works on an answer page too. A choice can have an explanation on a line of its own: `<label><input type="radio" name="target" value="test"> Test <small>Nobody outside the team sees it</small></label>`. `pots-secondary` is a quieter button.
 - `<body data-pots-refresh="5">`: every 5 seconds the page asks Pots whether any of its files changed, and reloads when one did; when the person has started to fill a form, it shows "This page has changed" with a Reload button instead. Use it for progress pages. A Quick Tunnel cannot push to the browser (no Server-Sent Events), so pages poll.
 - Text that other people wrote (comments, names, messages) must never become HTML: someone's `<script>` would run on the page. Write it into a JSON file next to the page and let the kit show it as text:
   ```html
@@ -145,7 +305,7 @@ How pots.js sends: it takes the page's version that Pots sent with the HTML file
   </div>
   ```
   With `comments.json` = `{"updated": "10:02", "items": [{"who": "Alice", "text": "Looks good"}]}`, the first child of a `data-pots-list` repeats for each item. pots.js sets only `textContent`, never `innerHTML`. If you write such text into HTML yourself, escape `&`, `<`, `>` and `"`.
-- `window.PotsKit.submit(answers)` sends answers your own script built, with the same version, submission ID and retries; it resolves `{ok: true}` or `{ok: false, status, message}`. `PotsKit.collect(form)` gives a kit form's answers without sending them. The kit's source is [../../kit/pots.js](../../kit/pots.js) and [../../kit/pots.css](../../kit/pots.css).
+- `window.PotsKit.submit(answers)` sends answers your own script built, with the same version, submission ID and retries; it resolves `{ok: true}` or `{ok: false, status, message}`. `PotsKit.collect(form)` gives a kit form's answers without sending them. The kit's source is [../../kit/pots.js](../../kit/pots.js), [../../kit/pots-ui.js](../../kit/pots-ui.js) and [../../kit/pots.css](../../kit/pots.css).
 
 ### Fully custom pages
 

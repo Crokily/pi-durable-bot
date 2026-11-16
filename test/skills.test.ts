@@ -174,6 +174,7 @@ describe("the skills that come with Pots", () => {
       expect(existsSync(join(installed, "skills", "slack-channel", "slack-app-manifest.yaml"))).toBe(true);
       expect(readFileSync(join(installed, "kit", "pots.js"), "utf8")).toBe(readFileSync(join(repo, "kit", "pots.js"), "utf8"));
       expect(readFileSync(join(installed, "kit", "pots.css"), "utf8")).toBe(readFileSync(join(repo, "kit", "pots.css"), "utf8"));
+      expect(readFileSync(join(installed, "kit", "pots-ui.js"), "utf8")).toBe(readFileSync(join(repo, "kit", "pots-ui.js"), "utf8"));
       // The desktop page's script, noVNC, and noVNC's license texts.
       for (const file of ["desktop.js", "desktop.css", "novnc.js", "novnc/LICENSE.txt", "novnc/LICENSE.MPL-2.0", "novnc/LICENSE.pako"]) {
         expect(readFileSync(join(installed, "kit", "desktop", file), "utf8"), file).toBe(readFileSync(join(repo, "kit", "desktop", file), "utf8"));
@@ -200,6 +201,60 @@ describe("the skills that come with Pots", () => {
     },
     120_000,
   );
+});
+
+describe("the pages skill", () => {
+  const text = readFileSync(join(repo, "skills", "pages", "SKILL.md"), "utf8");
+  const css = readFileSync(join(repo, "kit", "pots.css"), "utf8");
+  const ui = readFileSync(join(repo, "kit", "pots-ui.js"), "utf8");
+  const display = text.slice(text.indexOf("## Display pages"), text.indexOf("## Answer pages"));
+
+  it("asks for plain words in the reader's own terms", () => {
+    expect(display).toContain(
+      "Write the page's text in plain words, in the style of ASD-STE100 Simplified Technical English applied to whatever language the reader uses: short sentences, one idea per sentence, common words, active voice. Use the reader's own words for things (the terms they already use), and do not invent new terms.",
+    );
+  });
+
+  it("pairs kinds of information with a form, and says how to write a component of its own", () => {
+    for (const form of ["bar chart", "Parts of a whole", "line chart", "sorting and a search box", "A calendar", "Numbered steps", "A checklist", "A slider", "SVG", "Folded away"]) expect(display, form).toContain(form);
+    expect(display).toContain("When a sentence says it faster, write the sentence.");
+    expect(display).toContain("Write the full content in the HTML first, so the page reads well without your script");
+    expect(display).toContain("Put the script in a file of the page");
+    expect(display).toContain("On a computer, put text next to its chart");
+  });
+
+  it("has an example display page that loads the kit, keeps its script in a file and uses only what the kit has", () => {
+    const html = /```html\n([\s\S]*?)```/.exec(display)![1]!;
+    const script = /```js\n([\s\S]*?)```/.exec(display)![1]!;
+    expect(html).toContain('<link rel="stylesheet" href="../../__pots/kit/pots.css">');
+    expect(html).toContain('<script src="../../__pots/kit/pots-ui.js" defer></script>');
+    expect(html).toContain('<script src="cost.js" defer></script>');
+    expect(html).toContain('http-equiv="Content-Security-Policy"');
+    expect(html).not.toMatch(/<script>|<script(?![^>]*\bsrc=)[^>]*>|\son[a-z]+=/);
+    for (const name of new Set([...html.matchAll(/class="([^"]+)"/g)].flatMap((match) => match[1]!.split(" ")))) expect(css, name).toContain(`.${name}`);
+    for (const attribute of new Set([...html.matchAll(/\b(data-pots-[a-z]+|data-tab|data-marks)=/g)].map((match) => match[1]!))) expect(ui, attribute).toContain(attribute);
+    for (const id of [...script.matchAll(/getElementById\("([^"]+)"\)/g)].map((match) => match[1]!)) expect(html, id).toContain(`id="${id}"`);
+    expect(script).toContain("textContent");
+    expect(script).not.toContain("innerHTML");
+    expect(text).not.toMatch(/meal|Coly/i);
+  });
+
+  it("says how to take screenshots as a phone, as a computer and in dark mode, each with a new profile", () => {
+    const check = text.slice(text.indexOf("### Look at it before you send it"), text.indexOf("## Answer pages"));
+    expect(check).toContain("--headless=new");
+    expect(check).toContain('--user-data-dir="$p"');
+    expect(check).toContain("--window-size=390,");
+    expect(check).toContain("--window-size=1440,");
+    expect(check).toContain("--force-dark-mode");
+    expect(check).toContain("http://127.0.0.1:<pagePort>");
+    expect(check).toContain("use `bash`");
+  });
+
+  it("names every kit file it tells to link, and each is in the kit", () => {
+    const files = new Set([...text.matchAll(/__pots\/kit\/([\w.-]+\.(?:css|js))/g)].map((match) => match[1]!));
+    expect([...files].sort()).toEqual(["pots-ui.js", "pots.css", "pots.js"]);
+    for (const file of files) expect(existsSync(join(repo, "kit", file)), file).toBe(true);
+  });
 });
 
 describe("the prompt", () => {

@@ -110,7 +110,7 @@ When it speaks, it speaks like a teammate: in the right channel or thread, in it
 
 ### 🪟 Its own pages
 
-Some things do not fit in a chat message. For a plan, a report or a dashboard, the bot writes a web page and sends a link. A page can ask, too: people choose, comment, fill in, approve or reject on it, and each answer wakes the bot at once.
+Some things do not fit in a chat message. For a plan, a report or a dashboard, the bot writes a web page and sends a link. It picks the best form for each piece of information (a chart, a calendar, a table to sort and search, a calculator), uses the width of a computer and one column on a phone, and looks at the page before it sends it. A page can ask, too: people choose, comment, fill in, approve or reject on it, and each answer wakes the bot at once.
 
 - **Buttons and forms in the chat.** On Slack and Discord the bot sends the platform's own buttons, menus and forms; on Telegram, inline buttons. A click wakes it within a second, and a form opens at once.
 - **A password page for secrets.** When the bot needs an API key from you, it sends a one-time link to a page of Pots' own. You type the key there. It goes into a file in the secrets folder, never into the chat, the log or a trace.

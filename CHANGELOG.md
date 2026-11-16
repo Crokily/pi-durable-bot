@@ -2,6 +2,20 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
+## Unreleased
+
+Pages get information across better: the bot picks the best form for each piece of information (a chart, a calendar, a table to sort and search, a calculator), uses the width of a computer and one column on a phone, and looks at the page before it sends it.
+
+### Added
+- **`pots-ui.js` in the page kit**, optional and offline. A table with `data-pots-chart="bar"`, `"stack"` or `"line"` becomes a bar chart (with reference lines from `data-marks`), one bar in parts with percentages, or a line chart, and the table stays one tap away. `data-pots-tabs` shows one panel at a time (`"phone"`: only on a phone), `data-pots-sort` sorts a table by a click on a column header, `data-pots-filter` hides rows that do not match a search box, and `<nav class="pots-toc">` marks the section on screen. It sets only text, never HTML, and works under the private-page CSP.
+
+### Changed
+- **A new stylesheet for pages (`pots.css`).** A calm white or dark background, a comfortable line length, and system fonts. On a computer, contents at the side and blocks that use the width; on a phone, one column, and a wide table scrolls inside itself, never the page. New classes: `pots-cols`, `pots-grid`, `pots-wide`, `pots-stats`, `pots-steps`, `pots-kv`, `pots-toc`, `table.pots-stack` (one card per row on a phone), `pots-info`, chart colours `--pots-c1` to `--pots-c7`. Every class and colour variable of the first stylesheet still works, so pages need no change.
+- **The `pages` skill on display pages.** A table that pairs kinds of information with their best form, when and how to write a small component of the page's own (the content complete in the HTML, the script in a file), a layout that adapts to the device, an example page, and how to take headless screenshots as a phone, as a computer and in dark mode before sending. Page text is in plain words, in the style of ASD-STE100 Simplified Technical English in the reader's language, with the reader's own terms.
+
+### Fixed
+- **A choice with an explanation on an answer page.** A label with a title and a line under it, such as `<label><input type="radio"> Test <small>Nobody sees it</small></label>`, was squeezed into columns; the explanation now goes under the title.
+
 ## 0.8.3 (2026-11-16)
 
 Sign in to a model from a chat app: the bot sends a login link, and the person signs the bot's computer in to a model provider from a phone or any computer, with no terminal (`pots page login`, or `pots login --link`). Pots runs on pi 1.5.2 (was 1.5.0), Effect 4.1.4 and ws 8.22.2; MCP servers work better: a script no longer fails because of one server's schema, and large or unusual server replies no longer hang or slow down.

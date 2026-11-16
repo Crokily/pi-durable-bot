@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 
 const source = readFileSync(new URL("../kit/pots.js", import.meta.url), "utf8");
 const css = readFileSync(new URL("../kit/pots.css", import.meta.url), "utf8");
+const ui = readFileSync(new URL("../kit/pots-ui.js", import.meta.url), "utf8");
 
 /** The kit is plain JavaScript, with no types. */
 type Kit = any;
@@ -225,5 +226,53 @@ describe("the page kit", () => {
   it("styles light and dark, and loads nothing from elsewhere", () => {
     expect(css).toMatch(/@media \(prefers-color-scheme: dark\)/);
     expect(css).not.toMatch(/@import|url\(/);
+  });
+
+  it("keeps every class and colour of the first stylesheet, so pages written for it look right", () => {
+    for (const name of ["pots-card", "pots-note", "pots-warn", "pots-row", "pots-badge", "pots-good", "pots-bad", "pots-muted", "pots-num", "pots-secondary", "pots-approve", "pots-comment", "pots-choice", "pots-banner"])
+      expect(css, name).toContain(`.${name}`);
+    for (const name of ["--pots-bg", "--pots-surface", "--pots-text", "--pots-muted", "--pots-border", "--pots-accent", "--pots-accent-soft", "--pots-code-bg", "--pots-radius", "--pots-font", "--pots-mono"])
+      expect(css, name).toContain(`${name}:`);
+    for (const selector of ["[data-pots-status]", '[data-state="done"]', '[data-pots-state="done"]', "[data-pots-error]"]) expect(css, selector).toContain(selector);
+  });
+
+  it("styles the parts that pots-ui.js draws, and lays a choice's explanation under its label", () => {
+    for (const name of ["pots-tabbar", "pots-off", "pots-chart", "pots-hbars", "pots-fill", "pots-mark", "pots-stackbar", "pots-legend", "pots-data", "pots-sort", "pots-hide", "pots-toc", "pots-cols", "pots-stats", "pots-wide"])
+      expect(css, name).toContain(`.${name}`);
+    for (const name of ["pots-tabbar", "pots-off", "pots-chart", "pots-hbars", "pots-fill", "pots-mark", "pots-stackbar", "pots-legend", "pots-data", "pots-sort", "pots-hide"]) expect(ui, name).toContain(name);
+    // The first stylesheet made a choice a flex row, which squeezed a title and its explanation into columns.
+    expect(css).toMatch(/label:has\(> input\[type="radio"\]\)[^{]*\{[^}]*display: block;/);
+    expect(css).toMatch(/> :is\(small, \.pots-muted\) \{\s*display: block;/);
+  });
+});
+
+describe("the page helper", () => {
+  /** pots-ui.js run as a browser runs it, before the page has loaded, with only what it touches at once. */
+  function loadUi(lang: string) {
+    const context: Record<string, unknown> = {
+      document: { documentElement: { lang }, readyState: "loading", addEventListener: () => {} },
+      Intl,
+    };
+    context.window = context;
+    runInNewContext(ui, context);
+    return context.PotsUI as { num: (text: string) => number };
+  }
+
+  it("reads numbers as people write them in table cells", () => {
+    const { num } = loadUi("en");
+    expect(num("€11,200")).toBe(11200);
+    expect(num("-3.5 kg")).toBe(-3.5);
+    expect(num("约 380 克")).toBe(380);
+    expect(num("n/a")).toBeNaN();
+  });
+
+  it("starts also when the page's language tag is not valid", () => {
+    expect(loadUi("not a language!").num("12")).toBe(12);
+  });
+
+  it("keeps nothing in the browser, writes no HTML from text, and loads nothing", () => {
+    for (const word of ["localStorage", "sessionStorage", "indexedDB", "document.cookie", "innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function", "fetch(", "XMLHttpRequest", "import(", "http://", "https://"])
+      expect(ui.replace('"http://www.w3.org/2000/svg"', ""), word).not.toContain(word);
+    expect(ui).toContain("textContent");
   });
 });

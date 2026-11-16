@@ -1,45 +1,70 @@
 /*
- * Pots page kit: a plain, readable look for pages that bots write. Phone first, light and dark. Plain HTML looks right
- * without classes; the few classes are listed in the pages skill (skills/pages/SKILL.md).
+ * Pots page kit: the stylesheet. Link it from a page as ../../__pots/kit/pots.css.
+ * Reading first: one calm background, a comfortable line length, one column on a phone and the full width of a computer
+ * (contents at the side, text next to its chart, cards in columns). System fonts only, light and dark.
+ * pots-ui.js adds the moving parts (charts from tables, tabs, sorting, filtering); everything reads without it.
  */
 
 :root {
   color-scheme: light dark;
-  --pots-bg: #f7f7f5;
-  --pots-surface: #ffffff;
-  --pots-text: #1d1d1f;
-  --pots-muted: #5f6368;
-  --pots-border: #dcdcd7;
-  --pots-accent: #1f7a70;
+  --pots-bg: #ffffff;
+  --pots-soft: #f4f5f7;
+  --pots-text: #1a2230;
+  --pots-muted: #5b6576;
+  --pots-line: #e2e5ea;
+  --pots-accent: #2f5bd8;
+  --pots-accent-soft: #eaf0ff;
   --pots-accent-text: #ffffff;
-  --pots-accent-soft: #e3f1ee;
-  --pots-good: #1e7d3a;
-  --pots-good-soft: #e5f4e9;
-  --pots-bad: #b3261e;
-  --pots-bad-soft: #fbe9e7;
-  --pots-warn-soft: #fff4d6;
-  --pots-code-bg: #efefeb;
-  --pots-radius: 10px;
-  --pots-font: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
+  --pots-good: #18794e;
+  --pots-good-soft: #e6f4ec;
+  --pots-warn: #8a5300;
+  --pots-warn-soft: #fff3e0;
+  --pots-bad: #c2362b;
+  --pots-bad-soft: #fdecea;
+  /* chart colours, in order */
+  --pots-c1: #2f5bd8;
+  --pots-c2: #e07a3f;
+  --pots-c3: #2a9d8f;
+  --pots-c4: #a259c4;
+  --pots-c5: #c9a227;
+  --pots-c6: #d4508a;
+  --pots-c7: #8a94a6;
+  --pots-radius: 12px;
+  --pots-measure: 42rem;
+  --pots-width: 64rem;
+  --pots-toc: 12rem;
+  --pots-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", "PingFang SC", "Hiragino Sans GB",
+    "Noto Sans CJK SC", "Source Han Sans SC", "Microsoft YaHei", "Noto Sans", Arial, sans-serif;
   --pots-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  /* old names, kept for pages written for the first kit */
+  --pots-surface: var(--pots-bg);
+  --pots-border: var(--pots-line);
+  --pots-code-bg: var(--pots-soft);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --pots-bg: #141516;
-    --pots-surface: #1d1f21;
-    --pots-text: #e8e8e6;
-    --pots-muted: #a2a6ab;
-    --pots-border: #34373a;
-    --pots-accent: #4fb3a5;
-    --pots-accent-text: #0c1a18;
-    --pots-accent-soft: #1b3330;
-    --pots-good: #6cc58a;
-    --pots-good-soft: #18301f;
-    --pots-bad: #f08a80;
-    --pots-bad-soft: #3a1f1c;
-    --pots-warn-soft: #3a3118;
-    --pots-code-bg: #26292c;
+    --pots-bg: #15171b;
+    --pots-soft: #1f2228;
+    --pots-text: #e6e8ec;
+    --pots-muted: #a0a7b4;
+    --pots-line: #2e323a;
+    --pots-accent: #8fb0ff;
+    --pots-accent-soft: #1e2a4a;
+    --pots-accent-text: #0f1420;
+    --pots-good: #6fd3a0;
+    --pots-good-soft: #15291e;
+    --pots-warn: #ffc37a;
+    --pots-warn-soft: #33270f;
+    --pots-bad: #ff8f84;
+    --pots-bad-soft: #3a1c1c;
+    --pots-c1: #8fb0ff;
+    --pots-c2: #f5a26b;
+    --pots-c3: #5cc8b8;
+    --pots-c4: #c79be0;
+    --pots-c5: #e3c35a;
+    --pots-c6: #ec8db6;
+    --pots-c7: #9aa3b2;
   }
 }
 
@@ -52,28 +77,54 @@
 html {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
+  background: var(--pots-bg);
 }
 
 body {
   margin: 0;
-  padding: 16px;
   background: var(--pots-bg);
   color: var(--pots-text);
-  font: 17px/1.55 var(--pots-font);
+  font: 17px/1.65 var(--pots-font);
   overflow-wrap: break-word;
+  text-autospace: normal;
 }
+body:lang(zh),
+body:lang(ja),
+body:lang(ko) {
+  line-height: 1.75;
+}
+
+/* ---- The page: one column on a phone; on a computer the contents sit at the side and blocks use the width ---- */
 
 main,
 .pots-page {
-  max-width: 44rem;
+  width: 100%;
+  max-width: calc(var(--pots-width) + 64px);
   margin: 0 auto;
-  padding-bottom: 48px;
+  padding: 24px max(16px, env(safe-area-inset-right, 0px)) 72px max(16px, env(safe-area-inset-left, 0px));
+}
+@media (min-width: 720px) {
+  main,
+  .pots-page {
+    padding: 40px 32px 96px;
+  }
+  .pots-toc {
+    margin: 0 -32px 20px;
+    padding: 6px 28px;
+  }
 }
 
-@media (min-width: 720px) {
-  body {
-    padding: 32px 24px;
-  }
+/* Text keeps a comfortable line length; tables, charts, grids and columns use the full width. */
+:is(main, .pots-page, section, article) > :is(p, ul, ol, dl, blockquote, h1, h2, h3, h4, details, header, address),
+:is(main, .pots-page) > header > * {
+  max-width: var(--pots-measure);
+}
+:is(main, .pots-page, section, article) > .pots-wide {
+  max-width: none;
+}
+
+[id] {
+  scroll-margin-top: 64px;
 }
 
 /* ---- Text ---- */
@@ -82,43 +133,68 @@ h1,
 h2,
 h3,
 h4 {
-  line-height: 1.25;
-  margin: 1.6em 0 0.5em;
+  line-height: 1.3;
+  margin: 1.8em 0 0.5em;
+  text-wrap: balance;
 }
 h1 {
-  font-size: 1.7rem;
-  margin-top: 0.4em;
+  font-size: clamp(1.6rem, 1.2rem + 1.8vw, 2.2rem);
+  font-weight: 750;
+  line-height: 1.2;
+  margin-top: 0.2em;
 }
 h2 {
   font-size: 1.3rem;
+  font-weight: 700;
+  margin-top: 2.4em;
 }
 h3 {
-  font-size: 1.1rem;
+  font-size: 1.06rem;
+  font-weight: 700;
+}
+h4 {
+  font-size: 1rem;
+}
+:is(h1, h2, h3, h4) small {
+  font-weight: 400;
+  color: var(--pots-muted);
 }
 p,
 ul,
 ol,
+dl,
 blockquote,
 pre,
 table,
 figure {
   margin: 0 0 1em;
 }
+p {
+  text-wrap: pretty;
+}
 ul,
 ol {
-  padding-left: 1.4em;
+  padding-left: 1.3em;
 }
 li + li {
-  margin-top: 0.25em;
+  margin-top: 0.3em;
+}
+li::marker {
+  color: var(--pots-muted);
 }
 a {
   color: var(--pots-accent);
-  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+b,
+strong {
+  font-weight: 650;
 }
 hr {
   border: 0;
-  border-top: 1px solid var(--pots-border);
-  margin: 2em 0;
+  border-top: 1px solid var(--pots-line);
+  margin: 2.4em 0;
 }
 img,
 svg,
@@ -127,28 +203,37 @@ canvas {
   max-width: 100%;
   height: auto;
 }
+figure {
+  margin: 0 0 1.4em;
+}
+figcaption {
+  margin-top: 8px;
+  font-size: 0.88em;
+  color: var(--pots-muted);
+}
 blockquote {
   margin-left: 0;
-  padding: 0.2em 0 0.2em 1em;
-  border-left: 3px solid var(--pots-border);
+  padding: 0.1em 0 0.1em 1em;
+  border-left: 3px solid var(--pots-line);
   color: var(--pots-muted);
 }
 code,
 kbd,
 pre {
   font-family: var(--pots-mono);
-  font-size: 0.9em;
+  font-size: 0.88em;
 }
 code {
-  background: var(--pots-code-bg);
-  padding: 0.1em 0.35em;
-  border-radius: 5px;
+  background: var(--pots-soft);
+  padding: 0.12em 0.4em;
+  border-radius: 6px;
 }
 pre {
-  background: var(--pots-code-bg);
-  padding: 12px 14px;
+  background: var(--pots-soft);
+  padding: 14px 16px;
   border-radius: var(--pots-radius);
   overflow-x: auto;
+  line-height: 1.5;
 }
 pre code {
   background: none;
@@ -158,50 +243,107 @@ small,
 .pots-muted {
   color: var(--pots-muted);
 }
+small {
+  font-size: 0.87em;
+}
 
-/* ---- Tables: they scroll sideways on a phone instead of squeezing ---- */
+/* The opening: <header> with <h1>, one sentence with the answer, and a quiet line of who and when. */
+:is(main, .pots-page) > header:first-child {
+  margin-bottom: 20px;
+}
+:is(main, .pots-page) > header:first-child > p:not(.pots-muted) {
+  font-size: 1.1em;
+}
+:is(main, .pots-page) > header:first-child > p.pots-muted {
+  font-size: 0.85em;
+}
 
-table {
-  display: block;
-  max-width: 100%;
+/* ---- Contents: <nav class="pots-toc"> in <main>, after the header ----
+   Phone: a row at the top of the screen that scrolls sideways. Computer: a list at the left that stays in view. */
+
+.pots-toc {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  gap: 2px;
   overflow-x: auto;
-  border-collapse: collapse;
-  font-size: 0.95em;
+  scrollbar-width: none;
+  margin: 0 -16px 20px;
+  padding: 6px 12px;
+  background: var(--pots-bg);
+  border-bottom: 1px solid var(--pots-line);
 }
-th,
-td {
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--pots-border);
-  text-align: left;
-  vertical-align: top;
+.pots-toc::-webkit-scrollbar {
+  display: none;
 }
-th {
-  font-weight: 600;
-  white-space: nowrap;
+.pots-toc a {
+  flex: none;
+  padding: 6px 10px;
+  border-radius: 8px;
+  color: var(--pots-muted);
+  font-size: 0.9em;
+  line-height: 1.4;
+  text-decoration: none;
 }
-td.pots-num,
-th.pots-num {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
+.pots-toc a:hover,
+.pots-toc a[aria-current="true"] {
+  color: var(--pots-text);
+  background: var(--pots-soft);
+}
+@media (min-width: 1080px) {
+  :is(main, .pots-page):has(> .pots-toc) {
+    max-width: calc(var(--pots-width) + var(--pots-toc) + 48px + 64px);
+    padding-left: calc(32px + var(--pots-toc) + 48px);
+  }
+  .pots-toc {
+    position: fixed;
+    top: 40px;
+    left: calc(max(0px, (100vw - (var(--pots-width) + var(--pots-toc) + 48px + 64px)) / 2) + 32px);
+    width: var(--pots-toc);
+    max-height: calc(100vh - 80px);
+    overflow-y: auto;
+    flex-direction: column;
+    margin: 0;
+    padding: 0 0 0 10px;
+    border-bottom: 0;
+    border-left: 1px solid var(--pots-line);
+  }
+  .pots-toc a {
+    padding: 5px 10px;
+    white-space: normal;
+  }
+  .pots-toc a[aria-current="true"] {
+    background: none;
+    color: var(--pots-accent);
+    box-shadow: -11px 0 0 -9px var(--pots-accent);
+  }
 }
 
-/* ---- Blocks ---- */
+/* ---- Layout blocks ---- */
 
-.pots-card {
-  background: var(--pots-surface);
-  border: 1px solid var(--pots-border);
-  border-radius: var(--pots-radius);
-  padding: 16px;
-  margin: 0 0 16px;
+/* Side by side on a computer, one under the other on a phone: text next to its chart, two lists, before and after. */
+.pots-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr));
+  gap: 8px 40px;
+  align-items: start;
+  margin: 0 0 1em;
 }
-.pots-note {
-  background: var(--pots-accent-soft);
-  border-radius: var(--pots-radius);
-  padding: 12px 16px;
-  margin: 0 0 16px;
+.pots-cols > * {
+  min-width: 0;
 }
-.pots-note.pots-warn {
-  background: var(--pots-warn-soft);
+/* Cards in as many columns as fit. */
+.pots-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 16rem), 1fr));
+  gap: 12px;
+  margin: 0 0 1.2em;
+}
+.pots-grid > *,
+.pots-cols > *,
+.pots-row > * {
+  margin: 0;
 }
 .pots-row {
   display: flex;
@@ -211,82 +353,648 @@ th.pots-num {
 .pots-row > * {
   flex: 1 1 12rem;
 }
+.pots-card {
+  border: 1px solid var(--pots-line);
+  border-radius: var(--pots-radius);
+  padding: 14px 16px;
+  margin: 0 0 12px;
+}
+.pots-card > :first-child,
+.pots-note > :first-child,
+.pots-cols > * > :first-child,
+[data-pots-tabs] > * > :first-child {
+  margin-top: 0;
+}
+.pots-card > :last-child,
+.pots-note > :last-child,
+.pots-cols > * > :last-child {
+  margin-bottom: 0;
+}
+
+/* Key numbers: <div class="pots-stats"><div class="pots-stat"><b>$229</b><span>a week for two</span></div>…</div> */
+.pots-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+  gap: 10px;
+  margin: 0 0 1.4em;
+}
+.pots-stat {
+  background: var(--pots-soft);
+  border-radius: var(--pots-radius);
+  padding: 12px 14px;
+  line-height: 1.4;
+}
+.pots-stat > :is(b, strong) {
+  display: block;
+  font-size: 1.6rem;
+  font-weight: 750;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+.pots-stat > span,
+.pots-stat > small {
+  display: block;
+  margin-top: 3px;
+}
+.pots-stat > span {
+  font-size: 0.92em;
+}
+.pots-stat.pots-good > :is(b, strong) {
+  color: var(--pots-good);
+}
+.pots-stat.pots-warn > :is(b, strong) {
+  color: var(--pots-warn);
+}
+.pots-stat.pots-bad > :is(b, strong) {
+  color: var(--pots-bad);
+}
+
+/* A note. Plain is blue; .pots-good, .pots-warn and .pots-bad colour it. */
+.pots-note {
+  background: var(--pots-accent-soft);
+  border-radius: var(--pots-radius);
+  padding: 12px 16px;
+  margin: 0 0 1em;
+}
+.pots-note.pots-good {
+  background: var(--pots-good-soft);
+}
+.pots-note.pots-warn {
+  background: var(--pots-warn-soft);
+}
+.pots-note.pots-bad {
+  background: var(--pots-bad-soft);
+}
+
+/* A label in a line. Grey; .pots-good, .pots-warn, .pots-bad and .pots-info colour it. */
 .pots-badge {
   display: inline-block;
-  padding: 0.1em 0.6em;
+  padding: 0.05em 0.55em;
   border-radius: 999px;
-  background: var(--pots-code-bg);
-  font-size: 0.85em;
+  background: var(--pots-soft);
+  color: var(--pots-muted);
+  font-size: 0.8em;
+  font-weight: 600;
+  line-height: 1.6;
+  vertical-align: 0.06em;
+  white-space: nowrap;
 }
 .pots-badge.pots-good {
   background: var(--pots-good-soft);
   color: var(--pots-good);
 }
+.pots-badge.pots-warn {
+  background: var(--pots-warn-soft);
+  color: var(--pots-warn);
+}
 .pots-badge.pots-bad {
   background: var(--pots-bad-soft);
   color: var(--pots-bad);
 }
+.pots-badge.pots-info {
+  background: var(--pots-accent-soft);
+  color: var(--pots-accent);
+}
 
-/* ---- Forms ---- */
+/* Steps in order: <ol class="pots-steps">. A timeline without numbers: <ul class="pots-steps">. */
+.pots-steps {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1.2em;
+  counter-reset: pots-step;
+}
+.pots-steps > li {
+  position: relative;
+  padding: 0 0 14px 40px;
+  margin: 0;
+  counter-increment: pots-step;
+}
+.pots-steps > li::before {
+  content: counter(pots-step);
+  position: absolute;
+  left: 0;
+  top: 0.15em;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--pots-soft);
+  color: var(--pots-text);
+  font-size: 0.8em;
+  font-weight: 700;
+  line-height: 1;
+}
+.pots-steps > li::after {
+  content: "";
+  position: absolute;
+  left: 12.5px;
+  top: calc(0.15em + 30px);
+  bottom: 4px;
+  width: 1px;
+  background: var(--pots-line);
+}
+.pots-steps > li:last-child {
+  padding-bottom: 0;
+}
+.pots-steps > li:last-child::after {
+  display: none;
+}
+ul.pots-steps > li::before {
+  content: "";
+  width: 11px;
+  height: 11px;
+  left: 7.5px;
+  top: 0.6em;
+  background: var(--pots-bg);
+  border: 2px solid var(--pots-accent);
+}
+ul.pots-steps > li::after {
+  top: calc(0.6em + 15px);
+}
+.pots-steps > li > :is(b, strong):first-child {
+  display: block;
+}
+
+/* Name and value pairs: <dl class="pots-kv"><dt>Rice</dt><dd>1 bowl</dd></dl> */
+.pots-kv {
+  display: grid;
+  grid-template-columns: minmax(2.5em, max-content) 1fr;
+  gap: 4px 14px;
+}
+.pots-kv > dt {
+  color: var(--pots-muted);
+}
+.pots-kv > dd {
+  margin: 0;
+}
+
+/* ---- Tables: hairline rows; a wide one scrolls inside itself, never the page ---- */
+
+table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.94em;
+  line-height: 1.55;
+  font-variant-numeric: tabular-nums;
+}
+th,
+td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--pots-line);
+  text-align: left;
+  vertical-align: top;
+}
+:is(th, td):first-child {
+  padding-left: 0;
+}
+:is(th, td):last-child {
+  padding-right: 0;
+}
+thead th {
+  font-size: 0.88em;
+  font-weight: 600;
+  color: var(--pots-muted);
+  white-space: nowrap;
+  border-bottom-color: color-mix(in srgb, var(--pots-text) 25%, transparent);
+}
+tbody th {
+  font-weight: 650;
+}
+tr:last-child > td {
+  border-bottom: 0;
+}
+td.pots-num,
+th.pots-num {
+  text-align: right;
+  white-space: nowrap;
+}
+/* A table that becomes one card per row on a phone. Give each cell its column name: <td data-label="Price">. */
+@media (max-width: 640px) {
+  table.pots-stack {
+    display: block;
+    overflow: visible;
+  }
+  table.pots-stack thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+  table.pots-stack :is(tbody, tr) {
+    display: block;
+  }
+  table.pots-stack tr {
+    border: 1px solid var(--pots-line);
+    border-radius: var(--pots-radius);
+    padding: 10px 14px;
+    margin: 0 0 8px;
+  }
+  table.pots-stack :is(td, th) {
+    display: grid;
+    grid-template-columns: 5.5em 1fr;
+    gap: 10px;
+    padding: 3px 0;
+    border: 0;
+    text-align: left;
+    white-space: normal;
+  }
+  table.pots-stack tr > :first-child {
+    display: block;
+    font-weight: 700;
+    padding-bottom: 4px;
+  }
+  table.pots-stack td:empty {
+    display: none;
+  }
+  table.pots-stack td[data-label]::before {
+    content: attr(data-label);
+    color: var(--pots-muted);
+    font-size: 0.88em;
+  }
+}
+
+/* ---- Folding: <details> for what only some readers need ---- */
+
+details:not(.pots-comment) {
+  border: 1px solid var(--pots-line);
+  border-radius: var(--pots-radius);
+  margin: 0 0 8px;
+  padding: 0 16px;
+}
+details:not(.pots-comment) > summary {
+  position: relative;
+  cursor: pointer;
+  list-style: none;
+  padding: 11px 26px 11px 0;
+  font-weight: 650;
+}
+details:not(.pots-comment) > summary::-webkit-details-marker {
+  display: none;
+}
+details:not(.pots-comment) > summary::after {
+  content: "";
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  margin-top: -5px;
+  border-right: 2px solid var(--pots-muted);
+  border-bottom: 2px solid var(--pots-muted);
+  transform: rotate(45deg);
+}
+details[open]:not(.pots-comment) > summary::after {
+  transform: translateY(3px) rotate(-135deg);
+}
+details[open]:not(.pots-comment) {
+  padding-bottom: 12px;
+}
+details:not(.pots-comment) > :last-child {
+  margin-bottom: 0;
+}
+details:not(.pots-comment) > summary :is(small, .pots-muted) {
+  font-weight: 400;
+}
+
+/* ---- Moving parts drawn by pots-ui.js ---- */
+
+/* Tabs: <div data-pots-tabs><section data-tab="Rice">…</section>…</div>. data-pots-tabs="phone": tabs on a phone only;
+   a computer shows every panel (lay them out with a class of your own, such as pots-cols). */
+.pots-tabbar {
+  display: flex;
+  gap: 2px;
+  width: fit-content;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+  margin: 0 0 14px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--pots-soft);
+}
+.pots-tabbar button {
+  flex: none;
+  min-height: 36px;
+  margin: 0;
+  padding: 5px 13px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  box-shadow: none;
+  color: var(--pots-muted);
+  font: 600 0.9rem/1.3 var(--pots-font);
+}
+.pots-tabbar button[aria-selected="true"] {
+  background: var(--pots-bg);
+  color: var(--pots-text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+[data-pots-tabs]:not([data-pots-tabs="phone"]) > .pots-off {
+  display: none;
+}
+@media (max-width: 719.98px) {
+  [data-pots-tabs="phone"] > .pots-off {
+    display: none;
+  }
+}
+@media (min-width: 720px) {
+  [data-pots-tabs="phone"] > .pots-tabbar {
+    display: none;
+  }
+}
+
+/* Charts: a <table data-pots-chart="bar|stack|line"> becomes a chart; its numbers stay one tap away. */
+.pots-chart {
+  container-type: inline-size;
+  margin: 0 0 1.4em;
+}
+.pots-chart > figcaption {
+  margin: 0 0 10px;
+  color: var(--pots-text);
+  font-size: 0.95em;
+  font-weight: 650;
+}
+.pots-chart details.pots-data {
+  margin-top: 10px;
+  border: 0;
+  padding: 0;
+}
+.pots-chart details.pots-data > summary {
+  display: inline-block;
+  padding: 2px 0;
+  color: var(--pots-muted);
+  font-size: 0.85em;
+  font-weight: 400;
+}
+.pots-chart details.pots-data > summary::after {
+  display: none;
+}
+.pots-hbars {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.pots-hbars > li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  column-gap: 12px;
+  margin: 0 0 10px;
+  line-height: 1.4;
+}
+.pots-hbars > li > .pots-v {
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+.pots-hbars .pots-track {
+  grid-column: 1 / -1;
+  position: relative;
+  height: 10px;
+  margin-top: 5px;
+  border-radius: 999px;
+  background: var(--pots-soft);
+}
+.pots-hbars .pots-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--v, 0%);
+  border-radius: 999px;
+  background: var(--pots-c1);
+}
+.pots-hbars li.pots-good .pots-fill {
+  background: var(--pots-good);
+}
+.pots-hbars li.pots-warn .pots-fill {
+  background: var(--pots-c2);
+}
+.pots-hbars li.pots-bad .pots-fill {
+  background: var(--pots-bad);
+}
+.pots-hbars li.pots-muted .pots-fill {
+  background: var(--pots-c7);
+}
+.pots-hbars li.pots-muted > .pots-l {
+  color: var(--pots-text);
+}
+.pots-hbars .pots-mark {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  left: var(--v);
+  width: 2px;
+  margin-left: -1px;
+  background: var(--pots-text);
+}
+.pots-hbars > li.pots-marks {
+  margin-bottom: 2px;
+}
+.pots-hbars > li.pots-marks .pots-track {
+  height: 1.4em;
+  margin-top: 0;
+  background: none;
+}
+.pots-hbars > li.pots-marks .pots-track > span {
+  position: absolute;
+  left: var(--v);
+  bottom: 0;
+  transform: translateX(-50%);
+  font-size: 0.8em;
+  font-weight: 650;
+  white-space: nowrap;
+}
+@container (min-width: 30rem) {
+  .pots-hbars {
+    display: grid;
+    grid-template-columns: minmax(0, max-content) minmax(6em, 1fr) max-content;
+    column-gap: 14px;
+    row-gap: 8px;
+  }
+  .pots-hbars > li {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: subgrid;
+    align-items: center;
+    margin: 0;
+  }
+  .pots-hbars > li > .pots-l {
+    max-width: 14em;
+  }
+  .pots-hbars .pots-track,
+  .pots-hbars > li.pots-marks .pots-track {
+    grid-column: 2;
+    grid-row: 1;
+    margin-top: 0;
+  }
+}
+.pots-stackbar {
+  display: flex;
+  height: 18px;
+  border-radius: 6px;
+  overflow: hidden;
+  gap: 2px;
+  margin: 0 0 12px;
+}
+.pots-stackbar > span {
+  flex: 0 0 var(--v);
+  min-width: 2px;
+}
+.pots-legend {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 13rem), 1fr));
+  gap: 4px 20px;
+  font-size: 0.92em;
+}
+.pots-legend > li {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+.pots-legend > li > i {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+.pots-legend .pots-v {
+  font-variant-numeric: tabular-nums;
+  color: var(--pots-muted);
+}
+.pots-line svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+  font: 12px var(--pots-font);
+}
+.pots-line .pots-axis {
+  stroke: var(--pots-line);
+}
+.pots-line text {
+  fill: var(--pots-muted);
+}
+.pots-line path {
+  fill: none;
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.pots-s1 { background: var(--pots-c1); stroke: var(--pots-c1); fill: var(--pots-c1); }
+.pots-s2 { background: var(--pots-c2); stroke: var(--pots-c2); fill: var(--pots-c2); }
+.pots-s3 { background: var(--pots-c3); stroke: var(--pots-c3); fill: var(--pots-c3); }
+.pots-s4 { background: var(--pots-c4); stroke: var(--pots-c4); fill: var(--pots-c4); }
+.pots-s5 { background: var(--pots-c5); stroke: var(--pots-c5); fill: var(--pots-c5); }
+.pots-s6 { background: var(--pots-c6); stroke: var(--pots-c6); fill: var(--pots-c6); }
+.pots-s7 { background: var(--pots-c7); stroke: var(--pots-c7); fill: var(--pots-c7); }
+.pots-line path.pots-s1, .pots-line path.pots-s2, .pots-line path.pots-s3, .pots-line path.pots-s4,
+.pots-line path.pots-s5, .pots-line path.pots-s6, .pots-line path.pots-s7 {
+  fill: none;
+}
+
+/* Sortable tables (data-pots-sort): the column headers become buttons. */
+th > button.pots-sort {
+  all: unset;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+th > button.pots-sort::after {
+  content: " ↕";
+  opacity: 0.4;
+}
+th[aria-sort="ascending"] > button.pots-sort::after {
+  content: " ↑";
+  opacity: 1;
+}
+th[aria-sort="descending"] > button.pots-sort::after {
+  content: " ↓";
+  opacity: 1;
+}
+/* What a filter (data-pots-filter) hides. */
+.pots-hide {
+  display: none !important;
+}
+/* A highlight a page's own script can put on anything. */
+.pots-hl {
+  background: var(--pots-accent-soft);
+  box-shadow: 0 0 0 2px var(--pots-accent);
+}
+
+/* ---- Forms (answer pages) ---- */
 
 form[data-pots] [data-pots-question],
 fieldset {
-  background: var(--pots-surface);
-  border: 1px solid var(--pots-border);
+  border: 1px solid var(--pots-line);
   border-radius: var(--pots-radius);
   padding: 14px 16px 16px;
-  margin: 0 0 16px;
+  margin: 0 0 14px;
   min-width: 0;
+  max-width: var(--pots-measure);
 }
 fieldset [data-pots-question],
 [data-pots-question] fieldset {
   border: 0;
   padding: 0;
-  background: none;
 }
 legend {
   float: left;
   width: 100%;
   padding: 0;
   margin: 0 0 10px;
-  font-weight: 600;
+  font-weight: 700;
 }
 legend + * {
   clear: both;
 }
-[data-pots-question] > h2:first-child,
-[data-pots-question] > h3:first-child,
-[data-pots-question] > h4:first-child {
+[data-pots-question] > :is(h2, h3, h4):first-child {
   margin-top: 0;
 }
-
 label {
   display: block;
-  font-weight: 600;
+  font-weight: 650;
 }
 label + label {
   margin-top: 8px;
 }
-
-/* A choice: the whole row is the tap target. */
+/* A choice: the whole row is the tap target; it can have a title and a line of explanation under it. */
 label:has(> input[type="radio"]),
 label:has(> input[type="checkbox"]),
 .pots-choice {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+  display: block;
+  position: relative;
   min-height: 48px;
-  padding: 10px 14px;
-  border: 1px solid var(--pots-border);
-  border-radius: var(--pots-radius);
-  background: var(--pots-bg);
+  padding: 11px 14px 11px 44px;
+  border-radius: 10px;
+  background: var(--pots-soft);
   font-weight: 400;
+  line-height: 1.55;
   cursor: pointer;
+}
+label:has(> input[type="radio"]) > input,
+label:has(> input[type="checkbox"]) > input,
+.pots-choice > input {
+  position: absolute;
+  left: 14px;
+  top: calc(11px + 0.775em - 10px);
+  font-size: inherit;
+}
+/* Its explanation goes on a line of its own: <label><input type="radio" …> Test <small>Nobody sees it</small></label> */
+:is(label:has(> input[type="radio"]), label:has(> input[type="checkbox"]), .pots-choice) > :is(small, .pots-muted) {
+  display: block;
+  margin-top: 2px;
 }
 label:has(> input[type="radio"]:checked),
 label:has(> input[type="checkbox"]:checked) {
-  border-color: var(--pots-accent);
   background: var(--pots-accent-soft);
+  box-shadow: inset 0 0 0 1.5px var(--pots-accent);
 }
 label:has(> input:focus-visible) {
   outline: 2px solid var(--pots-accent);
@@ -300,8 +1008,6 @@ input[type="checkbox"] {
   flex: none;
   accent-color: var(--pots-accent);
 }
-
-/* Approve or reject: two buttons side by side. */
 .pots-approve {
   display: flex;
   gap: 10px;
@@ -309,21 +1015,25 @@ input[type="checkbox"] {
 }
 .pots-approve label {
   flex: 1 1 0;
-  justify-content: center;
+  text-align: center;
   margin: 0;
-  font-weight: 600;
+  padding-left: 40px;
+  padding-right: 12px;
+  font-weight: 650;
+}
+.pots-approve label > input {
+  left: 12px;
 }
 .pots-approve label:has(input[value="approve"]:checked) {
-  border-color: var(--pots-good);
   background: var(--pots-good-soft);
+  box-shadow: inset 0 0 0 1.5px var(--pots-good);
   color: var(--pots-good);
 }
 .pots-approve label:has(input[value="reject"]:checked) {
-  border-color: var(--pots-bad);
   background: var(--pots-bad-soft);
+  box-shadow: inset 0 0 0 1.5px var(--pots-bad);
   color: var(--pots-bad);
 }
-
 input:not([type="radio"], [type="checkbox"], [type="submit"], [type="button"], [type="range"], [type="color"]),
 select,
 textarea {
@@ -332,11 +1042,15 @@ textarea {
   margin-top: 6px;
   padding: 10px 12px;
   /* 16px or more, so phones do not zoom in on the field. */
-  font: 400 17px/1.4 var(--pots-font);
+  font: 400 17px/1.45 var(--pots-font);
   color: var(--pots-text);
   background: var(--pots-bg);
-  border: 1px solid var(--pots-border);
-  border-radius: 8px;
+  border: 1px solid var(--pots-line);
+  border-radius: 10px;
+}
+input[type="range"] {
+  width: 100%;
+  accent-color: var(--pots-accent);
 }
 textarea {
   min-height: 6em;
@@ -347,10 +1061,7 @@ select:focus,
 textarea:focus {
   outline: 2px solid var(--pots-accent);
   outline-offset: 1px;
-  border-color: var(--pots-accent);
 }
-
-/* A comment on a section: closed until someone wants to write one. */
 details.pots-comment {
   margin-top: 10px;
 }
@@ -358,7 +1069,7 @@ details.pots-comment > summary {
   display: inline-block;
   cursor: pointer;
   color: var(--pots-accent);
-  font-weight: 600;
+  font-weight: 650;
   padding: 6px 0;
   list-style: none;
 }
@@ -371,20 +1082,19 @@ details.pots-comment > summary::before {
 details.pots-comment[open] > summary::before {
   content: "− ";
 }
-
 button,
 input[type="submit"],
 input[type="button"] {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 48px;
-  padding: 10px 22px;
-  border: 1px solid transparent;
-  border-radius: var(--pots-radius);
+  min-height: 44px;
+  padding: 8px 20px;
+  border: 0;
+  border-radius: 10px;
   background: var(--pots-accent);
   color: var(--pots-accent-text);
-  font: 600 17px/1.2 var(--pots-font);
+  font: 650 16px/1.2 var(--pots-font);
   cursor: pointer;
 }
 form button[type="submit"],
@@ -401,9 +1111,8 @@ form input[type="submit"] {
   }
 }
 button.pots-secondary {
-  background: transparent;
-  color: var(--pots-accent);
-  border-color: var(--pots-border);
+  background: var(--pots-soft);
+  color: var(--pots-text);
 }
 button:disabled,
 input:disabled,
@@ -412,11 +1121,9 @@ textarea:disabled {
   opacity: 0.6;
   cursor: default;
 }
-
-/* What happened to the answers, written by pots.js. */
 [data-pots-status] {
   margin: 12px 0 0;
-  font-weight: 600;
+  font-weight: 650;
 }
 [data-pots-status]:empty {
   display: none;
@@ -435,8 +1142,6 @@ form[data-pots-state="done"] [data-pots-question],
 form[data-pots-state="gone"] [data-pots-question] {
   opacity: 0.75;
 }
-
-/* "This page has changed", from pots.js. */
 .pots-banner {
   position: sticky;
   top: 0;
@@ -446,16 +1151,14 @@ form[data-pots-state="gone"] [data-pots-question] {
   justify-content: space-between;
   gap: 12px;
   margin: 0 0 16px;
-  padding: 10px 16px;
-  background: var(--pots-warn-soft);
-  border: 1px solid var(--pots-border);
+  padding: 8px 12px 8px 16px;
   border-radius: var(--pots-radius);
+  background: var(--pots-warn-soft);
 }
 .pots-banner button {
   min-height: 40px;
   padding: 6px 16px;
 }
-
 [data-pots-error]::before {
   content: "Could not load this part of the page.";
   display: block;
@@ -463,11 +1166,16 @@ form[data-pots-state="gone"] [data-pots-question] {
 }
 
 @media print {
-  body {
-    background: none;
-  }
+  .pots-toc,
+  .pots-tabbar,
   form button,
   .pots-banner {
     display: none;
+  }
+  [data-pots-tabs] > .pots-off {
+    display: block !important;
+  }
+  :is(main, .pots-page):has(> .pots-toc) {
+    padding-left: 0;
   }
 }

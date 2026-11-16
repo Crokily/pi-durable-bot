@@ -786,6 +786,10 @@ details:not(.pots-comment) > summary :is(small, .pots-muted) {
   [data-pots-tabs="phone"] > .pots-off {
     display: none;
   }
+  /* While the tabs show, the bar and its panel go one under the other, though two columns would fit. */
+  .pots-cols[data-pots-tabs="phone"]:has(> .pots-tabbar) {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 @media (min-width: 720px) {
   [data-pots-tabs="phone"] > .pots-tabbar {
@@ -901,15 +905,28 @@ details:not(.pots-comment) > summary :is(small, .pots-muted) {
   margin-top: 0;
   background: none;
 }
+/* The name is centred over its line, and moves in when that would take it past either end of the bar: it is centred
+   in a box around the line that ends at the bar's end, and when it does not fit, its auto margins give way and it
+   starts at that end (the right end, after the middle: pots-end). */
 .pots-hbars > li.pots-marks .pots-track > span {
   position: absolute;
-  left: var(--v);
+  left: 0;
+  right: 0;
   bottom: 2px;
-  transform: translateX(-50%);
+  display: flex;
+  padding-left: max(0%, calc(2 * var(--v) - 100%));
+  padding-right: max(0%, calc(100% - 2 * var(--v)));
   color: var(--pots-muted);
   font-size: 0.75rem;
   font-weight: 600;
   white-space: nowrap;
+}
+.pots-hbars > li.pots-marks .pots-track > span.pots-end {
+  flex-direction: row-reverse;
+}
+.pots-hbars > li.pots-marks .pots-track > span > span {
+  flex: none;
+  margin: 0 auto;
 }
 @container (min-width: 30rem) {
   .pots-hbars {

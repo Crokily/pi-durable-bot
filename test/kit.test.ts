@@ -264,6 +264,20 @@ describe("the page helper", () => {
     expect(num("-3.5 kg")).toBe(-3.5);
     expect(num("约 380 克")).toBe(380);
     expect(num("n/a")).toBeNaN();
+    expect(num("−12")).toBe(-12);
+    expect(num("12%")).toBe(12);
+  });
+
+  it("reads a cell as a number only when all of it is one, with the page's separators", () => {
+    const en = loadUi("en").num;
+    for (const text of ["Zebra 1", "€1,50", "€1.234,56", "10/5", "14:00", "1,2,3"]) expect(en(text), text).toBeNaN();
+    expect(en("1,234,567.5")).toBe(1234567.5);
+    const de = loadUi("de").num;
+    expect(de("€1,50")).toBe(1.5);
+    expect(de("€1.234,56")).toBe(1234.56);
+    expect(de("1.5")).toBeNaN();
+    expect(loadUi("fr").num("10 000,5 €")).toBe(10000.5);
+    expect(loadUi("zh-CN").num("约 1，200 元")).toBe(1200);
   });
 
   it("starts also when the page's language tag is not valid", () => {

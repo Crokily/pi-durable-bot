@@ -103,6 +103,7 @@ All that follows serves this goal: plain words make the text fast to read, the r
   - `<table data-pots-chart="bar|stack|line">` becomes a chart. Bar and stack: the first column names the rows, the second gives the values. Line: each row is a point on the x axis, each number column a line. `data-marks="380 You; 300 Her"` draws reference lines on bars, `data-max` or `data-min` fixes the scale (a line chart starts at zero unless its values sit far from zero; `data-min="0"` keeps zero), a `<caption>` becomes the title, and `data-pots-show="…"` names the button that shows the numbers. The table stays on the page, folded, so the numbers are one tap away.
   - `<div data-pots-tabs>` with `<section data-tab="Name">` children shows one at a time; `data-pots-tabs="phone"` does so only on a phone and shows all of them on a computer. `data-current` on a section opens it first; `box.potsSelect(i)` opens one from your script, and the box sends a `pots-tab` event.
   - Every table goes in a `<div class="pots-scroll">`, so it can take the full width and a wide one scrolls inside it.
+  - Numbers in charts and sorting: a cell is read as a number only when all of it is one, written as in the page's `lang` (`€1,234.50` in English, `1.234,50 €` in German, `−3`), with at most a short unit. Give a cell `data-value="1234.5"` when its text is not a plain number, such as "about two weeks" or "high"; that value is used first. Other columns sort as text.
   - `<table data-pots-sort>`: a click on a column header sorts it. `<input type="search" data-pots-filter="#list">` hides the rows of that table, or its `[data-pots-item]` elements, that do not contain the text, and sends a `pots-filter` event.
 
 ### Your own components
@@ -205,17 +206,16 @@ document.getElementById("cost").hidden = false;
 
 Take screenshots of the page as a phone, as a computer and in dark mode, and look at them. Check that nothing overflows or overlaps, the page does not scroll sideways, the charts and your components drew, and the text is easy to read. Fix what is wrong, then send the link.
 
-A headless browser needs no screen, so use `bash`. Open the page through Pots on this computer, at `http://127.0.0.1:<pagePort>` (`pagePort` in `~/.pots/settings.json`) plus the path of its link (`/p/<token>/`), so the kit loads. With Chrome or Chromium (`google-chrome`, `chromium`; install one if neither is there), each shot in a new temporary profile:
+A headless browser needs no screen, so use `bash`. Open the page through Pots on this computer, at `http://127.0.0.1:<pagePort>` (`pagePort` in `~/.pots/settings.json`) plus the path of its link (`/p/<token>/`), so the kit loads. [shot.mjs](shot.mjs), next to this file, takes a shot with Chrome or Chromium (`google-chrome`, `chromium`; install one if neither is there, or name it in `$CHROME`), in a new temporary profile each time:
 
 ```sh
 url="http://127.0.0.1:<pagePort>/p/<token>/"
-shot() { p=$(mktemp -d); google-chrome --headless=new --hide-scrollbars --user-data-dir="$p" --virtual-time-budget=3000 "$@" "$url"; rm -rf "$p"; }
-shot --window-size=390,2400 --screenshot=/tmp/page-phone.png
-shot --window-size=1440,1800 --screenshot=/tmp/page-computer.png
-shot --window-size=390,2400 --force-dark-mode --blink-settings=preferredColorScheme=0 --screenshot=/tmp/page-dark.png
+node <this skill's folder>/shot.mjs "$url" 390 /tmp/page-phone.png
+node <this skill's folder>/shot.mjs "$url" 1440 /tmp/page-computer.png
+node <this skill's folder>/shot.mjs "$url" 390 /tmp/page-dark.png dark
 ```
 
-Make the height big enough for the whole page. Then read the images. If the page is long, look at it in parts, or use Playwright when it is installed, which takes full-page shots and shows script errors.
+It sets the page's width as a phone does (`--window-size` can not make a window narrower than about 500 pixels, so it would crop a wider layout), takes the whole page, and prints what it measured: `innerWidth`, `scrollsSideways`, and the script errors. It fails when `innerWidth` is not the width you asked for, for example when the page has no viewport tag. Then read the images. If the page is long, look at it in parts.
 
 ## Answer pages
 

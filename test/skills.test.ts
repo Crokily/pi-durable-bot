@@ -172,6 +172,7 @@ describe("the skills that come with Pots", () => {
 
       for (const name of SKILLS) expect(existsSync(join(installed, "skills", name, "SKILL.md")), name).toBe(true);
       expect(existsSync(join(installed, "skills", "slack-channel", "slack-app-manifest.yaml"))).toBe(true);
+      expect(existsSync(join(installed, "skills", "pages", "shot.mjs"))).toBe(true);
       expect(readFileSync(join(installed, "kit", "pots.js"), "utf8")).toBe(readFileSync(join(repo, "kit", "pots.js"), "utf8"));
       expect(readFileSync(join(installed, "kit", "pots.css"), "utf8")).toBe(readFileSync(join(repo, "kit", "pots.css"), "utf8"));
       expect(readFileSync(join(installed, "kit", "pots-ui.js"), "utf8")).toBe(readFileSync(join(repo, "kit", "pots-ui.js"), "utf8"));
@@ -247,13 +248,16 @@ describe("the pages skill", () => {
     expect(text).not.toMatch(/meal|Coly/i);
   });
 
-  it("says how to take screenshots as a phone, as a computer and in dark mode, each with a new profile", () => {
+  it("says how to take screenshots as a phone, as a computer and in dark mode, with its script that sets the width", () => {
     const check = text.slice(text.indexOf("### Look at it before you send it"), text.indexOf("## Answer pages"));
-    expect(check).toContain("--headless=new");
-    expect(check).toContain('--user-data-dir="$p"');
-    expect(check).toContain("--window-size=390,");
-    expect(check).toContain("--window-size=1440,");
-    expect(check).toContain("--force-dark-mode");
+    // --window-size can not go below about 500 pixels, so a "phone" shot was a crop of a wider page.
+    expect(check).not.toMatch(/^[^`]*--window-size=390/m);
+    expect(check).toContain('shot.mjs "$url" 390 ');
+    expect(check).toContain('shot.mjs "$url" 1440 ');
+    expect(check).toMatch(/shot\.mjs "\$url" 390 \S+ dark/);
+    expect(check).toContain("innerWidth");
+    const script = readFileSync(join(repo, "skills", "pages", "shot.mjs"), "utf8");
+    for (const part of ["--headless=new", "--user-data-dir=", "Emulation.setDeviceMetricsOverride", "prefers-color-scheme", "innerWidth"]) expect(script, part).toContain(part);
     expect(check).toContain("http://127.0.0.1:<pagePort>");
     expect(check).toContain("use `bash`");
   });

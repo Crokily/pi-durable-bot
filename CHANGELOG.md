@@ -13,6 +13,7 @@ Pots runs on pi 1.5.2 (was 1.5.0), Effect 4.1.4 and ws 8.22.2. MCP servers work 
   - **Models.** Claude Fable 5.2 (`claude-fable-5-2`) is in the `anthropic` provider. A stream cut short after the reply had begun is tried again. Claude Sonnet 5 no longer gets a temperature it rejects. Anthropic and Bedrock no longer send tools as strict again on every turn after Claude rejected that, which cost a failed request each turn. An OpenAI-compatible server such as vLLM 0.20+ no longer gets `"tools": []` (a 400 error) when the bot has no tools for a request. A connection error says its cause, such as a refused connection or a bad certificate. pi's default model for each provider is newer (for `anthropic`, Claude Opus 5.5), which `pots login` and `pots init` recommend after a sign-in.
   - **Agent runs.** A task no longer stays waiting when the last of its parallel tool calls ends at the wrong moment.
 - **Effect 4.1.4 and ws 8.22.2**, patch releases. ws now decodes a user name and password in a WebSocket URL.
+- **The bot watches a coding agent's command line as it would a child.** When it hands work to Claude Code, Codex or a similar command line running in the background, its prompt now says that such a run shows nothing while it works and says nothing when it ends: the bot has the command wake it at the end (`pots wake --from`) and sets itself wakes to look at its output, report progress, and notice a run that died.
 
 ## 0.8.2 (2026-11-16)
 

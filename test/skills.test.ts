@@ -14,7 +14,7 @@ import { folderSection, type PromptFacts, workSection } from "../src/bot/prompt.
 // Also the skill for pi users (pi-package/skills), which pi loads through the package's pi manifest.
 
 const repo = fileURLToPath(new URL("..", import.meta.url));
-const SKILLS = ["desktop-page", "discord-channel", "pages", "slack-channel", "telegram-channel"];
+const SKILLS = ["desktop-page", "discord-channel", "pages", "slack-channel", "teams-channel", "telegram-channel"];
 const PI_SKILLS = ["pots-setup"];
 const work = realpathSync(mkdtempSync(join(tmpdir(), "pots-skills-")));
 
@@ -217,7 +217,7 @@ describe("the prompt", () => {
 
   it("points to the channel skills and the pages skill, not to docs", () => {
     const folder = folderSection(facts);
-    expect(folder).toContain("slack-channel, discord-channel, telegram-channel");
+    expect(folder).toContain("slack-channel, discord-channel, telegram-channel, teams-channel");
     expect(folder).toContain("the pages skill");
     expect(folder).toContain("pots page secret");
     expect(folder).not.toMatch(/docs[\\/]|channels[\\/]/);

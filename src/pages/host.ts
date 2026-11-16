@@ -1,5 +1,6 @@
 import { createServer, type Server } from "node:http";
 import { fileURLToPath } from "node:url";
+import type { ChannelHttp, ChannelRequest, ChannelResponse } from "../core/channel.ts";
 import type { Print } from "../gateway/config.ts";
 import { ensureCloudflared } from "./cloudflared.ts";
 import { readSettings, writeSetting } from "./settings.ts";
@@ -56,6 +57,8 @@ const iso = (ms: number | null) => (ms === null ? null : new Date(ms).toISOStrin
 export class PageHost {
   readonly #options: PageHostOptions;
   readonly #bots = new Map<string, BotPages>();
+  /** The paths channels serve, with their handlers. */
+  readonly #channels = new Map<string, (request: ChannelRequest) => Promise<ChannelResponse>>();
   readonly #requests: PageRequests;
   #server: Server | undefined;
   #port: number | undefined;
@@ -70,6 +73,7 @@ export class PageHost {
       bots: () => this.#bots.values(),
       quickTunnel: () => this.#quickTunnel(),
       publicHosts: () => this.#publicHosts(),
+      channelRoute: (path) => this.#channels.get(path),
       kitDir: options.kitDir ?? KIT_DIR,
       print: options.print,
     });
@@ -97,6 +101,29 @@ export class PageHost {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
+  }
+
+  /** The page server as one channel of a bot uses it: the path /channel/<bot>/<channel>. */
+  channelHttp(bot: string, channel: string): ChannelHttp {
+    const path = `/channel/${encodeURIComponent(bot)}/${encodeURIComponent(channel)}`;
+    return {
+      serve: (handler) => {
+        this.#channels.set(path, handler);
+        return {
+          path,
+          close: () => {
+            if (this.#channels.get(path) === handler) this.#channels.delete(path);
+          },
+        };
+      },
+      publicUrl: () => {
+        try {
+          return readSettings(this.#options.settingsFile).publicUrl;
+        } catch {
+          return undefined;
+        }
+      },
+    };
   }
 
   register(bot: BotPages): void {

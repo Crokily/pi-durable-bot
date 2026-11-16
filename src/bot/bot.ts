@@ -502,6 +502,7 @@ export class Bot implements WakeTarget {
     return loadChannel(config, {
       botDir: this.paths.dir,
       botName,
+      http: this.#env.pages.channelHttp(this.id, config.id),
       log: (message, data) => this.#print(`${config.id}: ${message}`, data),
     });
   }

@@ -53,8 +53,14 @@ export async function runMcp(args: string[]): Promise<never> {
       return dir === cwd ? true : get.call(this, dir);
     };
   }
-  // pi's messages name its own command, which is not on PATH here.
-  const named = (line: string) => line.replaceAll(/\bpi mcp\b/g, "pots mcp");
+  // pi's messages name its own commands, which are not on PATH here. A server with "auth": { "provider": … } signs in
+  // with that pi login, which pots login makes (it asks for the provider); Pots has no command that deletes one.
+  const named = (line: string) =>
+    line
+      .replaceAll(/\bpi mcp\b/g, "pots mcp")
+      .replace(/ Run "pi auth login ([^"]+)"\.$/, ' Sign in to it with "pots login" (provider $1).')
+      .replace(/ Run "pi auth logout [^"]+"\.$/, " pots mcp logout does not sign out of it.")
+      .replace(/^(\s*sign in with: )\/login (\S+) in pi$/, "$1pots login (provider $2)");
   const code = await runMcpCommand(args, {
     cwd,
     agentDir: getAgentDir(),

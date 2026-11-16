@@ -53,7 +53,7 @@ teams app update <teamsAppId> --messaging-mode http --endpoint <publicUrl>/chann
 ```
 and add `"mode": "http"` to the channel's entry in bot.json. Pots checks Microsoft's signature on every request.
 
-**Agents Playground** (only to try the channel on this computer, with no Microsoft account): an entry `{ "id": "teams", "type": "teams", "mode": "http", "playground": true }` needs no secrets and takes requests without Microsoft's signature, but only from this computer, never through the public address. Run `npx -y @microsoft/m365agentsplayground -e http://127.0.0.1:<pagePort>/channel/<your bot ID>/teams -c msteams` and open the page it prints. Remove the entry when done.
+**Agents Playground** (only to try the channel on this computer, with no Microsoft account): an entry `{ "id": "teams-playground", "type": "teams", "mode": "http", "playground": true }` takes requests without Microsoft's signature, so it takes no `secrets` (an entry with them is refused) and never sends a token. It does not use the page server: it listens on 127.0.0.1 port 3978 (`"port"` sets another), at `/api/messages`, where the Playground sends by default, and refuses requests that came through a proxy or a tunnel. Run `npx -y @microsoft/m365agentsplayground -c msteams` (with `-e http://127.0.0.1:<port>/api/messages` for another port) and open the page it prints. Remove the entry when done.
 
 If the person made the app themselves in the Teams Developer Portal, ask for the three values in the terminal channel instead: `call <terminal channel id> ask-secret {"text": "…", "file": "teams-<your bot ID>.env", "keys": ["CLIENT_ID", "CLIENT_SECRET", "TENANT_ID"]}`.
 

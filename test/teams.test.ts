@@ -1,8 +1,9 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createChannel, TeamsChannel, type TeamsEndpoints } from "../src/channels/teams/index.ts";
 import type { SocketHandlers } from "../src/channels/teams/sdk.ts";
 import type { ChannelHttp, ChannelRequest, ChannelResponse, ChannelSink, Happening } from "../src/core/channel.ts";
@@ -95,17 +96,31 @@ function fakeHttp() {
   return { http, post, served: () => handler !== undefined };
 }
 
-/** Socket Mode's sockets: each is ready at once; send gives an envelope to the first one, as Teams would. */
+/**
+ * Socket Mode's sockets: each is ready at once, or when the test lets it (hold); send gives an envelope to the first
+ * one, as Teams would.
+ */
 function fakeSockets() {
   const sockets: { handlers: SocketHandlers; stopped: boolean }[] = [];
+  const holds = new Map<number, Promise<void>>();
   let envelope = 0;
   return {
     sockets,
+    /** The socket made as the index-th (from 0) is ready only once the returned function runs. */
+    hold: (index: number) => {
+      let release!: () => void;
+      holds.set(index, new Promise<void>((resolve) => (release = resolve)));
+      return release;
+    },
     make: (handlers: SocketHandlers) => {
       const socket = { handlers, stopped: false };
+      const held = holds.get(sockets.length);
       sockets.push(socket);
       return {
-        start: async () => handlers.onReady({ connectionId: `c${sockets.length}` }),
+        start: async () => {
+          await held;
+          handlers.onReady({ connectionId: `c${sockets.length}` });
+        },
         stop: async () => {
           socket.stopped = true;
         },
@@ -114,6 +129,18 @@ function fakeSockets() {
     send: (payload: unknown, invoke = false) =>
       sockets[0]!.handlers.onActivity({ protocolVersion: 1, envelopeId: `e${++envelope}`, type: invoke ? "invoke" : "message", ackRequired: !invoke, payload }) as Promise<{ status: number; body?: any }>,
   };
+}
+
+/** A POST with a Host header of the test's choosing, which fetch does not send: as a proxy or a tunnel sends it. Its status. */
+function postWithHost(url: string, host: string, body: unknown): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const sent = request(url, { method: "POST", headers: { host, "content-type": "application/json" } }, (response) => {
+      response.resume();
+      resolve(response.statusCode ?? 0);
+    });
+    sent.on("error", reject);
+    sent.end(JSON.stringify(body));
+  });
 }
 
 async function until(check: () => boolean, ms = 5000): Promise<void> {
@@ -130,7 +157,9 @@ afterEach(async () => {
 });
 
 /** A started adapter on the fake, in Socket Mode or HTTP mode, and the sink it stores into. */
-async function connect(options: Parameters<typeof memorySink>[0] & { mode?: "socket" | "http"; playground?: boolean; state?: unknown } = {}) {
+async function connect(
+  options: Parameters<typeof memorySink>[0] & { mode?: "socket" | "http"; playground?: boolean; state?: unknown; endpoints?: Partial<TeamsEndpoints>; before?: (sockets: ReturnType<typeof fakeSockets>) => void } = {},
+) {
   const fake = await FakeTeams.start();
   serviceUrl = fake.serviceUrl;
   const dir = mkdtempSync(join(tmpdir(), "pots-teams-"));
@@ -141,12 +170,13 @@ async function connect(options: Parameters<typeof memorySink>[0] & { mode?: "soc
     writeFileSync(join(dir, "channels", "teams.json"), JSON.stringify(options.state));
   }
   const sockets = fakeSockets();
+  options.before?.(sockets);
   const web = fakeHttp();
-  const endpoints: TeamsEndpoints = { serviceUrl: fake.serviceUrl, graph: fake.graph, token: fakeToken, socket: sockets.make, fileHosts: (host) => host === "127.0.0.1" };
+  const endpoints: TeamsEndpoints = { serviceUrl: fake.serviceUrl, graph: fake.graph, token: fakeToken, socket: sockets.make, ...options.endpoints };
   const mode = options.mode ?? "socket";
   const channel = new TeamsChannel(
     "teams",
-    { ...(options.playground ? {} : { secrets: join(dir, "teams.env") }), mode, playground: options.playground ?? false },
+    { ...(options.playground ? { port: 0 } : { secrets: join(dir, "teams.env") }), mode, playground: options.playground ?? false },
     { botDir: dir, botName: "Pots", http: web.http, log: () => {} },
     endpoints,
   );
@@ -211,14 +241,40 @@ describe("Teams: receiving", () => {
     expect(web.served()).toBe(false);
   });
 
-  it("in playground mode takes requests without a signature, but not through a proxy", async () => {
-    const { web, events, channel } = await connect({ mode: "http", playground: true });
-    expect((await web.post(activity({}))).status).toBe(200);
+  it("in playground mode takes requests without a signature only on a server of its own at 127.0.0.1, never on the page server", async () => {
+    const { web, events, channel, fake, dir } = await connect({ mode: "http", playground: true });
+    expect(web.served()).toBe(false);
+    const url = channel.playgroundUrl!;
+    expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/api\/messages$/);
+    const post = (body: unknown, headers: Record<string, string> = {}) =>
+      fetch(url, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
+    expect((await post(activity({ serviceUrl: fake.serviceUrl }))).status).toBe(200);
     expect(events).toHaveLength(1);
-    expect((await web.post(activity({ id: "1731800000002" }), { "x-forwarded-for": "203.0.113.5" })).status).toBe(403);
+    // Through a proxy or a tunnel, by a name of its own, from a browser page, or not JSON: refused.
+    expect((await post(activity({ id: "1731800000002" }), { "x-forwarded-for": "203.0.113.5" })).status).toBe(403);
+    expect(await postWithHost(url, "pots.example.ts.net", activity({ id: "1731800000003" }))).toBe(403);
+    expect((await post(activity({ id: "1731800000004" }), { origin: "https://evil.example" })).status).toBe(403);
+    expect((await fetch(url, { method: "POST", headers: { "content-type": "text/plain" }, body: JSON.stringify(activity({ id: "1731800000005" })) })).status).toBe(415);
     expect(events).toHaveLength(1);
     // The bot learns its own ID from the first activity.
     expect(channel.me?.address).toBe(`teams:@${BOT.id}`);
+    // Its answer goes to the service URL the request named, with no token: playground mode has none.
+    fake.route("POST", "/teams/v3/conversations/([^/]+)/activities", () => ({ id: "1731800000900" }));
+    await channel.send(`teams:#${CHAT}`, "hi", "s1");
+    expect(fake.requested("POST", "/teams/v3/conversations/.*/activities")[0]!.auth).toBeUndefined();
+    // What it learned is kept apart from a real app's.
+    expect(readFileSync(join(dir, "channels", "teams.playground.json"), "utf8")).toContain(CHAT);
+    expect(() => statSync(join(dir, "channels", "teams.json"))).toThrow();
+  });
+
+  it("playground mode takes no secrets", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pots-teams-"));
+    cleanup.push(async () => rmSync(dir, { recursive: true, force: true }));
+    writeFileSync(join(dir, "teams.env"), `CLIENT_ID=${CLIENT_ID}\nCLIENT_SECRET=secret-value\nTENANT_ID=${TENANT}\n`);
+    const channel = new TeamsChannel("teams", { secrets: join(dir, "teams.env"), mode: "http", playground: true, port: 0 }, { botDir: dir, botName: "Pots", log: () => {} }, { token: fakeToken });
+    cleanup.push(() => channel.stop());
+    await expect(channel.start(memorySink().sink)).rejects.toThrow(/playground mode takes no secrets/);
+    expect(channel.playgroundUrl).toBeUndefined();
   });
 
   it("checks bot.json's entry", () => {
@@ -226,7 +282,10 @@ describe("Teams: receiving", () => {
     expect(() => createChannel({ id: "teams", type: "teams" }, env)).toThrow(/"secrets" must name the env file/);
     expect(() => createChannel({ id: "teams", type: "teams", secrets: "x", mode: "webhook" }, env)).toThrow(/"mode" must be/);
     expect(() => createChannel({ id: "teams", type: "teams", playground: true }, env)).toThrow(/needs "mode": "http"/);
-    expect(createChannel({ id: "teams", type: "teams", mode: "http", playground: true }, env).id).toBe("teams");
+    expect(() => createChannel({ id: "teams", type: "teams", mode: "http", playground: true, secrets: "x" }, env)).toThrow(/takes no "secrets"/);
+    expect(() => createChannel({ id: "teams", type: "teams", mode: "http", playground: true, port: "x" }, env)).toThrow(/"port" must be/);
+    expect(() => createChannel({ id: "teams", type: "teams", secrets: "x", port: 3978 }, env)).toThrow(/only for "playground"/);
+    expect(createChannel({ id: "teams", type: "teams", mode: "http", playground: true, port: 3978 }, env).id).toBe("teams");
   });
 });
 
@@ -329,6 +388,25 @@ describe("Teams: what each activity becomes", () => {
     expect(fake.requested("GET", "/files/image-1")[0]!.auth).toMatch(/^Bearer /);
     await expect(channel.fetchFile(post!.files![0]!, AbortSignal.timeout(5000))).rejects.toThrow(/SharePoint links; reading them needs Graph file permissions/);
     await expect(channel.fetchFile({ url: "https://example.com/x" }, AbortSignal.timeout(5000))).rejects.toThrow(/not a Teams file URL/);
+  });
+
+  it("gives the bot token only to the Bot Connector's address that Teams' events gave, never to another Traffic Manager host", async () => {
+    const { channel } = await connect();
+    // Anyone with Azure can make a *.trafficmanager.net name that points at a server of their own.
+    const real = globalThis.fetch;
+    const reached: { url: string; auth: string | null }[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (!url.includes("trafficmanager.net")) return real(input, init);
+      reached.push({ url, auth: new Headers(init?.headers).get("authorization") });
+      return new Response(new Uint8Array([1]));
+    });
+    cleanup.push(async () => {
+      vi.restoreAllMocks();
+    });
+    const attempt = channel.fetchFile({ url: "https://contoso-bots.trafficmanager.net/v3/attachments/a1/views/original" }, AbortSignal.timeout(5000));
+    await expect(attempt).rejects.toThrow(/not a Teams file URL/);
+    expect(reached.filter((each) => each.auth !== null)).toEqual([]);
   });
 });
 
@@ -469,12 +547,17 @@ describe("Teams: backfill", () => {
       places: [`teams:#${CHANNEL}`, `teams:#${CHAT}`, `teams:#${DM}`],
       newest: { [`teams:#${CHANNEL}`]: `teams:#${CHANNEL}/${newestChannel}`, [`teams:#${CHAT}`]: `teams:#${CHAT}/${newestChat}` },
     });
-    // Two pages of roots, newest first; the second has nothing newer, so the third is not read.
-    fake.route("GET", "/graph/v1.0/teams/team-aad-1/channels/[^/]+/messages", (request) =>
-      request.query.get("page") === "2"
-        ? { value: [graphMessage(newestChannel - 5)], "@odata.nextLink": `${fake.graph}/teams/team-aad-1/channels/${CHANNEL}/messages?page=3` }
-        : { value: [graphMessage(newestChannel + 20), graphMessage(newestChannel - 10, { lastModifiedDateTime: at(newestChannel + 30) })], "@odata.nextLink": `${fake.graph}/teams/team-aad-1/channels/${encodeURIComponent(CHANNEL)}/messages?page=2` },
-    );
+    // Two pages of threads, newest change first, with their replies; the second has nothing newer, so the third is not
+    // read. One root gives no replies (Graph did not expand them): they are read on their own.
+    fake.route("GET", "/graph/v1.0/teams/team-aad-1/channels/[^/]+/messages", (request) => {
+      if (!request.query.has("page")) expect(request.query.get("$expand")).toBe("replies");
+      return request.query.get("page") === "2"
+        ? { value: [graphMessage(newestChannel - 5, { replies: [] })], "@odata.nextLink": `${fake.graph}/teams/team-aad-1/channels/${CHANNEL}/messages?page=3` }
+        : {
+            value: [graphMessage(newestChannel + 20, { replies: [] }), graphMessage(newestChannel - 10)],
+            "@odata.nextLink": `${fake.graph}/teams/team-aad-1/channels/${encodeURIComponent(CHANNEL)}/messages?page=2`,
+          };
+    });
     fake.route("GET", "/graph/v1.0/teams/team-aad-1/channels/[^/]+/messages/([^/]+)/replies", (_request, match) =>
       match[1] === String(newestChannel - 10) ? { value: [graphMessage(newestChannel + 25, { replyToId: String(newestChannel - 10) })] } : { value: [] },
     );
@@ -493,13 +576,97 @@ describe("Teams: backfill", () => {
     expect(happenings[0]).toMatchObject({ person: { address: "teams:@aad-alice", name: "Alice" }, place: { kind: "channel", name: "Lab #General" } });
   });
 
-  it("does nothing on the first start, and skips a channel whose team is not known", async () => {
+  it("reads a new reply under an old root that did not change, and the pages after it", async () => {
+    const since = 1731800000000;
+    const { channel, fake, events, sink } = await connect({ state, lastAlive: since, places: [`teams:#${CHANNEL}`] });
+    // Graph orders threads by their last change, replies included: an old, unchanged root comes first for its new reply.
+    fake.route("GET", "/graph/v1.0/teams/team-aad-1/channels/[^/]+/messages", (request) =>
+      request.query.get("page") === "2"
+        ? { value: [graphMessage(since - 3000, { replies: [graphMessage(since + 10, { replyToId: String(since - 3000) })] })] }
+        : { value: [graphMessage(since - 2000, { replies: [graphMessage(since + 20, { replyToId: String(since - 2000) }), graphMessage(since - 1000, { replyToId: String(since - 2000) })] })], "@odata.nextLink": `${fake.graph}/teams/team-aad-1/channels/x/messages?page=2` },
+    );
+    await channel.backfill(sink);
+    const happenings = await translated(channel, events);
+    expect(happenings.map((h) => [h.kind, h.message, h.thread])).toEqual([
+      ["message", `teams:#${CHANNEL}/${since - 3000}/${since + 10}`, `teams:#${CHANNEL}/${since - 3000}`],
+      ["message", `teams:#${CHANNEL}/${since - 2000}/${since + 20}`, `teams:#${CHANNEL}/${since - 2000}`],
+    ]);
+  });
+
+  it("finds a channel's team through Teams when its events did not give it, and from another channel of the team", async () => {
+    const other = "19:design@thread.tacv2";
+    const { channel, fake, events, sink, sockets, dir, logs } = await connect({
+      state: { conversations: { [other]: { type: "channel", team: { id: CHANNEL } }, "19:lone@thread.tacv2": { type: "channel" } }, people: {}, dms: {} },
+      lastAlive: 1731800000000,
+      places: [`teams:#${other}`, "teams:#19:lone@thread.tacv2"],
+    });
+    fake.route("GET", `/teams/v3/teams/${CHANNEL}`, () => ({ id: CHANNEL, name: "Lab", aadGroupId: "team-aad-1" }));
+    fake.route("GET", "/graph/v1.0/teams/team-aad-1/channels/[^/]+/messages", () => ({ value: [graphMessage(1731800000100, { replies: [] })] }));
+    await channel.backfill(sink);
+    expect(events.map((event) => event.id)).toEqual([`history:${other}/1731800000100:${at(1731800000100)}`]);
+    expect(fake.requested("GET", "/graph/v1.0/teams/team-aad-1/channels/.*")[0]!.path).toContain(encodeURIComponent(other));
+    // A channel no event put in a team: asked by its own ID, as Chat SDK does; Teams does not know it, so it is skipped.
+    expect(fake.requested("GET", "/teams/v3/teams/19:lone@thread.tacv2")).toHaveLength(1);
+    expect(logs.some((line) => line.includes("backfill skipped a place") && line.includes("19:lone"))).toBe(true);
+    expect(JSON.parse(readFileSync(join(dir, "channels", "teams.json"), "utf8")).conversations[other].team).toEqual({ id: CHANNEL, aadGroupId: "team-aad-1", name: "Lab" });
+
+    // An event of another channel of the team, with the team's group ID, gives it to every channel of the team.
+    const third = "19:third@thread.tacv2";
+    await sockets.send(inChannel({ id: "1731800000300", conversation: { id: third, conversationType: "channel", tenantId: TENANT }, channelData: { tenant: { id: TENANT }, team: { id: "19:team-b@thread.tacv2" } } }));
+    await sockets.send(inChannel({ id: "1731800000301", conversation: { id: "19:team-b@thread.tacv2", conversationType: "channel", tenantId: TENANT }, channelData: { tenant: { id: TENANT }, team: { id: "19:team-b@thread.tacv2", aadGroupId: "team-aad-b" } } }));
+    expect(JSON.parse(readFileSync(join(dir, "channels", "teams.json"), "utf8")).conversations[third].team).toEqual({ id: "19:team-b@thread.tacv2", aadGroupId: "team-aad-b" });
+  });
+
+  it("an edit made while Pots was down is an edit, also of a root from before, and a message made then is a message", async () => {
+    const since = 1731800000000;
+    const { channel, fake, events, sink } = await connect({ state, lastAlive: since, places: [`teams:#${CHANNEL}`, `teams:#${CHAT}`] });
+    const edited = { lastModifiedDateTime: at(since + 500), lastEditedDateTime: at(since + 500), body: { contentType: "html", content: "<p>changed</p>" } };
+    fake.route("GET", "/graph/v1.0/teams/team-aad-1/channels/[^/]+/messages", () => ({ value: [graphMessage(since - 5000, { ...edited, replies: [] })] }));
+    fake.route("GET", "/graph/v1.0/chats/[^/]+/messages", () => ({ value: [graphMessage(since + 100, { lastModifiedDateTime: at(since + 900), lastEditedDateTime: at(since + 900) }), graphMessage(since - 100, edited)] }));
+    await channel.backfill(sink);
+    const happenings = await translated(channel, events);
+    expect(happenings.map((h) => [h.kind, h.message, h.at, h.text])).toEqual([
+      ["message", `teams:#${CHANNEL}/${since - 5000}`, since - 5000, "changed"],
+      ["edit", `teams:#${CHANNEL}/${since - 5000}`, since + 500, "changed"],
+      ["message", `teams:#${CHAT}/${since - 100}`, since - 100, "changed"],
+      ["edit", `teams:#${CHAT}/${since - 100}`, since + 500, "changed"],
+      ["message", `teams:#${CHAT}/${since + 100}`, since + 100, `message ${since + 100}`],
+      ["edit", `teams:#${CHAT}/${since + 100}`, since + 900, `message ${since + 100}`],
+    ]);
+  });
+
+  it("reads every page of a long backlog, so the next start does not begin past what was left", async () => {
+    const since = 1731800000000;
+    const { channel, fake, events, sink } = await connect({ state, lastAlive: since, places: [`teams:#${CHAT}`] });
+    const all = Array.from({ length: 1001 }, (_each, index) => graphMessage(since + 1001 - index));
+    fake.route("GET", "/graph/v1.0/chats/[^/]+/messages", (request) => {
+      const page = Number(request.query.get("page") ?? 0);
+      const next = (page + 1) * 50 < all.length ? { "@odata.nextLink": `${fake.graph}/chats/${encodeURIComponent(CHAT)}/messages?page=${page + 1}` } : {};
+      return { value: all.slice(page * 50, page * 50 + 50), ...next };
+    });
+    await channel.backfill(sink);
+    expect(events).toHaveLength(1001);
+    expect(events[0]!.raw.message.id).toBe(String(since + 1));
+  });
+
+  it("stores nothing of a place whose pages Graph does not give to the end", async () => {
+    const since = 1731800000000;
+    const { channel, fake, events, sink, logs } = await connect({ state, lastAlive: since, places: [`teams:#${CHAT}`] });
+    fake.route("GET", "/graph/v1.0/chats/[^/]+/messages", (request) =>
+      request.query.get("page") === "1" ? new Reply(403, { error: { code: "Forbidden", message: "no" } }) : { value: [graphMessage(since + 10)], "@odata.nextLink": `${fake.graph}/chats/x/messages?page=1` },
+    );
+    await channel.backfill(sink);
+    expect(events).toEqual([]);
+    expect(logs.some((line) => line.includes("backfill skipped a place"))).toBe(true);
+  });
+
+  it("does nothing on the first start, and skips a channel whose team Teams does not give", async () => {
     const first = await connect({ places: [`teams:#${CHAT}`] });
     await first.channel.backfill(first.sink);
     expect(first.fake.requests).toEqual([]);
     const later = await connect({ lastAlive: 1731700000000, places: ["teams:#19:other@thread.tacv2"] });
     await later.channel.backfill(later.sink);
-    expect(later.logs.some((line) => line.includes("the team of this channel is not known yet"))).toBe(true);
+    expect(later.logs.some((line) => line.includes("backfill skipped a place") && line.includes("Teams answered 404"))).toBe(true);
   });
 
   it("reads again after the socket reconnects, from a minute before it dropped", async () => {
@@ -513,6 +680,49 @@ describe("Teams: backfill", () => {
     const since = Date.parse(filter.replace("lastModifiedDateTime gt ", ""));
     expect(since).toBeGreaterThanOrEqual(dropped - 61_000);
     expect(since).toBeLessThanOrEqual(dropped - 59_000);
+  });
+
+  it("after regions' sockets drop together, each reads from its own drop, also the one that comes back later", async () => {
+    let release!: () => void;
+    // The first three sockets are the regions'; of the two made again, the second comes back a second later.
+    const { fake, sockets } = await connect({ state, places: [`teams:#${CHAT}`], before: (made) => (release = made.hold(4)) });
+    fake.route("GET", "/graph/v1.0/chats/[^/]+/messages", () => ({ value: [] }));
+    const dropped = Date.now();
+    sockets.sockets[0]!.handlers.onClosed(new Error("connection lost"));
+    sockets.sockets[1]!.handlers.onClosed(new Error("connection lost"));
+    await until(() => fake.requested("GET", "/graph/v1.0/chats/[^/]+/messages").length === 1);
+    await sleep(1000);
+    release();
+    await until(() => fake.requested("GET", "/graph/v1.0/chats/[^/]+/messages").length === 2);
+    const starts = fake.requested("GET", "/graph/v1.0/chats/[^/]+/messages").map((request) => Date.parse(request.query.get("$filter")!.replace("lastModifiedDateTime gt ", "")));
+    for (const since of starts) {
+      expect(since).toBeGreaterThanOrEqual(dropped - 61_000);
+      expect(since).toBeLessThanOrEqual(dropped - 59_500);
+    }
+  });
+
+  it("stop ends a backfill that waits for Graph, and its tries, at once", async () => {
+    const { channel, fake, sink, events } = await connect({ state, lastAlive: 1731800000000, places: [`teams:#${CHAT}`] });
+    fake.route("GET", "/graph/v1.0/chats/[^/]+/messages", () => new Reply(503, { error: { code: "ServiceUnavailable", message: "busy" } }));
+    const running = channel.backfill(sink);
+    await until(() => fake.requests.length > 0);
+    const stopping = Date.now();
+    await channel.stop();
+    await running;
+    expect(Date.now() - stopping).toBeLessThan(2000);
+    const tried = fake.requests.length;
+    await sleep(1500);
+    expect(fake.requests.length).toBe(tried);
+    expect(events).toEqual([]);
+  });
+
+  it("a token that does not come is bounded by the request's time, as the request is", async () => {
+    const { channel, fake } = await connect({ endpoints: { token: () => new Promise<string>(() => {}), timeouts: { request: 200, retry: 500 } } });
+    fake.route("POST", "/teams/v3/conversations/.*/activities", () => ({ id: "1731800000200" }));
+    const started = Date.now();
+    await expect(channel.send(`teams:#${CHAT}`, "hi", "s1")).rejects.toThrow(/Teams did not answer: .*timeout.*gave up/);
+    expect(Date.now() - started).toBeLessThan(3000);
+    expect(fake.requests).toEqual([]);
   });
 
   it("keeps what it learned for the next start, readable only by this user", async () => {

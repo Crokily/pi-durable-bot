@@ -1,5 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { createServer, type IncomingMessage, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
@@ -39,12 +41,12 @@ import { quietLogger, RouteAdapter, type SocketConnection, type SocketHandlers, 
 
 /**
  * What the inbox stores for this channel. activity: an activity as Teams sent it, with when it came. history: a
- * message that the backfill read from Microsoft Graph, in the conversation it is in. sent: a message this channel
- * posted, with the Markdown the bot wrote and the send ID, when it came from send.
+ * message that the backfill read from Microsoft Graph, in the conversation it is in, with where that backfill started.
+ * sent: a message this channel posted, with the Markdown the bot wrote and the send ID, when it came from send.
  */
 type Raw =
   | { source: "activity"; at: number; activity: Activity }
-  | { source: "history"; conversation: string; message: GraphMessage }
+  | { source: "history"; conversation: string; message: GraphMessage; since?: number }
   | { source: "sent"; sendId?: string; markdown?: string; activity: Activity };
 
 type Activity = Record<string, any>;
@@ -70,6 +72,9 @@ interface GraphMessage {
   body?: { contentType?: string; content?: string };
   attachments?: { contentType?: string; contentUrl?: string | null; name?: string | null }[];
   mentions?: { mentioned?: { user?: { id?: string } | null; application?: { id?: string } | null } }[];
+  /** A root message's replies, with $expand=replies. */
+  replies?: GraphMessage[];
+  "replies@odata.nextLink"?: string;
 }
 
 /** What the channel learned about a conversation from its events: what Graph and sending need later, also after a restart. */
@@ -100,7 +105,7 @@ interface Where {
 /** An address taken apart. */
 type Parsed = { conversation: string; root?: string; message?: string } | { user: string };
 
-/** For tests: other addresses for Microsoft's services, a token, and Socket Mode's sockets. */
+/** For tests: other addresses for Microsoft's services, a token, Socket Mode's sockets, and shorter waits. */
 export interface TeamsEndpoints {
   /** Microsoft Graph, with its version: https://graph.microsoft.com/v1.0. */
   graph?: string;
@@ -108,9 +113,9 @@ export interface TeamsEndpoints {
   serviceUrl?: string;
   /** Instead of signing in with the client secret. */
   token?: (scope: string | string[], tenantId?: string) => string | Promise<string>;
-  /** Hosts whose files are read with the bot token. */
-  fileHosts?: (host: string) => boolean;
   socket?: (handlers: SocketHandlers) => SocketConnection;
+  /** In ms: how long one try of a request may take, and how long a request is tried again. */
+  timeouts?: { request?: number; retry?: number };
 }
 
 export interface TeamsOptions {
@@ -119,10 +124,12 @@ export interface TeamsOptions {
   /** socket: Socket Mode (the default); http: Teams posts to the page server. */
   mode: "socket" | "http";
   /**
-   * Only for Microsoft 365 Agents Playground on this computer: HTTP mode that takes requests without Microsoft's
-   * signature, and needs no secrets.
+   * Only for Microsoft 365 Agents Playground on this computer: requests without Microsoft's signature, on a server of
+   * the channel's own at 127.0.0.1, never on the page server. It takes no secrets, so no token is ever sent.
    */
   playground: boolean;
+  /** The playground's port on 127.0.0.1: 3978, where the Playground looks by default; 0 for any free one. */
+  port?: number;
 }
 
 /** About 28 KB is the largest message Teams takes (Microsoft Learn: "Send and receive messages"); counted as UTF-8. */
@@ -134,9 +141,12 @@ const GRAPH = "https://graph.microsoft.com/v1.0";
 const RETRY_STATUS = new Set([412, 429, 502, 503, 504]);
 /** A request is tried again until a try fails a minute or more after the first began, as on Slack. */
 const RETRY_MS = 60_000;
+/** One try of a request, its token included. */
 const REQUEST_TIMEOUT_MS = 30_000;
-/** How many pages of a place's history a backfill reads at most. */
-const MAX_PAGES = 20;
+/** Where Microsoft 365 Agents Playground sends by default: http://localhost:3978/api/messages. */
+const PLAYGROUND_PORT = 3978;
+const PLAYGROUND_PATH = "/api/messages";
+const MAX_PLAYGROUND_BODY = 1024 * 1024;
 /** Activities that are not stored: nobody needs them. */
 const SKIPPED = new Set(["typing"]);
 /**
@@ -175,7 +185,7 @@ const REACTION_NAMES: Record<string, string> = {
   pushpin: "1f4cc_pushpin",
 };
 const REACTION_EMOJI: Record<string, string> = Object.fromEntries(Object.entries(REACTIONS).filter(([emoji]) => emoji !== "❤").map(([emoji, id]) => [id, emoji]));
-/** Headers that a proxy in front of the page server adds: a request with one came from outside this computer. */
+/** Headers that a proxy adds: a request with one came from outside this computer. */
 const PROXY_HEADERS = ["x-forwarded-for", "forwarded", "cf-connecting-ip", "x-real-ip", "tailscale-user-login"];
 
 /** Chat SDK's Teams converter: Markdown as Teams' Markdown, and Teams' HTML as Markdown. */
@@ -187,8 +197,15 @@ export function createChannel(config: ChannelConfig, env: ChannelEnv): ChannelAd
   const playground = config.playground === true;
   if (config.playground !== undefined && typeof config.playground !== "boolean") throw new Error(`channel ${config.id}: "playground" must be true or false`);
   if (playground && mode !== "http") throw new Error(`channel ${config.id}: "playground" needs "mode": "http"`);
+  if (playground && config.secrets !== undefined) throw new Error(`channel ${config.id}: "playground" takes no "secrets": it is only for Agents Playground on this computer, never with a real app`);
+  if (!playground && config.port !== undefined) throw new Error(`channel ${config.id}: "port" is only for "playground"`);
+  if (config.port !== undefined && !(Number.isInteger(config.port) && (config.port as number) >= 0 && (config.port as number) < 65536)) throw new Error(`channel ${config.id}: "port" must be a port number`);
   if (!playground && typeof config.secrets !== "string") throw new Error(`channel ${config.id}: "secrets" must name the env file with CLIENT_ID, CLIENT_SECRET and TENANT_ID`);
-  return new TeamsChannel(config.id, { ...(typeof config.secrets === "string" ? { secrets: expandHome(config.secrets) } : {}), mode, playground }, env);
+  return new TeamsChannel(
+    config.id,
+    { ...(typeof config.secrets === "string" ? { secrets: expandHome(config.secrets) } : {}), mode, playground, ...(typeof config.port === "number" ? { port: config.port } : {}) },
+    env,
+  );
 }
 
 export class TeamsChannel implements ChannelAdapter {
@@ -202,6 +219,8 @@ export class TeamsChannel implements ChannelAdapter {
   #app?: TeamsApp;
   #sink?: ChannelSink;
   #route?: { path: string; close(): void };
+  /** Playground mode's own server, on 127.0.0.1. */
+  #playground?: { server: Server; url: string };
   #clientId?: string;
   #tenantId?: string;
   /** The bot's Teams ID, 28:<client ID>. */
@@ -209,8 +228,12 @@ export class TeamsChannel implements ChannelAdapter {
   /** Activities are stored one after another, in the order they came. */
   #storing: Promise<unknown> = Promise.resolve();
   #refilling: Promise<void> = Promise.resolve();
-  /** When the socket last dropped, in Unix ms: where the backfill after the reconnect starts. */
-  #droppedAt?: number;
+  /** The backfills that run: stop waits for them. */
+  readonly #backfills = new Set<Promise<unknown>>();
+  /** Aborted by stop: requests, their waits and the backfill end. */
+  #stopping = new AbortController();
+  /** When each region's socket dropped, in Unix ms: where the backfill after its reconnect starts. */
+  readonly #droppedAt = new Map<string, number>();
   /** Where the backfill starts in each known place, by conversation: read before the channel connects. */
   #starts = new Map<string, number>();
 
@@ -220,7 +243,8 @@ export class TeamsChannel implements ChannelAdapter {
     this.#env = env;
     this.#endpoints = endpoints;
     this.#graph = endpoints.graph ?? GRAPH;
-    this.#stateFile = join(env.botDir, "channels", `${id}.json`);
+    // What playground mode learns comes from requests nobody signed: never mixed with a real app's.
+    this.#stateFile = join(env.botDir, "channels", options.playground ? `${id}.playground.json` : `${id}.json`);
     this.#state = readState(this.#stateFile);
   }
 
@@ -233,14 +257,23 @@ export class TeamsChannel implements ChannelAdapter {
     return this.#route?.path;
   }
 
+  /** Where Agents Playground posts to in playground mode, once started. */
+  get playgroundUrl(): string | undefined {
+    return this.#playground?.url;
+  }
+
   // ---- Connect ----
 
   /**
    * Connect: in Socket Mode, open the sockets (the SDK keeps them open and reconnects by itself); in HTTP mode, serve
-   * the channel's path on the page server. Every activity is stored before Teams gets its answer.
+   * the channel's path on the page server; in playground mode, serve Agents Playground on 127.0.0.1. Every activity is
+   * stored before Teams gets its answer.
    */
   async start(sink: ChannelSink): Promise<void> {
     const { mode, playground } = this.#options;
+    if (playground && this.#options.secrets) throw new Error(`channel ${this.id}: playground mode takes no secrets`);
+    this.#stopping = new AbortController();
+    this.#droppedAt.clear();
     const secrets = this.#options.secrets ? readSecrets(this.#options.secrets, ["CLIENT_ID", "CLIENT_SECRET", "TENANT_ID"]) : undefined;
     this.#clientId = secrets?.CLIENT_ID;
     this.#tenantId = secrets?.TENANT_ID;
@@ -265,16 +298,17 @@ export class TeamsChannel implements ChannelAdapter {
     this.#app = app;
     if (mode === "socket") {
       if (this.#endpoints.socket) useSocketConnections(app, this.#endpoints.socket);
+      // Each region has its own socket, which drops and comes back on its own.
       app.socketMode?.events.on("disconnected", ({ geo, error, terminal }) => {
-        this.#droppedAt ??= Date.now();
+        if (!this.#droppedAt.has(geo)) this.#droppedAt.set(geo, Date.now());
         sink.log(terminal ? "Teams refused the socket, and it will not reconnect" : "socket dropped", { region: geo, ...(error ? { error: error.message } : {}) });
       });
       app.socketMode?.events.on("reconnected", ({ geo }) => {
         // Teams is not known to keep events while a socket is down: read what came meanwhile, from a minute before the drop.
-        const since = (this.#droppedAt ?? Date.now()) - 60_000;
-        this.#droppedAt = undefined;
+        const since = (this.#droppedAt.get(geo) ?? Date.now()) - 60_000;
+        this.#droppedAt.delete(geo);
         sink.log("socket reconnected", { region: geo });
-        this.#refilling = this.#refilling.then(() => this.#backfill(sink, () => since)).catch((error) => sink.log("backfill failed", { error: String(error) }));
+        this.#refilling = this.#track(this.#refilling.then(() => this.#backfill(sink, () => since)).catch((error) => sink.log("backfill failed", { error: String(error) })));
       });
       try {
         await app.start();
@@ -284,33 +318,106 @@ export class TeamsChannel implements ChannelAdapter {
       return;
     }
     await app.initialize();
+    const adapter = app.server.adapter as RouteAdapter;
+    if (playground) {
+      this.#playground = await this.#servePlayground(adapter);
+      sink.log("taking Agents Playground requests, only from this computer", { endpoint: this.#playground.url });
+      return;
+    }
     const http = this.#env.http;
     if (!http) throw new Error(`channel ${this.id}: HTTP mode needs Pots' page server`);
-    const adapter = app.server.adapter as RouteAdapter;
     this.#route = http.serve((request) => this.#request(request, adapter));
     const base = http.publicUrl();
     sink.log("taking Teams requests", {
       path: this.#route.path,
       ...(base ? { endpoint: `${base.replace(/\/+$/, "")}${this.#route.path}` } : { problem: "settings.json has no publicUrl, so Teams cannot reach this computer" }),
-      ...(playground ? { playground: true } : {}),
     });
   }
 
-  /** Take no more activities, and wait for the ones already taken to be stored. */
+  /**
+   * Take no more activities, end the requests and backfills that run, and wait for them and for the activities already
+   * taken to be stored.
+   */
   async stop(): Promise<void> {
+    this.#stopping.abort(new Error(`channel ${this.id} stopped`));
     this.#route?.close();
     this.#route = undefined;
+    const playground = this.#playground;
+    this.#playground = undefined;
+    if (playground) {
+      playground.server.closeAllConnections();
+      await new Promise<void>((resolve) => playground.server.close(() => resolve()));
+    }
     const app = this.#app;
     this.#app = undefined;
     await app?.stop().catch(() => {});
+    await Promise.allSettled([...this.#backfills]);
     await this.#storing.catch(() => {});
   }
 
-  /** A request to the channel's path on the page server, in HTTP mode: the SDK checks Microsoft's signature, then #receive runs. */
+  /** Keep a backfill until it ends, for stop. */
+  #track<T>(work: Promise<T>): Promise<T> {
+    this.#backfills.add(work);
+    void work.finally(() => this.#backfills.delete(work)).catch(() => {});
+    return work;
+  }
+
+  /**
+   * Playground mode's server: the playground port on 127.0.0.1, which nothing outside this computer reaches. A request
+   * must name this computer as its host (a page that points a name of its own at 127.0.0.1 cannot send), come from no
+   * proxy and no browser page, and be JSON.
+   */
+  async #servePlayground(adapter: RouteAdapter): Promise<{ server: Server; url: string }> {
+    const server = createServer((incoming, response) => {
+      void this.#playgroundRequest(incoming, adapter).then(
+        (answer) => {
+          response.writeHead(answer.status, { "content-type": "application/json", "cache-control": "no-store" });
+          response.end(answer.body === undefined ? undefined : JSON.stringify(answer.body));
+        },
+        () => {
+          response.writeHead(500).end();
+        },
+      );
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(this.#options.port ?? PLAYGROUND_PORT, "127.0.0.1", () => {
+        server.off("error", reject);
+        resolve();
+      });
+    });
+    const { port } = server.address() as AddressInfo;
+    return { server, url: `http://127.0.0.1:${port}${PLAYGROUND_PATH}` };
+  }
+
+  async #playgroundRequest(incoming: IncomingMessage, adapter: RouteAdapter): Promise<ChannelResponse> {
+    const refuse = (status: number, error: string): ChannelResponse => {
+      incoming.resume();
+      return { status, body: { error } };
+    };
+    if ((incoming.url ?? "").split("?")[0] !== PLAYGROUND_PATH) return refuse(404, "not found");
+    const host = (incoming.headers.host ?? "").replace(/:\d+$/, "").toLowerCase();
+    const local = host === "127.0.0.1" || host === "localhost" || host === "[::1]";
+    if (!local || PROXY_HEADERS.some((name) => incoming.headers[name] !== undefined) || incoming.headers.origin !== undefined) {
+      return refuse(403, "playground mode takes requests only from this computer");
+    }
+    if (!/^application\/json\b/i.test(incoming.headers["content-type"] ?? "")) return refuse(415, "send JSON");
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const chunk of incoming) {
+      size += (chunk as Buffer).length;
+      if (size > MAX_PLAYGROUND_BODY) return { status: 413, body: { error: "too large" } };
+      chunks.push(chunk as Buffer);
+    }
+    return this.#request({ method: incoming.method ?? "GET", headers: incoming.headers, body: Buffer.concat(chunks) }, adapter);
+  }
+
+  /**
+   * A request in HTTP mode, from the page server or (in playground mode) the channel's own server: the SDK checks
+   * Microsoft's signature, except in playground mode, then #receive runs.
+   */
   async #request(request: ChannelRequest, adapter: RouteAdapter): Promise<ChannelResponse> {
     if (request.method !== "POST") return { status: 405, body: { error: "Use POST." } };
-    // Without Microsoft's signature, only from this computer: never through the public address.
-    if (this.#options.playground && PROXY_HEADERS.some((name) => request.headers[name] !== undefined)) return { status: 403, body: { error: "playground mode takes requests only from this computer" } };
     let body: unknown;
     try {
       body = JSON.parse(request.body.toString("utf8"));
@@ -375,6 +482,8 @@ export class TeamsChannel implements ChannelAdapter {
       if (named && data.channel.name) named.channelName = data.channel.name;
       if (named && data.team && named !== conversation) named.team = { ...conversation.team };
       if (where.conversation === data.team?.id) conversation.channelName ??= "General";
+      // The team's Entra group ID, for Graph, comes with some events only: every channel of the team gets it.
+      if (data.team?.id && data.team.aadGroupId) this.#knowTeam(data.team.id, data.team.aadGroupId);
       const from = activity.from as Account | undefined;
       if (conversation.type === "personal" && from?.id && from.id !== this.#botId) {
         this.#state.dms[from.aadObjectId ?? from.id] = where.conversation;
@@ -388,6 +497,13 @@ export class TeamsChannel implements ChannelAdapter {
       if (account.name) person.name = account.name;
     }
     if (JSON.stringify(this.#state) !== before) this.#save();
+  }
+
+  /** A team's Entra group ID, for every conversation of the team the channel knows. */
+  #knowTeam(team: string, group: string): void {
+    for (const conversation of Object.values(this.#state.conversations)) {
+      if (conversation.team?.id === team) conversation.team = { ...conversation.team, aadGroupId: group };
+    }
   }
 
   #save(): void {
@@ -452,7 +568,7 @@ export class TeamsChannel implements ChannelAdapter {
 
   async translate(value: unknown): Promise<Happening[]> {
     const raw = value as Raw;
-    if (raw.source === "history") return this.#history(raw.conversation, raw.message);
+    if (raw.source === "history") return this.#history(raw.conversation, raw.message, raw.since);
     if (raw.source === "sent") return this.#sent(raw);
     const { activity, at } = raw;
     const where = whereOf(activity);
@@ -604,8 +720,12 @@ export class TeamsChannel implements ChannelAdapter {
     return happenings;
   }
 
-  /** A message the backfill read from Graph. System messages (a member added, a call) are not read as messages. */
-  #history(conversation: string, message: GraphMessage): Happening[] {
+  /**
+   * A message the backfill read from Graph, as it is now. System messages (a member added, a call) are not read as
+   * messages. One edited after the backfill's start is also an edit, at its edit time: the log keeps a message it has
+   * and takes the edit, and an older edit never replaces a newer one.
+   */
+  #history(conversation: string, message: GraphMessage, since?: number): Happening[] {
     if (message.messageType && message.messageType !== "message") return [];
     const where: Where = { conversation, ...(message.replyToId ? { root: message.replyToId } : {}) };
     const created = Date.parse(message.createdDateTime ?? "");
@@ -622,22 +742,21 @@ export class TeamsChannel implements ChannelAdapter {
     const person = fromMe ? this.me : user?.id ? { address: this.person(user.id), ...(user.displayName ? { name: user.displayName } : {}) } : undefined;
     const content = message.body?.content ?? "";
     const files = (message.attachments ?? []).filter((file) => file.contentType === "reference" && file.contentUrl);
-    return [
-      {
-        kind: "message",
-        at,
-        place,
-        message: address,
-        ...(thread ? { thread, threadRoot: thread } : {}),
-        ...(person ? { person } : {}),
-        fromMe,
-        mentionsMe: (message.mentions ?? []).some((mention) => mention.mentioned?.application?.id !== undefined && mention.mentioned.application.id === this.#clientId),
-        text: message.body?.contentType === "html" ? htmlToMarkdown(content) : content,
-        mentions: (message.mentions ?? []).flatMap((mention) => (mention.mentioned?.user?.id ? [this.person(mention.mentioned.user.id)] : [])),
-        ...(files.length ? { files: files.map((file) => ({ ...(file.name ? { name: file.name } : {}), url: file.contentUrl! })) } : {}),
-        raw: message,
-      },
-    ];
+    const common = {
+      place,
+      message: address,
+      ...(person ? { person } : {}),
+      fromMe,
+      mentionsMe: (message.mentions ?? []).some((mention) => mention.mentioned?.application?.id !== undefined && mention.mentioned.application.id === this.#clientId),
+      text: message.body?.contentType === "html" ? htmlToMarkdown(content) : content,
+      mentions: (message.mentions ?? []).flatMap((mention) => (mention.mentioned?.user?.id ? [this.person(mention.mentioned.user.id)] : [])),
+      ...(files.length ? { files: files.map((file) => ({ ...(file.name ? { name: file.name } : {}), url: file.contentUrl! })) } : {}),
+      raw: message,
+    };
+    const happenings: Happening[] = [{ kind: "message", at, ...common, ...(thread ? { thread, threadRoot: thread } : {}) }];
+    const edited = Date.parse(message.lastEditedDateTime ?? "");
+    if (Number.isFinite(edited) && (since === undefined || edited > since)) happenings.push({ kind: "edit", at: edited, ...common, ...(thread ? { thread } : {}) });
+    return happenings;
   }
 
   /** A message this channel posted: from send, with its send ID, or from call. */
@@ -709,70 +828,115 @@ export class TeamsChannel implements ChannelAdapter {
    */
   async backfill(sink: ChannelSink): Promise<void> {
     const lastAlive = sink.lastAlive();
-    if (lastAlive === undefined) return;
+    if (lastAlive === undefined || this.#options.playground) return;
     const starts = this.#starts;
-    await this.#backfill(sink, (conversation) => starts.get(conversation) ?? lastAlive);
+    await this.#track(this.#backfill(sink, (conversation) => starts.get(conversation) ?? lastAlive));
   }
 
+  /**
+   * Each place is read whole before anything of it is stored: a place whose reading fails stores nothing, so its newest
+   * logged message, where the next backfill starts, does not pass what was not read. stop ends it.
+   */
   async #backfill(sink: ChannelSink, startOf: (conversation: string) => number): Promise<void> {
+    const stopping = this.#stopping.signal;
     let added = 0;
     for (const place of await sink.places()) {
+      if (stopping.aborted) return;
       const parsed = this.#tryParse(place);
       if (!parsed || !("conversation" in parsed)) continue;
       const conversation = parsed.conversation;
       const kind = placeKind(conversation, this.#state.conversations[conversation]?.type);
       if (kind === "dm") continue;
+      const since = startOf(conversation);
       try {
-        const messages = kind === "channel" ? await this.#channelHistory(conversation, startOf(conversation)) : await this.#chatHistory(conversation, startOf(conversation));
+        const messages = kind === "channel" ? await this.#channelHistory(conversation, since) : await this.#chatHistory(conversation, since);
         messages.sort((a, b) => (Date.parse(a.createdDateTime ?? "") || 0) - (Date.parse(b.createdDateTime ?? "") || 0));
         for (const message of messages) {
-          await sink.receive(`history:${conversation}/${message.id}:${message.lastModifiedDateTime ?? ""}`, { source: "history", conversation, message } satisfies Raw);
+          if (stopping.aborted) return;
+          await sink.receive(`history:${conversation}/${message.id}:${message.lastModifiedDateTime ?? ""}`, { source: "history", conversation, message, since } satisfies Raw);
           added++;
         }
       } catch (error) {
-        sink.log("backfill skipped a place", { place, error: errorText(error) });
+        if (stopping.aborted) return;
+        sink.log("backfill skipped a place; it is read again from the same start next time", { place, error: errorText(error) });
       }
     }
     sink.log("backfill done", { messages: added });
   }
 
-  /** A channel's messages changed after since: its root messages, and the replies of each, from Graph. */
+  /**
+   * A channel's messages changed after since, from Graph: root messages with their replies. Graph gives the roots
+   * newest first by the last change in the whole thread, its replies included, and filters nothing by time: read pages
+   * until one has no thread changed after since.
+   */
   async #channelHistory(channel: string, since: number): Promise<GraphMessage[]> {
-    const team = this.#state.conversations[channel]?.team?.aadGroupId;
-    if (!team) throw new Error("the team of this channel is not known yet (it comes with the channel's events)");
+    const team = await this.#teamGroup(channel);
     const base = `/teams/${encodeURIComponent(team)}/channels/${encodeURIComponent(channel)}/messages`;
     const found: GraphMessage[] = [];
-    // Graph does not filter channel messages by time: read pages until one has nothing newer.
-    for await (const page of this.#pages(`${base}?$top=50`)) {
-      const newer = page.filter((message) => changedAfter(message, since));
-      for (const root of newer) {
-        if (createdAfter(root, since) || root.deletedDateTime) found.push(root);
-        for await (const replies of this.#pages(`${base}/${encodeURIComponent(root.id)}/replies?$top=50`)) {
-          found.push(...replies.filter((reply) => changedAfter(reply, since)).map((reply) => ({ ...reply, replyToId: reply.replyToId ?? root.id })));
-          if (!replies.some((reply) => changedAfter(reply, since))) break;
+    for await (const page of this.#pages(`${this.#graph}${base}?$top=50&$expand=replies`)) {
+      let changed = false;
+      for (const root of page) {
+        const replies = [...(root.replies ?? [])];
+        // The replies Graph did not expand (all of them, if it expanded none): newest first, until a page has nothing newer.
+        const rest = root.replies === undefined ? `${this.#graph}${base}/${encodeURIComponent(root.id)}/replies?$top=50` : root["replies@odata.nextLink"];
+        if (rest && (root.replies === undefined || replies.some((reply) => changedAfter(reply, since)))) {
+          for await (const more of this.#pages(rest)) {
+            replies.push(...more);
+            if (!more.some((reply) => changedAfter(reply, since))) break;
+          }
         }
+        const newer = replies.filter((reply) => changedAfter(reply, since));
+        if (changedAfter(root, since)) found.push(withoutReplies(root));
+        found.push(...newer.map((reply) => ({ ...withoutReplies(reply), replyToId: reply.replyToId ?? root.id })));
+        changed ||= newer.length > 0 || changedAfter(root, since);
       }
-      if (!newer.length) break;
+      if (!changed) break;
     }
     return found;
+  }
+
+  /**
+   * The Entra group ID of a channel's team, which Graph needs: from the channel's events, from another channel of the
+   * same team, or else from Teams' Bot Connector (by the team's ID, or by the channel's when no event gave the team).
+   */
+  async #teamGroup(channel: string): Promise<string> {
+    const conversations = this.#state.conversations;
+    const team = conversations[channel]?.team;
+    if (team?.aadGroupId) return team.aadGroupId;
+    const teamId = team?.id;
+    const known = teamId ? Object.values(conversations).find((each) => each.team?.id === teamId && each.team.aadGroupId)?.team?.aadGroupId : undefined;
+    const details = known ? undefined : ((await this.#fetch("bot", "GET", `${this.#serviceUrl(channel)}/v3/teams/${teamId ?? channel}`)) as { id?: string; name?: string; aadGroupId?: string } | null);
+    const group = known ?? details?.aadGroupId;
+    if (!group) throw new Error("Teams did not give the Entra group of this channel's team");
+    const conversation = (conversations[channel] ??= {});
+    conversation.team = { ...conversation.team, id: teamId ?? details?.id ?? channel, aadGroupId: group, ...(details?.name && !conversation.team?.name ? { name: details.name } : {}) };
+    this.#knowTeam(conversation.team.id!, group);
+    this.#save();
+    return group;
   }
 
   /** A group chat's messages changed after since, newest first, from Graph. */
   async #chatHistory(chat: string, since: number): Promise<GraphMessage[]> {
     const query = new URLSearchParams({ $top: "50", $orderby: "lastModifiedDateTime desc", $filter: `lastModifiedDateTime gt ${new Date(since).toISOString()}` });
     const found: GraphMessage[] = [];
-    for await (const page of this.#pages(`/chats/${encodeURIComponent(chat)}/messages?${query}`)) found.push(...page.filter((message) => changedAfter(message, since)));
+    for await (const page of this.#pages(`${this.#graph}/chats/${encodeURIComponent(chat)}/messages?${query}`)) found.push(...page.filter((message) => changedAfter(message, since)));
     return found;
   }
 
-  /** The pages of a Graph list, following @odata.nextLink, at most MAX_PAGES. */
-  async *#pages(path: string): AsyncGenerator<GraphMessage[]> {
-    let url: string | undefined = `${this.#graph}${path}`;
-    for (let page = 0; url && page < MAX_PAGES; page++) {
+  /**
+   * The pages of a Graph list, following @odata.nextLink to the end: no page is left out, so nothing is lost between
+   * what was read and where the next backfill starts. A link that leaves Graph or comes again is an error.
+   */
+  async *#pages(first: string): AsyncGenerator<GraphMessage[]> {
+    let url: string | undefined = first;
+    const seen = new Set<string>();
+    while (url) {
+      if (!url.startsWith(`${this.#graph}/`)) throw new Error(`Microsoft Graph gave a next page outside Graph: ${url.slice(0, 200)}`);
+      if (seen.has(url)) throw new Error("Microsoft Graph gave the same next page twice");
+      seen.add(url);
       const answer = (await this.#fetch("graph", "GET", url)) as { value?: GraphMessage[]; "@odata.nextLink"?: string };
       yield answer.value ?? [];
-      const next = answer["@odata.nextLink"];
-      url = next && next.startsWith(`${this.#graph}/`) ? next : undefined;
+      url = answer["@odata.nextLink"];
     }
   }
 
@@ -883,17 +1047,17 @@ export class TeamsChannel implements ChannelAdapter {
 
   /**
    * The content of a file of a message. A file in a DM comes with a download link of its own, which needs no token; an
-   * image pasted in a message is read with the bot token, only from Microsoft's hosts. A file in a channel or a group
-   * chat is a SharePoint link, which needs Graph file permissions that only an admin can give: it is not read.
+   * image pasted in a message is read with the bot token, only at the address of Teams' Bot Connector that Teams' own
+   * events gave (as Chat SDK does: no other host gets the token). A file in a channel or a group chat is a SharePoint
+   * link, which needs Graph file permissions that only an admin can give: it is not read.
    */
   async fetchFile(file: FileInfo, signal: AbortSignal): Promise<AsyncIterable<Uint8Array>> {
     const url = new URL(file.url ?? "");
-    const secure = url.protocol === "https:" || this.#endpoints.fileHosts !== undefined;
     let headers: Record<string, string> = {};
-    if (secure && isSharePoint(url.hostname) && url.searchParams.has("tempauth")) {
+    if (url.protocol === "https:" && isSharePoint(url.hostname) && url.searchParams.has("tempauth")) {
       // A DM file's own download link.
-    } else if (secure && (this.#endpoints.fileHosts?.(url.hostname) ?? isBotFileHost(url.hostname))) {
-      const token = await this.#token("bot");
+    } else if (this.#connectorOrigins().has(connectorOrigin(url) ?? "")) {
+      const token = await abortable(this.#token("bot"), AbortSignal.any([signal, this.#stopping.signal, AbortSignal.timeout(this.#requestTimeout)]));
       headers = token ? { authorization: `Bearer ${token}` } : {};
     } else if (isSharePoint(url.hostname)) {
       throw new Error("Teams gives files in channels and group chats as SharePoint links; reading them needs Graph file permissions (Files.Read.All or Sites.Read.All) that an admin grants. Ask the person to send the file in a DM, or to share it with you another way.");
@@ -933,11 +1097,21 @@ export class TeamsChannel implements ChannelAdapter {
     return result;
   }
 
-  /** The bot's token for Teams, or the app's token for Graph; none in playground mode. */
+  /** The origins of Teams' Bot Connector: the service URLs Teams' events gave, and the default one. */
+  #connectorOrigins(): Set<string> {
+    const urls = [...Object.values(this.#state.conversations).map((conversation) => conversation.serviceUrl), this.#endpoints.serviceUrl ?? DEFAULT_SERVICE_URL];
+    return new Set(urls.flatMap((each) => (each ? [connectorOrigin(new URL(each))].filter((origin): origin is string => origin !== undefined) : [])));
+  }
+
+  get #requestTimeout(): number {
+    return this.#endpoints.timeouts?.request ?? REQUEST_TIMEOUT_MS;
+  }
+
+  /** The bot's token for Teams, or the app's token for Graph; never one in playground mode. */
   async #token(kind: "bot" | "graph"): Promise<string | undefined> {
     const app = this.#app;
-    if (!app) throw new Error(`channel ${this.id} is not started`);
-    if (this.#options.playground && !this.#clientId) return undefined;
+    if (!app) throw new TeamsError(`channel ${this.id} is not started`);
+    if (this.#options.playground) return undefined;
     const token = kind === "bot" ? await app.tokenProvider.getAppToken() : await app.tokenProvider.getAppToken(app.cloud.graphScope, this.#tenantId);
     return token ? String(token) : undefined;
   }
@@ -945,20 +1119,25 @@ export class TeamsChannel implements ChannelAdapter {
   /**
    * One request to Teams or Graph. One that fails before Teams answers, or that Teams answers with "too many requests"
    * or "busy", is tried again after the wait Teams asks for or a growing one, until a try fails a minute or more after
-   * the first began. The error says what Teams answered, never the token.
+   * the first began. Each try, its token included, has REQUEST_TIMEOUT_MS. stop ends the request and its waits. The
+   * error says what Teams answered, never the token.
    */
   async #fetch(kind: "bot" | "graph", method: string, url: string, body?: unknown): Promise<unknown> {
+    const stopping = this.#stopping.signal;
+    const retryMs = this.#endpoints.timeouts?.retry ?? RETRY_MS;
     const started = Date.now();
     for (let attempt = 1; ; attempt++) {
+      if (stopping.aborted) throw new TeamsError(`channel ${this.id} stopped`);
+      const signal = AbortSignal.any([stopping, AbortSignal.timeout(this.#requestTimeout)]);
       let wait: number;
       let failure: string;
       try {
-        const token = await this.#token(kind);
+        const token = await abortable(this.#token(kind), signal);
         const response = await fetch(url, {
           method,
           headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(body !== undefined ? { "content-type": "application/json" } : {}), accept: "application/json" },
           ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+          signal,
           redirect: "error",
         });
         const text = await response.text();
@@ -969,11 +1148,12 @@ export class TeamsChannel implements ChannelAdapter {
         wait = retryAfter(response.headers.get("retry-after")) ?? backoff(attempt);
       } catch (error) {
         if (error instanceof TeamsError) throw error;
+        if (stopping.aborted) throw new TeamsError(`channel ${this.id} stopped`);
         failure = `${kind === "graph" ? "Microsoft Graph" : "Teams"} did not answer: ${errorText(error)}`;
         wait = backoff(attempt);
       }
-      if (Date.now() - started >= RETRY_MS) throw new TeamsError(`${failure}; tried for ${Math.round((Date.now() - started) / 1000)} s, then gave up`);
-      await sleep(wait);
+      if (Date.now() - started >= retryMs) throw new TeamsError(`${failure}; tried for ${Math.round((Date.now() - started) / 1000)} s, then gave up`);
+      await sleep(Math.min(wait, Math.max(retryMs - (Date.now() - started), 0)), undefined, { signal: stopping }).catch(() => {});
     }
   }
 }
@@ -1010,9 +1190,10 @@ function changedAfter(message: GraphMessage, since: number): boolean {
   return !Number.isFinite(changed) || changed > since;
 }
 
-function createdAfter(message: GraphMessage, since: number): boolean {
-  const created = Date.parse(message.createdDateTime ?? "");
-  return !Number.isFinite(created) || created > since;
+/** A message as the backfill stores it: a root without the replies Graph expanded, which are stored on their own. */
+function withoutReplies(message: GraphMessage): GraphMessage {
+  const { replies: _replies, "replies@odata.nextLink": _next, ...rest } = message;
+  return rest;
 }
 
 /** A DM is "personal"; a group chat "groupChat"; a channel "channel". Without an event's word, by the ID's form. */
@@ -1129,9 +1310,30 @@ function isSharePoint(host: string): boolean {
   return host.endsWith(".sharepoint.com") || host.endsWith(".sharepoint.us") || host.endsWith(".sharepoint-df.com");
 }
 
-/** Microsoft's hosts that serve images pasted in messages to the bot. */
-function isBotFileHost(host: string): boolean {
-  return host === "smba.trafficmanager.net" || [".botframework.com", ".skype.com", ".teams.microsoft.com", ".trafficmanager.net"].some((suffix) => host.endsWith(suffix));
+/** The origin of a URL that may get the bot token: HTTPS, or HTTP on this computer (as Chat SDK has it, for tests). */
+function connectorOrigin(url: URL): string | undefined {
+  if (url.protocol === "https:") return url.origin;
+  if (url.protocol === "http:" && /^(localhost|127(\.\d{1,3}){3}|\[::1\])$/i.test(url.hostname)) return url.origin;
+  return undefined;
+}
+
+/** The promise, or the signal's reason once it aborts: for work that takes no signal, such as getting a token. */
+function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener("abort", abort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", abort);
+        reject(error);
+      },
+    );
+  });
 }
 
 function parseJson(text: string): unknown {

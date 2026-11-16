@@ -9,8 +9,9 @@ import { type FakeModel, startFakeModel } from "./support/fake-model.ts";
 import { BOT, TestGateway, waitFor } from "./support/gateway.ts";
 import { FakeTeams } from "./support/teams.ts";
 
-// The Teams channel in a real gateway, in HTTP mode with "playground": true: Teams' requests come to the page server at
-// /channel/<bot>/<channel>, and the bot's answers go to the service URL the requests name. First against a fake of Teams'
+// The Teams channel in a real gateway, in HTTP mode with "playground": true: Teams' requests come to the channel's own
+// server on 127.0.0.1 at /api/messages, never to the page server, and the bot's answers go to the service URL the
+// requests name. First against a fake of Teams'
 // Bot Connector, always; then against Microsoft 365 Agents Playground, which plays Teams on this computer and needs no
 // Microsoft account, only with POTS_TEST_PLAYGROUND=1, as it downloads the Playground from npm (npx):
 //
@@ -23,13 +24,16 @@ const PLAYGROUND = "@microsoft/m365agentsplayground@0.2.30";
 
 let model: FakeModel;
 let gateway: TestGateway;
+/** The playground's port: Agents Playground's own default, 3978, may be taken on this computer. */
+let playgroundPort = 0;
 
 beforeAll(async () => {
   model = await startFakeModel();
   gateway = new TestGateway({ model });
+  playgroundPort = await freePort();
   const file = join(gateway.botDir, "bot.json");
   const definition = JSON.parse(readFileSync(file, "utf8"));
-  definition.channels.push({ id: "teams", type: "teams", mode: "http", playground: true });
+  definition.channels.push({ id: "teams", type: "teams", mode: "http", playground: true, port: playgroundPort });
   writeFileSync(file, JSON.stringify(definition, null, 2));
   await gateway.start();
 }, 60_000);
@@ -40,7 +44,7 @@ afterAll(async () => {
 });
 
 const pagePort = () => (JSON.parse(readFileSync(join(gateway.home, "settings.json"), "utf8")) as { pagePort: number }).pagePort;
-const endpoint = () => `http://127.0.0.1:${pagePort()}/channel/${BOT}/teams`;
+const endpoint = () => `http://127.0.0.1:${playgroundPort}/api/messages`;
 
 describe("Teams in HTTP mode, through the gateway", () => {
   it("stores a request, wakes the bot, and posts its answer to the request's service URL", async () => {
@@ -60,23 +64,28 @@ describe("Teams in HTTP mode, through the gateway", () => {
       };
       const answer = await fetch(endpoint(), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(activity) });
       expect(answer.status).toBe(200);
-      await waitFor(() => fake.requested("POST", "/teams/v3/conversations/.*/activities").length > 0, { timeout: 20_000, what: "the bot's answer" });
+      // The answer is logged once Teams took it: wait for the log, not for the request.
+      const logged = () => gateway.query<{ kind: string; place: string; person: string; text: string }>("SELECT kind, place, person, text FROM gw_events WHERE channel = 'teams' ORDER BY id");
+      await waitFor(() => logged().some((row) => row.kind === "message" && row.text.startsWith("ack:")), { timeout: 20_000, what: "the bot's answer in the log" });
       const [posted] = fake.requested("POST", "/teams/v3/conversations/.*/activities");
       expect(posted!.path).toBe("/teams/v3/conversations/a:dm-alice/activities");
       expect(posted!.body).toMatchObject({ type: "message", textFormat: "markdown" });
       expect(posted!.body.text).toContain("ack:");
-      const rows = gateway.query<{ kind: string; place: string; person: string; text: string }>("SELECT kind, place, person, text FROM gw_events WHERE channel = 'teams' ORDER BY id");
+      const rows = logged();
       expect(rows[0]).toEqual({ kind: "message", place: "teams:#a:dm-alice", person: "teams:@aad-alice", text: "what does the pricing look like?" });
-      expect(rows.some((row) => row.kind === "message" && row.text.startsWith("ack:"))).toBe(true);
+      expect(rows.filter((row) => row.text.startsWith("ack:"))).toHaveLength(1);
+      expect(fake.requested("POST", "/teams/v3/conversations/.*/activities")).toHaveLength(1);
+      expect(posted!.auth).toBeUndefined();
     } finally {
       await fake.close();
     }
   }, 40_000);
 
-  it("refuses a request through a proxy in playground mode, and a path no channel serves", async () => {
+  it("is not on the page server, and refuses a request through a proxy", async () => {
+    // The page server is what the public address reaches: playground mode serves nothing there.
+    expect((await fetch(`http://127.0.0.1:${pagePort()}/channel/${BOT}/teams`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).status).toBe(404);
     const proxied = await fetch(endpoint(), { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.5" }, body: "{}" });
     expect(proxied.status).toBe(403);
-    expect((await fetch(`http://127.0.0.1:${pagePort()}/channel/${BOT}/nothing`, { method: "POST", body: "{}" })).status).toBe(404);
   });
 });
 
@@ -95,10 +104,11 @@ describe.runIf(process.env.POTS_TEST_PLAYGROUND === "1")("Teams with Microsoft 3
   let config: any;
   const logs: any[] = [];
   let socket: WebSocket | undefined;
-  /** The Playground's working folder: it writes its log (devTools/) there. */
-  const folder = mkdtempSync(join(tmpdir(), "pots-playground-"));
+  /** The Playground's working folder: it writes its log (devTools/) there. Made only when this part runs. */
+  let folder = "";
 
   beforeAll(async () => {
+    folder = mkdtempSync(join(tmpdir(), "pots-playground-"));
     const port = await freePort();
     base = `http://127.0.0.1:${port}`;
     // No browser opens: BROWSER is a command that does nothing, and the test has no DISPLAY.
@@ -128,7 +138,7 @@ describe.runIf(process.env.POTS_TEST_PLAYGROUND === "1")("Teams with Microsoft 3
       }
     } else playground?.kill();
     if (playground && playground.exitCode === null) await Promise.race([new Promise((resolve) => playground!.once("exit", resolve)), new Promise((resolve) => setTimeout(resolve, 5_000))]);
-    rmSync(folder, { recursive: true, force: true });
+    if (folder) rmSync(folder, { recursive: true, force: true });
   });
 
   /** The messages the bot sent, as the Playground got them. */

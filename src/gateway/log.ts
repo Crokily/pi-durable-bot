@@ -385,9 +385,11 @@ async function applyOne(tx: SqlExecutor, channel: string, eventId: string, h: Ha
       await tx.run("UPDATE gw_messages SET thread = ? WHERE address = ? AND thread IS NULL", thread, h.threadRoot);
     }
   } else if (h.message) {
-    const known = await tx.get<{ thread: string | null }>("SELECT thread FROM gw_messages WHERE address = ?", h.message);
+    const known = await tx.get<{ thread: string | null; edited_at: number | null }>("SELECT thread, edited_at FROM gw_messages WHERE address = ?", h.message);
     thread ??= known?.thread ?? null;
     if (h.kind === "edit") {
+      // An edit older than the one the log has (a backfill that read the message before a later edit came live) adds nothing.
+      if (known?.edited_at != null && h.at < known.edited_at) return undefined;
       if (known) {
         await tx.run(
           "UPDATE gw_messages SET text = ?, mentions_me = ?, mentions = ?, files = coalesce(?, files), edited_at = ?, raw = ? WHERE address = ?",

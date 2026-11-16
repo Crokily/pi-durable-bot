@@ -25,8 +25,8 @@ if (!chrome) {
 const profile = mkdtempSync(join(tmpdir(), "shot-"));
 const browser = spawn(chrome, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--no-default-browser-check", "--hide-scrollbars", "about:blank"], { stdio: "ignore" });
 let status = 1;
+let port;
 try {
-  let port;
   for (let i = 0; i < 100 && !port; i++) {
     try {
       port = readFileSync(join(profile, "DevToolsActivePort"), "utf8").split("\n")[0];
@@ -76,8 +76,21 @@ try {
   else status = 0;
   ws.close();
 } finally {
-  browser.kill();
-  await new Promise((resolve) => (browser.exitCode !== null ? resolve() : browser.once("exit", resolve)));
-  rmSync(profile, { recursive: true, force: true });
+  await close(browser, port);
+  rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }
 process.exit(status);
+
+// Closes the browser as a person would (Browser.close), so its helper processes end before the profile is removed.
+async function close(browser, port) {
+  const exited = new Promise((resolve) => (browser.exitCode !== null ? resolve() : browser.once("exit", resolve)));
+  try {
+    const { webSocketDebuggerUrl } = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
+    const ws = new WebSocket(webSocketDebuggerUrl);
+    await new Promise((resolve, reject) => ((ws.onopen = resolve), (ws.onerror = reject)));
+    ws.send(JSON.stringify({ id: 1, method: "Browser.close" }));
+  } catch {}
+  await Promise.race([exited, sleep(5000)]);
+  if (browser.exitCode === null) browser.kill("SIGKILL");
+  await exited;
+}

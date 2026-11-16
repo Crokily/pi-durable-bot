@@ -139,11 +139,16 @@ export async function startChrome(path: string): Promise<Chrome> {
     open,
     serve,
     async stop() {
+      // As a person closes it, so its helper processes end before the profile is removed.
+      const exited = new Promise((resolve) => (browser.exitCode !== null ? resolve(undefined) : browser.once("exit", resolve)));
+      // Not awaited: the browser may close before it answers.
+      send("Browser.close").catch(() => {});
+      await Promise.race([exited, sleep(5000)]);
+      if (browser.exitCode === null) browser.kill("SIGKILL");
+      await exited;
       ws.close();
-      browser.kill();
-      if (browser.exitCode === null) await new Promise((resolve) => browser.once("exit", resolve));
       await new Promise((resolve) => server.close(resolve));
-      rmSync(profile, { recursive: true, force: true });
+      rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     },
   };
 }

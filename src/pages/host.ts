@@ -24,7 +24,7 @@ export const QUICK_TUNNEL_NOTE =
 export const QUICK_TUNNEL_SECRET_NOTE =
   "This link goes through a Cloudflare Quick Tunnel: its address changes when Pots restarts, Cloudflare can see what is typed on the page, and Cloudflare says Quick Tunnels are for testing and development.";
 export const QUICK_TUNNEL_LOGIN_NOTE =
-  "This link goes through a Cloudflare Quick Tunnel: its address changes when Pots restarts, and Cloudflare can see what is typed on the page. A device code or a copy code is safe there; an API key typed on the page is seen as on the password page. Cloudflare says Quick Tunnels are for testing and development.";
+  "This link goes through a Cloudflare Quick Tunnel: its address changes when Pots restarts, and Cloudflare can see what the page shows and what is typed on it. A device code is safe there. A copy code or a pasted address is not: Cloudflare sees it and the sign-in link, which can be enough to finish the sign-in (Anthropic's sign-in link holds its PKCE verifier). An API key typed on the page is seen as on the password page. Cloudflare says Quick Tunnels are for testing and development.";
 export const QUICK_TUNNEL_DESKTOP_NOTE =
   "This link goes through a Cloudflare Quick Tunnel: its address changes when Pots restarts, Cloudflare can see your screen and every key typed on the page, and Cloudflare says Quick Tunnels are for testing and development.";
 
@@ -191,6 +191,8 @@ export class PageHost {
     }
     if (!start) return { ...(this.#tunnel?.address ? { base: this.#tunnel.address } : {}), via: "quick-tunnel" };
     if (this.#port === undefined) throw new Error(`the page server is not running: ${this.#problem ?? "it is starting"}`);
+    // A link made while the host stops starts no tunnel that nothing would stop.
+    if (this.#stopped) throw new Error("the page server is stopping");
     this.#tunnel ??= new QuickTunnel({
       target: `http://127.0.0.1:${this.#port}`,
       home: this.#options.home,

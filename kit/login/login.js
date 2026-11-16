@@ -362,6 +362,17 @@ function renderQuestion(question) {
       question.hidden.length > 0 ? h("p", { class: "fine", text: fill(W.hidden, { ways: question.hidden.join(", ") }) }) : null,
     );
   }
+  // Pots' own question: the provider got a login while this one waited for its turn.
+  if (question.type === "replace") {
+    return h(
+      "div",
+      { class: "question" },
+      h("p", { class: "q", text: fill(W.replaceTitle, { provider: question.provider }) }),
+      h("p", { text: fill(W.replaceText, { provider: question.provider }) }),
+      h("button", { type: "button", class: "big", onclick: () => answer(question, "replace"), text: W.replaceGo }),
+      h("button", { type: "button", class: "plain", onclick: () => answer(question, "cancel"), text: W.back }),
+    );
+  }
   const secret = question.type === "secret";
   const input = h("input", {
     type: secret ? "password" : "text",
@@ -390,6 +401,7 @@ function renderQuestion(question) {
     input,
     question.type === "manual_code" ? h("p", { class: "fine", text: W.pasteHint }) : null,
     secret && facts.quickTunnel ? h("p", { class: "warn", text: W.secretWarn }) : null,
+    question.type === "manual_code" && facts.quickTunnel ? h("p", { class: "warn", text: W.codeWarn }) : null,
     h("button", { type: "submit", class: "big", text: W.send }),
   );
   return form;

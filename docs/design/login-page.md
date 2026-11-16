@@ -35,7 +35,7 @@ There is no Google subscription login in pi 1.5.0. Google is available only with
 
 API keys: most providers ask for one `secret`. A few ask for more. Cloudflare asks for an account ID and a gateway ID (`text`). Vertex and Bedrock ask for a `select` and then project, region, profile or file path; Bedrock's "credential chain" says "configure AWS credentials, then press Enter", which works only on the computer itself. TypeSafe (Jev) is a plain API key.
 
-**What this means:** a callback to `localhost` cannot work from a phone, because the redirect goes to the phone's own localhost. But every provider has a way that does work. Seven of the nine have a device code or a copy code. With the other two, `openai` and `openrouter`, the person copies the address of the "can't connect" page that the browser shows and pastes it. That is what `pots login` already asks over SSH. A pasted code is useless without the PKCE verifier, and the verifier never leaves the bot's computer.
+**What this means:** a callback to `localhost` cannot work from a phone, because the redirect goes to the phone's own localhost. But every provider has a way that does work. Seven of the nine have a device code or a copy code. With the other two, `openai` and `openrouter`, the person copies the address of the "can't connect" page that the browser shows and pastes it. That is what `pots login` already asks over SSH. A pasted code is useless without the PKCE verifier. For OpenAI and OpenRouter the verifier stays on the bot's computer; for Anthropic, pi puts it in the sign-in URL (see Security).
 
 ## The design in one picture
 
@@ -72,7 +72,7 @@ Everything below already exists for the password and desktop pages. The login pa
 New things:
 
 - `pots page login` and its route. A `WebInteraction` that keeps pi's open prompt for each link in memory. The page asks for its state and posts answers.
-- The login itself runs **in the gateway process**. The PKCE verifier and the callback servers stay there, as the VNC password does for the desktop page. If the gateway restarts during a login, the login is lost. The row then ends as "Pots restarted", and the bot is woken so it can send a new link.
+- The login itself runs **in the gateway process**. The callback servers stay there, and so does the PKCE verifier, except for Anthropic, whose sign-in URL holds it (see Security). If the gateway restarts during a login, the login is lost. The row then ends as "Pots restarted", and the bot is woken so it can send a new link.
 
 ## What the bot sees, and what it is told
 
@@ -96,7 +96,7 @@ And one line of context, not a rule: logins belong to whoever pays for them and 
 - **What is new compared with the password page:** a login changes which account **every bot on the computer** uses. A person with the link could sign the bot in to *their own* account, for example an OpenRouter account that logs prompts, and then read the bots' conversations from it. The protections are: the link is for one person and one use, it is bound to one browser, the page says plainly "this replaces the current login for X on this computer", and the bot's wake says what was replaced. Who may ask for a link is the bot's judgment (see above). There is no owner concept in code (open question 1).
 - **Quick Tunnel and Tailscale Funnel.** Cloudflare terminates TLS on a Quick Tunnel and can see what is typed. Tailscale Funnel terminates TLS on the bot's computer. What crosses the tunnel depends on the way:
   - Device code: nothing secret. The person types the code on the provider's own site.
-  - Pasted code or redirected URL: one authorization code, used once. It is useless without the PKCE verifier, which stays on the bot's computer.
+  - Pasted code or redirected URL: one authorization code, used once. For OpenAI and OpenRouter the PKCE verifier stays on the bot's computer. **Anthropic is different:** pi 1.5.0 sends the PKCE verifier as the `state` of its sign-in URL, also for the copy code, and the page shows that URL as pi gives it. So on a Quick Tunnel Cloudflare sees the verifier and then the pasted code, which is enough to finish the sign-in first. The page and the note therefore warn about a pasted code or URL as about an API key. (This is pi's behaviour; a fix belongs upstream.)
   - API key: the key itself. This is the same risk as the password page, and the page carries the same warning.
 - **Phishing:** the page shows only the URLs that pi gives (pi checks the device-code addresses that providers send with `trustedHttpUrl`), as links with `rel="noreferrer"`. The bot cannot give its own sign-in URL.
 - **Not by the desktop page:** the bot could open the sign-in in its own browser, and the person could sign in there through a desktop page. The localhost callback would then work. But the password would be typed on a screen that the agent can screenshot. So this design does not use it, except as the last resort it already is.

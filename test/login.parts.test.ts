@@ -1,9 +1,9 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type AuthInteraction, envApiKeyAuth, fauxAssistantMessage, fauxProvider, type OAuthCredential, type Provider } from "@earendil-works/pi-ai";
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { CredentialSynchronizationError, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type Database, openDatabase } from "../src/agent/agent.ts";
 import { PageHost, QUICK_TUNNEL_LOGIN_NOTE } from "../src/pages/host.ts";
@@ -123,10 +123,17 @@ interface Fixture {
   models: ModelRuntime;
   site: FakeSite;
   woke: { note: string; requestId: string }[];
-  state: { now: number; failWakes: number };
+  state: State;
 }
 
-async function open(dir: string, site: FakeSite, settings: Record<string, unknown> = { publicUrl: PUBLIC }, state = { now: Date.now(), failWakes: 0 }, woke: Fixture["woke"] = []): Promise<Fixture> {
+/** The test's clock, wakes that fail, and a model's try that waits until the test lets it answer. */
+interface State {
+  now: number;
+  failWakes: number;
+  probe?: Promise<void>;
+}
+
+async function open(dir: string, site: FakeSite, settings: Record<string, unknown> = { publicUrl: PUBLIC }, state: State = { now: Date.now(), failWakes: 0 }, woke: Fixture["woke"] = []): Promise<Fixture> {
   const settingsFile = join(dir, "settings.json");
   writeFileSync(settingsFile, JSON.stringify(settings));
   const models = await ModelRuntime.create({ authPath: join(dir, "auth.json"), modelsPath: join(dir, "models.json"), refreshOnCreate: false });
@@ -154,7 +161,10 @@ async function open(dir: string, site: FakeSite, settings: Record<string, unknow
     login: {
       models: () => models,
       defaultModel: async (provider) => (provider === "fake-device" ? "fake-device-small" : undefined),
-      tryModel: async (_models, model) => (model === "fake-key/fake-key-large" ? "401 bad key" : undefined),
+      tryModel: async (_models, model) => {
+        await state.probe;
+        return model === "fake-key/fake-key-large" ? "401 bad key" : undefined;
+      },
     },
   });
   // Never a real tunnel: without a publicUrl, the address cannot come.
@@ -467,7 +477,176 @@ describe("login pages", { timeout: 60_000 }, () => {
     f = await open(f.dir, f.site, {});
     await expect(f.host.login(f.pages, {})).rejects.toThrow("no cloudflared in this test");
     expect(((await f.host.list(f.pages)) as { loginLinks: unknown[] }).loginLinks).toEqual([]);
-    expect(QUICK_TUNNEL_LOGIN_NOTE).toContain("an API key typed on the page is seen as on the password page");
+    expect(QUICK_TUNNEL_LOGIN_NOTE).toContain("An API key typed on the page is seen as on the password page");
+    expect(QUICK_TUNNEL_LOGIN_NOTE).toContain("A copy code or a pasted address is not");
+    expect(QUICK_TUNNEL_LOGIN_NOTE).not.toContain("copy code is safe");
+  });
+});
+
+describe("login pages under load and with odd keys", { timeout: 60_000 }, () => {
+  let f: Fixture;
+  beforeEach(async () => {
+    f = await open(temp(), new FakeSite());
+  });
+  afterEach(async () => {
+    await close(f);
+  });
+
+  /** Sign in to fake-key on this page with this key, and return the page's state after. */
+  async function signInKey(path: string, cookie: string, key: string): Promise<LoginState> {
+    const before = (await stateOf(f, path, cookie)).outcomes?.length ?? 0;
+    expect((await http(f, "POST", `${path}login`, { body: { provider: "fake-key", way: "api_key" }, cookie })).json).toEqual({ ok: true });
+    const asked = await until(f, path, cookie, (state) => state.login?.question?.type === "secret", "the key question");
+    expect((await http(f, "POST", `${path}answer`, { body: { question: asked.login!.question!.id, value: key }, cookie })).json).toEqual({ ok: true });
+    return until(f, path, cookie, (state) => state.login === undefined && (state.outcomes?.length ?? 0) > before, "the outcome");
+  }
+
+  it("stores a key that looks like a command or a variable as it was typed, and runs nothing", async () => {
+    const marker = join(f.dir, "ran");
+    process.env.POTS_LOGIN_TEST_VAR = "from-the-environment";
+    try {
+      const { path, cookie } = await started(f);
+      // pi would run this as a command, and its output would become the key.
+      const command = `!touch ${marker} && echo from-a-command`;
+      expect((await signInKey(path, cookie, command)).outcomes!.at(-1)).toMatchObject({ ok: true, provider: "fake-key" });
+      expect((await f.models.getAuth("fake-key"))?.auth.apiKey).toBe(command);
+      expect(existsSync(marker)).toBe(false);
+      // pi would put the variable in: ${NAME}, $NAME, and the escapes $$ and $! as they are.
+      const variable = "sk-$POTS_LOGIN_TEST_VAR-${POTS_LOGIN_TEST_VAR}-$$-$!x";
+      expect((await signInKey(path, cookie, variable)).outcomes!.at(-1)).toMatchObject({ ok: true, provider: "fake-key", replaced: true });
+      expect((await f.models.getAuth("fake-key"))?.auth.apiKey).toBe(variable);
+      // A fresh pi that reads auth.json gets the same key.
+      const fresh = await ModelRuntime.create({ authPath: join(f.dir, "auth.json"), modelsPath: join(f.dir, "models.json"), refreshOnCreate: false });
+      for (const provider of providers(f.site)) fresh.registerNativeProvider(provider);
+      expect((await fresh.getAuth("fake-key"))?.auth.apiKey).toBe(variable);
+      expect(readFileSync(join(f.dir, "auth.json"), "utf8")).not.toContain("from-the-environment");
+      expect(existsSync(marker)).toBe(false);
+      expect(f.woke.map((wake) => wake.note).join("\n")).not.toMatch(/POTS_LOGIN_TEST_VAR|from-a-command|touch/);
+    } finally {
+      delete process.env.POTS_LOGIN_TEST_VAR;
+    }
+  });
+
+  it("starts one sign-in when a page asks twice at once, and unlink stops it", async () => {
+    const { path, cookie, link } = await started(f);
+    // pi lists its providers slowly, so both requests wait for it at the same time.
+    const list = f.models.listCredentials.bind(f.models);
+    let listed!: () => void;
+    const held = new Promise<void>((resolve) => (listed = resolve));
+    f.models.listCredentials = async (...args) => {
+      await held;
+      return list(...args);
+    };
+    const asking = [1, 2].map(() => http(f, "POST", `${path}login`, { body: { provider: "fake-device", way: "oauth" }, cookie }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    listed();
+    const asks = await Promise.all(asking);
+    expect(asks.map((ask) => ask.status).sort()).toEqual([200, 409]);
+    const running = await until(f, path, cookie, (state) => state.login?.question?.type === "select", "the way question");
+    await http(f, "POST", `${path}answer`, { body: { question: running.login!.question!.id, value: "device_code" }, cookie });
+    await waitFor(() => f.site.polls > 0, { what: "pi to poll" });
+    expect(await f.host.unlink(f.pages, link)).toBe(`Unlinked ${link}.`);
+    const polls = f.site.polls;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    // The one sign-in stopped: pi polls no more, and the provider is free for the next one.
+    expect(f.site.polls).toBeLessThanOrEqual(polls + 1);
+    const next = await started(f);
+    expect((await http(f, "POST", `${next.path}login`, { body: { provider: "fake-device", way: "oauth" }, cookie: next.cookie })).json).toEqual({ ok: true });
+    await until(f, next.path, next.cookie, (state) => state.login?.question?.type === "select", "the way question on a new link");
+  });
+
+  it("refuses a sign-in when the link ends while pi lists its providers", async () => {
+    const { path, cookie, link } = await started(f);
+    const list = f.models.listCredentials.bind(f.models);
+    let listed!: () => void;
+    const held = new Promise<void>((resolve) => (listed = resolve));
+    f.models.listCredentials = async (...args) => {
+      await held;
+      return list(...args);
+    };
+    const asked = http(f, "POST", `${path}login`, { body: { provider: "fake-key", way: "api_key" }, cookie });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await f.pages.revoke(link);
+    listed();
+    expect((await asked).status).toBe(410);
+  });
+
+  it("tells the bot of a login once pi has it, also when the link ends or Pots restarts while a model is tried", async () => {
+    let answer!: () => void;
+    f.state.probe = new Promise<void>((resolve) => (answer = resolve));
+    const { path, cookie } = await started(f);
+    expect((await http(f, "POST", `${path}login`, { body: { provider: "fake-key", way: "api_key" }, cookie })).json).toEqual({ ok: true });
+    const asked = await until(f, path, cookie, (state) => state.login?.question?.type === "secret", "the key question");
+    await http(f, "POST", `${path}answer`, { body: { question: asked.login!.question!.id, value: "sk-slow" }, cookie });
+    for (const deadline = Date.now() + 10_000; (await f.sql.get<{ n: number }>("SELECT COUNT(*) AS n FROM bot_logins"))!.n === 0; ) {
+      if (Date.now() > deadline) throw new Error("timed out waiting for the login's row");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    // The link ends while the model is tried: the bot is not told that nobody signed in.
+    f.state.now += LOGIN_MINUTES * 60_000 + 1;
+    await f.pages.login.checkExpiry();
+    expect(f.woke.map((wake) => wake.note).join("\n")).not.toContain("nobody signed in");
+    // Pots restarts before the model answered: the login is not lost, and the bot hears of it once.
+    const { dir, site, state, woke } = f;
+    await close(f);
+    answer();
+    f = await open(dir, site, { publicUrl: PUBLIC }, { ...state, probe: undefined }, woke);
+    await waitFor(() => woke.length > 0, { what: "the login's wake" });
+    expect(woke).toHaveLength(1);
+    expect(woke[0]!.note).toContain("signed in to Fake Key (provider fake-key, API key)");
+    expect(woke[0]!.note).not.toMatch(/restarted|lost|nobody/);
+  });
+
+  it("counts a login that pi saved but whose models did not follow", async () => {
+    const login = f.models.login.bind(f.models);
+    f.models.login = async (provider, type, interaction, options) => {
+      const saved = await login(provider, type, interaction, options);
+      throw new CredentialSynchronizationError(provider, "login", saved, { cause: new Error("models did not refresh") });
+    };
+    const { path, cookie } = await started(f);
+    expect((await signInKey(path, cookie, "sk-synced-later")).outcomes!.at(-1)).toMatchObject({ ok: true, provider: "fake-key" });
+    await waitFor(() => f.woke.length === 1, { what: "the login's wake" });
+    expect(f.woke[0]!.note).toContain("signed in to Fake Key");
+  });
+
+  it("asks before replacing a login that came while this one waited for its turn, and says it replaced it", async () => {
+    const first = await started(f);
+    const second = await started(f);
+    // Both choose fake-key while pi has no key of it: neither page asked about replacing.
+    for (const page of [first, second]) {
+      expect((await stateOf(f, page.path, page.cookie)).choices!.api_key.find((choice) => choice.id === "fake-key")!.replaces).toBe(false);
+      expect((await http(f, "POST", `${page.path}login`, { body: { provider: "fake-key", way: "api_key" }, cookie: page.cookie })).json).toEqual({ ok: true });
+    }
+    const one = await until(f, first.path, first.cookie, (state) => state.login?.question?.type === "secret", "the first key question");
+    const waiting = await until(f, second.path, second.cookie, (state) => state.login?.events.some((event) => event.type === "progress" && event.message.includes("Waiting")) === true, "the second to wait");
+    expect(waiting.login!.question).toBeUndefined();
+    await http(f, "POST", `${first.path}answer`, { body: { question: one.login!.question!.id, value: "sk-first" }, cookie: first.cookie });
+    // The second's turn: pi has a key now, so the page asks.
+    const ask = await until(f, second.path, second.cookie, (state) => state.login?.question?.type === "replace", "the replace question");
+    expect(ask.login!.question).toMatchObject({ type: "replace", provider: "Fake Key" });
+    expect(ask.login!.replaces).toBe(true);
+    await http(f, "POST", `${second.path}answer`, { body: { question: ask.login!.question!.id, value: "replace" }, cookie: second.cookie });
+    const two = await until(f, second.path, second.cookie, (state) => state.login?.question?.type === "secret", "the second key question");
+    await http(f, "POST", `${second.path}answer`, { body: { question: two.login!.question!.id, value: "sk-second" }, cookie: second.cookie });
+    const done = await until(f, second.path, second.cookie, (state) => state.login === undefined && (state.outcomes?.length ?? 0) > 0, "the second outcome");
+    expect(done.outcomes![0]).toMatchObject({ ok: true, replaced: true });
+    await waitFor(() => f.woke.length === 2, { what: "two wakes" });
+    expect(f.woke[0]!.note).not.toContain("It replaced");
+    expect(f.woke[1]!.note).toContain("It replaced the fake-key key that pi had before.");
+    expect((await f.models.getAuth("fake-key"))?.auth.apiKey).toBe("sk-second");
+  });
+
+  it("replaces nothing when the person says no on the replace question", async () => {
+    const first = await started(f);
+    const second = await started(f);
+    for (const page of [first, second]) await http(f, "POST", `${page.path}login`, { body: { provider: "fake-key", way: "api_key" }, cookie: page.cookie });
+    const one = await until(f, first.path, first.cookie, (state) => state.login?.question?.type === "secret", "the first key question");
+    await http(f, "POST", `${first.path}answer`, { body: { question: one.login!.question!.id, value: "sk-kept" }, cookie: first.cookie });
+    const ask = await until(f, second.path, second.cookie, (state) => state.login?.question?.type === "replace", "the replace question");
+    await http(f, "POST", `${second.path}answer`, { body: { question: ask.login!.question!.id, value: "cancel" }, cookie: second.cookie });
+    const done = await until(f, second.path, second.cookie, (state) => state.login === undefined && (state.outcomes?.length ?? 0) > 0, "the second outcome");
+    expect(done.outcomes![0]).toMatchObject({ ok: false, cancelled: true });
+    expect((await f.models.getAuth("fake-key"))?.auth.apiKey).toBe("sk-kept");
   });
 });
 

@@ -1,18 +1,22 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { AuthEvent, AuthInteraction, AuthPrompt, AuthType, Models, Provider } from "@earendil-works/pi-ai";
-import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { CredentialSynchronizationError, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Sql } from "../core/sql.ts";
 import { formatTime } from "../core/time.ts";
 import type { Print } from "../gateway/config.ts";
 
 // Login pages: one-time links with which a person signs in to a model provider, with a subscription or an API key, from
 // any device. The login is pi's own (models.login), run in this process as pots login runs it in a terminal, so the
-// PKCE verifier and any callback server stay here. The page renders pi's AuthInteraction: pi's questions become fields
-// and buttons, its sign-in links and device codes are shown, and the page follows pi while it waits. pi writes the
-// login to its auth.json, which every bot of this user and the pi command line share. Nothing happens before Start; the
-// first browser that presses Start keeps the link (a cookie). The person may sign in several times, until Done or the
-// end of the link. Each login wakes the bot once, with the provider and the models it can use now: never a key, a code,
-// a sign-in URL, an account, or pi's own error text, which can hold a provider's answer.
+// callback servers stay here, and the PKCE verifier too, unless pi puts it in the sign-in URL (Anthropic's does). The
+// page renders pi's AuthInteraction: pi's questions become fields and buttons, its sign-in links and device codes are
+// shown, and the page follows pi while it waits. pi writes the login to its auth.json, which every bot of this user and
+// the pi command line share. Nothing happens before Start; the first browser that presses Start keeps the link (a
+// cookie). The person may sign in several times, until Done or the end of the link. Each login wakes the bot once, with
+// the provider and the models it can use now: never a key, a code, a sign-in URL, an account, or pi's own error text,
+// which can hold a provider's answer.
+//
+// pi reads a stored key as a config value: "!command" runs a command, and "$NAME" takes an environment variable. A key
+// typed on the page is stored so that pi reads it back as it was typed (literalKey): a page never runs a command here.
 
 /** A login link that nobody started stops working after this long. */
 export const LOGIN_UNOPENED_MS = 3_600_000;
@@ -114,9 +118,14 @@ export type Shown =
   | { readonly type: "info"; readonly message: string; readonly links: readonly { url: string; label?: string }[] }
   | { readonly type: "progress"; readonly message: string };
 
-/** pi's open question, as the page shows it. A select's options are pi's, with the one that works from another device first. */
+/**
+ * pi's open question, as the page shows it. A select's options are pi's, with the one that works from another device
+ * first. replace is Pots' own: the provider got a login while this one waited for its turn, and the person chooses
+ * whether this one replaces it ("replace") or not ("cancel").
+ */
 export type Question =
   | { readonly id: string; readonly type: "text" | "secret" | "manual_code"; readonly message: string; readonly placeholder?: string }
+  | { readonly id: string; readonly type: "replace"; readonly provider: string }
   | {
       readonly id: string;
       readonly type: "select";
@@ -183,6 +192,8 @@ interface Live {
   timer?: ReturnType<typeof setTimeout>;
   version: number;
   waiters: Set<() => void>;
+  /** A login request is between its checks and its start: another one waits for it. */
+  beginning?: boolean;
   login?: Running;
   outcomes: Outcome[];
 }
@@ -191,7 +202,8 @@ interface Running {
   readonly provider: string;
   readonly name: string;
   readonly way: AuthType;
-  readonly replaces: boolean;
+  /** From the person's choice; checked again when the login gets its turn. */
+  replaces: boolean;
   readonly abort: AbortController;
   /** Why the login was stopped: the person cancelled it, or the link ended. */
   stopped?: "cancelled" | "ended";
@@ -210,6 +222,50 @@ function webUrl(value: unknown): string | undefined {
   if (typeof value !== "string" || !URL.canParse(value)) return undefined;
   const url = new URL(value);
   return url.protocol === "https:" || url.protocol === "http:" ? url.href : undefined;
+}
+
+/**
+ * A key as pi stores it so that pi reads it back as it is. pi reads "$$" as "$" and "$!" as "!", and runs a value that
+ * starts with "!" as a command; with every "$" and "!" written so, a key never runs a command or takes a variable.
+ */
+export const literalKey = (key: string) => key.replace(/[$!]/g, (char) => `$${char}`);
+
+/**
+ * Pots' logins of one provider, one at a time, for all bots that share pi's models in this process: a login checks
+ * what it replaces when its turn comes. pi has a queue of its own too, but it says nothing when a login's turn comes.
+ */
+const turns = new WeakMap<object, Map<string, Promise<void>>>();
+
+/** Wait for this provider's turn, or until the signal ends the wait. Resolves with the function that ends the turn. */
+async function turn(models: object, provider: string, signal: AbortSignal, waiting: () => void): Promise<() => void> {
+  let queue = turns.get(models);
+  if (!queue) turns.set(models, (queue = new Map()));
+  const before = queue.get(provider);
+  let end!: () => void;
+  const mine = new Promise<void>((resolve) => (end = resolve));
+  const tail = (before ?? Promise.resolve()).then(() => mine);
+  queue.set(provider, tail);
+  void tail.then(() => {
+    if (queue.get(provider) === tail) queue.delete(provider);
+  });
+  if (before) {
+    waiting();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        if (signal.aborted) return reject(abortError(signal));
+        const stop = () => reject(abortError(signal));
+        signal.addEventListener("abort", stop, { once: true });
+        void before.then(() => {
+          signal.removeEventListener("abort", stop);
+          resolve();
+        });
+      });
+    } catch (error) {
+      end();
+      throw error;
+    }
+  }
+  return end;
 }
 
 /** A way's ID, to compare loosely: pi writes device_code, device-code, copy_code. */
@@ -269,9 +325,7 @@ export class BotLogins {
   /** The providers the page offers: pi's subscriptions, and pi's providers that take an API key (also TypeSafe). */
   async #choices(): Promise<{ oauth: Choice[]; api_key: Choice[] }> {
     const models = this.#models();
-    // pi's ModelRuntime lists what auth.json has, without a secret; a plain Models does not, and replaces nothing known.
-    const listing = (models as Partial<Pick<ModelRuntime, "listCredentials">>).listCredentials;
-    const stored = new Set((listing ? await listing.call(models).catch(() => []) : []).map((item) => item.providerId));
+    const stored = await storedProviders(models);
     const providers = models.getProviders();
     const choice = (provider: Provider, name: string): Choice => ({ id: provider.id, name, replaces: stored.has(provider.id) });
     return {
@@ -444,9 +498,18 @@ export class BotLogins {
     const own = await this.#own(token, secret);
     if ("ok" in own) return own;
     const { row, live } = own;
-    if (live.login) return { ok: false, status: 409, code: "busy", error: "A sign-in runs on this page already." };
+    if (live.login || live.beginning) return { ok: false, status: 409, code: "busy", error: "A sign-in runs on this page already." };
     if (way !== "oauth" && way !== "api_key") return { ok: false, status: 400, error: '"way" must be "oauth" or "api_key"' };
-    const choices = await this.#choices();
+    // Taken before the wait for pi's list, so a second request at the same time finds the page busy.
+    live.beginning = true;
+    let choices: { oauth: Choice[]; api_key: Choice[] };
+    try {
+      choices = await this.#choices();
+    } finally {
+      live.beginning = false;
+    }
+    // The link may have ended while pi listed its providers.
+    if (this.#stopped || this.#live.get(row.id) !== live) return { ok: false, status: 410, code: "ended", error: "This link has ended." };
     const choice = choices[way].find((item) => item.id === provider);
     if (!choice) return { ok: false, status: 400, error: `pi has no ${way === "oauth" ? "subscription login" : "API key"} for ${JSON.stringify(provider)}` };
     const login: Running = { provider, name: choice.name, way, replaces: choice.replaces, abort: new AbortController(), events: [] };
@@ -467,6 +530,7 @@ export class BotLogins {
     if (typeof value !== "string" || value.length > MAX_ANSWER) return { ok: false, status: 400, error: `the answer must be text of at most ${MAX_ANSWER} characters` };
     const answer = value.trim();
     if (open.type === "select" && !open.options.some((option) => option.id === answer)) return { ok: false, status: 400, error: "choose one of the options" };
+    if (open.type === "replace" && answer !== "replace" && answer !== "cancel") return { ok: false, status: 400, error: '"replace" or "cancel"' };
     // pi saves an empty key as it is, over the key it had, and then counts the provider as not signed in.
     if ((open.type === "secret" || open.type === "manual_code") && answer === "") return { ok: false, status: 400, error: "It cannot be empty." };
     if (/[\u0000-\u001f\u007f]/.test(answer)) return { ok: false, status: 400, error: "It has a line break or another control character; paste it again." };
@@ -544,37 +608,42 @@ export class BotLogins {
     for (const waiter of [...live.waiters]) waiter();
   }
 
+  /**
+   * Put a question on the page and wait for its answer. It is withdrawn when one of the signals ends: the login stopped,
+   * or pi got the answer another way, such as its callback.
+   */
+  #ask(live: Live, login: Running, shown: Question, signals: readonly AbortSignal[], literal = false): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+      const aborted = signals.find((signal) => signal.aborted);
+      if (aborted) return reject(abortError(aborted));
+      const withdraw = (signal: AbortSignal) => () => {
+        if (login.question?.id !== shown.id) return;
+        login.question = undefined;
+        this.#bump(live);
+        reject(abortError(signal));
+      };
+      for (const signal of signals) signal.addEventListener("abort", withdraw(signal), { once: true });
+      login.question = { ...shown, resolve: (value: string) => resolve(literal ? literalKey(value) : value), reject } as NonNullable<Running["question"]>;
+      this.#bump(live);
+    });
+  }
+
   /** pi's callbacks, answered on the page. */
   #interaction(live: Live, login: Running): AuthInteraction {
     return {
       signal: login.abort.signal,
-      prompt: (prompt: AuthPrompt) =>
-        new Promise<string>((resolve, reject) => {
-          const signals = [login.abort.signal, ...(prompt.signal ? [prompt.signal] : [])];
-          const aborted = signals.find((signal) => signal.aborted);
-          if (aborted) return reject(abortError(aborted));
-          const id = randomBytes(9).toString("base64url");
-          let question: NonNullable<Running["question"]>;
-          if (prompt.type === "select") {
-            const shaped = shapeOptions(prompt.options);
-            if (shaped.options.length === 0) {
-              return reject(new Error(`${shaped.hidden.join(", ")} must be set up on the computer itself, not from a page.`));
-            }
-            question = { id, type: "select", message: clip(prompt.message), options: shaped.options, hidden: shaped.hidden, resolve, reject };
-          } else {
-            question = { id, type: prompt.type, message: clip(prompt.message), ...(prompt.placeholder ? { placeholder: clip(prompt.placeholder) } : {}), resolve, reject };
-          }
-          // pi withdraws a question when it got the answer another way, such as its callback.
-          const withdraw = (signal: AbortSignal) => () => {
-            if (login.question?.id !== id) return;
-            login.question = undefined;
-            this.#bump(live);
-            reject(abortError(signal));
-          };
-          for (const signal of signals) signal.addEventListener("abort", withdraw(signal), { once: true });
-          login.question = question;
-          this.#bump(live);
-        }),
+      prompt: async (prompt: AuthPrompt) => {
+        const signals = [login.abort.signal, ...(prompt.signal ? [prompt.signal] : [])];
+        const id = randomBytes(9).toString("base64url");
+        if (prompt.type === "select") {
+          const shaped = shapeOptions(prompt.options);
+          if (shaped.options.length === 0) throw new Error(`${shaped.hidden.join(", ")} must be set up on the computer itself, not from a page.`);
+          return this.#ask(live, login, { id, type: "select", message: clip(prompt.message), options: shaped.options, hidden: shaped.hidden }, signals);
+        }
+        // An API key login's secret is the key pi stores: as it was typed, never a command or a variable.
+        const literal = login.way === "api_key" && prompt.type === "secret";
+        return this.#ask(live, login, { id, type: prompt.type, message: clip(prompt.message), ...(prompt.placeholder ? { placeholder: clip(prompt.placeholder) } : {}) }, signals, literal);
+      },
       notify: (event: AuthEvent) => {
         const shown = showEvent(event, this.#clock());
         if (!shown) return;
@@ -585,49 +654,87 @@ export class BotLogins {
     };
   }
 
+  /**
+   * The login's turn has come: what it replaces is checked again. A provider that got a login while this one waited is
+   * replaced only when the person says so on the page.
+   */
+  async #checkReplaces(live: Live, login: Running): Promise<void> {
+    const now = (await storedProviders(this.#models())).has(login.provider);
+    const asked = login.replaces;
+    login.replaces = now;
+    if (now && !asked) {
+      this.#bump(live);
+      const answer = await this.#ask(live, login, { id: randomBytes(9).toString("base64url"), type: "replace", provider: login.name }, [login.abort.signal]);
+      if (answer !== "replace") {
+        login.stopped = "cancelled";
+        throw new Error("Cancelled.");
+      }
+    }
+  }
+
   async #run(row: LinkRow, live: Live, login: Running): Promise<void> {
     const models = this.#models();
     const way = wayWords(login.way);
-    let outcome: Outcome;
+    let committed = false;
+    let failure: Extract<Outcome, { ok: false }> | undefined;
+    let end: (() => void) | undefined;
     try {
+      end = await turn(models, login.provider, login.abort.signal, () => {
+        login.events = [...login.events, { type: "progress", message: `Waiting for another sign-in to ${login.name} to end…` }];
+        this.#bump(live);
+      });
+      login.events = login.events.filter((item) => item.type !== "progress");
+      await this.#checkReplaces(live, login);
       const deviceId = this.#options.deviceId ? await this.#options.deviceId() : undefined;
-      await models.login(login.provider, login.way, this.#interaction(live, login), deviceId ? { getDeviceId: () => deviceId } : {});
-      login.events = [...login.events.filter((item) => item.type !== "progress"), { type: "progress", message: "Signed in. Trying a model…" }];
-      this.#bump(live);
-      // pi has the login now: a model that cannot be listed or tried does not undo it.
-      outcome = await this.#tryAfter(login).catch((error: unknown) => ({
-        ok: true as const,
-        provider: login.provider,
-        name: login.name,
-        way: login.way,
-        replaced: login.replaces,
-        models: 0,
-        modelProblem: clip(error instanceof Error ? error.message : String(error)),
-      }));
+      try {
+        await models.login(login.provider, login.way, this.#interaction(live, login), deviceId ? { getDeviceId: () => deviceId } : {});
+      } catch (error) {
+        // pi saved the login, and only its own models did not follow yet: the login counts.
+        if (!(error instanceof CredentialSynchronizationError)) throw error;
+        this.#options.print("login page: pi saved the login but did not update its models", { link: linkId(row), provider: login.provider });
+      }
+      committed = true;
     } catch (error) {
       const reason = login.stopped === "cancelled" ? "Cancelled." : error instanceof Error ? error.message : String(error);
-      outcome = { ok: false, provider: login.provider, name: login.name, way: login.way, cancelled: login.stopped === "cancelled", error: clip(reason) };
+      failure = { ok: false, provider: login.provider, name: login.name, way: login.way, cancelled: login.stopped === "cancelled", error: clip(reason) };
+    } finally {
+      end?.();
     }
     login.question?.reject(new Error("The sign-in ended."));
+    login.question = undefined;
+    if (!committed) {
+      if (this.#stopped) return;
+      if (live.login === login) live.login = undefined;
+      if (login.stopped !== "ended") live.outcomes = [...live.outcomes, failure!].slice(-10);
+      await this.#sql.run(`UPDATE bot_login_links SET running = NULL${failure!.cancelled || login.stopped === "ended" ? "" : ", failed = failed + 1"} WHERE id = ?`, row.id);
+      this.#options.print("login page did not sign in", { link: linkId(row), provider: login.provider, way, ...(failure!.cancelled ? { cancelled: true } : {}) });
+      this.#bump(live);
+      return;
+    }
+    // pi has the login now. It is written down at once, with a note without the model's try, so that the end of the
+    // link or a restart while the model is tried never says that nobody signed in.
+    const base: Extract<Outcome, { ok: true }> = { ok: true, provider: login.provider, name: login.name, way: login.way, replaced: login.replaces, models: 0 };
+    const first = await this.#loginNote(row, base);
+    const n = await this.#sql.transaction(async (tx) => {
+      const last = await tx.get<{ n: number | null }>("SELECT MAX(n) AS n FROM bot_logins WHERE link_id = ?", row.id);
+      const next = (last?.n ?? 0) + 1;
+      await tx.run("INSERT INTO bot_logins (link_id, n, provider, way, at, note) VALUES (?, ?, ?, ?, ?, ?)", row.id, next, login.provider, login.way, this.#clock(), first);
+      await tx.run("UPDATE bot_login_links SET running = NULL WHERE id = ?", row.id);
+      return next;
+    });
+    this.#options.print("login page signed in", { link: linkId(row), provider: login.provider, way });
+    if (this.#stopped) return;
+    login.events = [...login.events.filter((item) => item.type !== "progress"), { type: "progress", message: "Signed in. Trying a model…" }];
+    this.#bump(live);
+    // A model that cannot be listed or tried does not undo the login.
+    const outcome = await this.#tryAfter(login).catch((error: unknown) => ({ ...base, modelProblem: clip(error instanceof Error ? error.message : String(error)) }));
+    const note = await this.#loginNote(row, outcome);
+    await this.#sql.run("UPDATE bot_logins SET note = ? WHERE link_id = ? AND n = ? AND woken_at IS NULL", note, row.id, n);
     if (this.#stopped) return;
     if (live.login === login) live.login = undefined;
     if (login.stopped !== "ended") live.outcomes = [...live.outcomes, outcome].slice(-10);
-    if (outcome.ok) {
-      const n = await this.#sql.transaction(async (tx) => {
-        const last = await tx.get<{ n: number | null }>("SELECT MAX(n) AS n FROM bot_logins WHERE link_id = ?", row.id);
-        const next = (last?.n ?? 0) + 1;
-        await tx.run("INSERT INTO bot_logins (link_id, n, provider, way, at, note) VALUES (?, ?, ?, ?, ?, ?)", row.id, next, login.provider, login.way, this.#clock(), await this.#loginNote(row, outcome as Extract<Outcome, { ok: true }>));
-        await tx.run("UPDATE bot_login_links SET running = NULL WHERE id = ?", row.id);
-        return next;
-      });
-      this.#options.print("login page signed in", { link: linkId(row), provider: login.provider, way });
-      this.#bump(live);
-      await this.#wakeLogin(row.id, n);
-      return;
-    }
-    await this.#sql.run(`UPDATE bot_login_links SET running = NULL${outcome.cancelled || login.stopped === "ended" ? "" : ", failed = failed + 1"} WHERE id = ?`, row.id);
-    this.#options.print("login page did not sign in", { link: linkId(row), provider: login.provider, way, ...(outcome.cancelled ? { cancelled: true } : {}) });
     this.#bump(live);
+    await this.#wakeLogin(row.id, n);
   }
 
   /**
@@ -658,8 +765,10 @@ export class BotLogins {
   async #loginNote(row: LinkRow, outcome: Extract<Outcome, { ok: true }>): Promise<string> {
     const models = this.#models();
     const list = (names: string[]) => (names.length > MAX_LISTED ? `${names.slice(0, MAX_LISTED).join(", ")} and ${names.length - MAX_LISTED} more` : names.join(", "));
-    const chat = (await models.getAvailable(outcome.provider)).map((model) => `${model.provider}/${model.id}`);
-    const judges = (await models.getAvailableOfType("classifier", outcome.provider)).map((model) => `${model.provider}/${model.id}`);
+    // pi may fail to list them just after a login (its models did not follow yet): the note then leaves them out.
+    const listed = await Promise.all([models.getAvailable(outcome.provider), models.getAvailableOfType("classifier", outcome.provider)]).catch(() => undefined);
+    const chat = (listed?.[0] ?? []).map((model) => `${model.provider}/${model.id}`);
+    const judges = (listed?.[1] ?? []).map((model) => `${model.provider}/${model.id}`);
     const parts = [
       `login page: someone used link ${linkId(row)} (made for ${madeFor(row.made_for)}) and signed in to ${outcome.name} (provider ${outcome.provider}, ${wayWords(outcome.way)}), for every bot and pi on this computer.`,
       outcome.replaced ? `It replaced the ${outcome.provider} ${outcome.way === "oauth" ? "login" : "key"} that pi had before.` : "",
@@ -667,7 +776,7 @@ export class BotLogins {
       judges.length > 0 ? `Judges usable now: ${list(judges)}.` : "",
       outcome.model ? (outcome.modelProblem ? `${outcome.model} did not answer when Pots tried it with this login.` : `${outcome.model} answered when Pots tried it.`) : "",
       outcome.judge ? (outcome.judgeProblem ? `${outcome.judge} did not answer when Pots tried it as a judge.` : `${outcome.judge} answered when Pots tried it as a judge.`) : "",
-      chat.length === 0 && judges.length === 0 ? "pi lists no model or judge for this login." : "",
+      listed && chat.length === 0 && judges.length === 0 ? "pi lists no model or judge for this login." : "",
     ];
     return parts.filter(Boolean).join(" ");
   }
@@ -803,6 +912,12 @@ export class BotLogins {
       await tx.run(`DELETE FROM bot_login_links WHERE id IN (${old}) AND id NOT IN (SELECT link_id FROM bot_logins)`, cutoff);
     });
   }
+}
+
+/** The providers pi has a login or key of now. pi's ModelRuntime lists them without a secret; a plain Models does not. */
+async function storedProviders(models: Models): Promise<Set<string>> {
+  const listing = (models as Partial<Pick<ModelRuntime, "listCredentials">>).listCredentials;
+  return new Set((listing ? await listing.call(models).catch(() => []) : []).map((item) => item.providerId));
 }
 
 /** A subscription's name as pots login shows it. */

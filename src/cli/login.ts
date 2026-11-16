@@ -37,15 +37,23 @@ export const loginCommand = Command.make(
       if (input.list) return yield* listUsable(models, "pi can use no model on this computer yet. Run pots login in a terminal to sign in or add a key.");
       if (input.link) {
         const { loginLink } = yield* Effect.promise(() => import("./login-link.ts"));
-        yield* Effect.tryPromise({
-          try: (signal) =>
-            loginLink(models, {
-              ...(Option.isSome(input.provider) ? { provider: input.provider.value } : {}),
-              ...(Option.isSome(input.text) ? { text: input.text.value } : {}),
-              say: (line) => console.log(line),
-              signal,
-            }),
-          catch: (error) => userError(error instanceof Error ? error.message : String(error)),
+        // Ctrl+C ends the link, and the command ends only when its page server, tunnel and folder are gone.
+        yield* Effect.suspend(() => {
+          const stop = new AbortController();
+          const running = loginLink(models, {
+            ...(Option.isSome(input.provider) ? { provider: input.provider.value } : {}),
+            ...(Option.isSome(input.text) ? { text: input.text.value } : {}),
+            say: (line) => console.log(line),
+            signal: stop.signal,
+          });
+          return Effect.tryPromise({ try: () => running, catch: (error) => userError(error instanceof Error ? error.message : String(error)) }).pipe(
+            Effect.onInterrupt(() =>
+              Effect.promise(async () => {
+                stop.abort();
+                await running.catch(() => {});
+              }),
+            ),
+          );
         });
         yield* Console.log("");
         return yield* listUsable(models, "pi can use no model on this computer yet.");

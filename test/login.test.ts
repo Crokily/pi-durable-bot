@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -186,7 +186,7 @@ describe("pots login --link", { timeout: 120_000 }, () => {
   let child: ChildProcess | undefined;
   afterAll(() => {
     child?.kill("SIGKILL");
-    rmSync(home, { recursive: true, force: true });
+    if (home) rmSync(home, { recursive: true, force: true });
   });
 
   it("serves the login page with no bot, prints the link, waits until Done, and prints what was signed in", async () => {
@@ -224,4 +224,58 @@ describe("pots login --link", { timeout: 120_000 }, () => {
     expect(stdout).not.toContain("sk-link");
     expect(readFileSync(join(piDir, "auth.json"), "utf8")).toContain("sk-link");
   });
+
+  it.skipIf(process.platform === "win32")("stops its tunnel and removes its folder when Ctrl+C comes while the tunnel starts", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pots-test-link-int-"));
+    try {
+      const own = join(root, "home");
+      const tmp = join(root, "tmp");
+      const piDir = join(own, "pi");
+      mkdirSync(piDir, { recursive: true });
+      mkdirSync(tmp);
+      mkdirSync(join(own, "bin"));
+      writeFileSync(join(piDir, "models.json"), JSON.stringify({ providers: {} }));
+      addKeyedProvider(piDir, model.url);
+      // No publicUrl, so the command starts a Quick Tunnel: a fake cloudflared that never gives an address.
+      writeFileSync(join(own, "settings.json"), JSON.stringify({ pagePort: await freePort() }));
+      const pidFile = join(root, "cloudflared.pid");
+      const fake = join(own, "bin", "cloudflared");
+      writeFileSync(fake, `#!/bin/sh\necho $$ > '${pidFile}'\nexec sleep 600\n`);
+      chmodSync(fake, 0o755);
+      const cli = spawn(process.execPath, [POTS, "login", "--link"], {
+        env: { ...process.env, POTS_HOME: own, PI_CODING_AGENT_DIR: piDir, TMPDIR: tmp, NO_COLOR: "1" },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      const exited = new Promise<void>((resolve) => cli.once("exit", () => resolve()));
+      try {
+        await waitFor(() => existsSync(pidFile) && readFileSync(pidFile, "utf8").trim() !== "", { what: "the fake cloudflared", timeout: 30_000 });
+        const pid = Number(readFileSync(pidFile, "utf8").trim());
+        expect(running(pid)).toBe(true);
+        cli.kill("SIGINT");
+        await exited;
+        expect(running(pid)).toBe(false);
+        expect(readdirSync(tmp).filter((name) => name.startsWith("pots-login-"))).toEqual([]);
+      } finally {
+        cli.kill("SIGKILL");
+        if (existsSync(pidFile)) {
+          try {
+            process.kill(Number(readFileSync(pidFile, "utf8").trim()), "SIGKILL");
+          } catch {
+            // gone
+          }
+        }
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
+
+function running(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}

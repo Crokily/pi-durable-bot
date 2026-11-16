@@ -2,6 +2,11 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
+## Unreleased
+
+### Changed
+- **The bot watches a coding agent's command line as it would a child.** When it hands work to Claude Code, Codex or a similar command line running in the background, its prompt now says that such a run shows nothing while it works and says nothing when it ends: the bot has the command wake it at the end (`pots wake --from`) and sets itself wakes to look at its output, report progress, and notice a run that died.
+
 ## 0.8.2 (2026-11-16)
 
 Upgrade if your computer runs systemd 258 or later (Ubuntu 26.04, Fedora 43 and 44, Debian testing, Arch): there, Pots 0.8.0 and 0.8.1 could rewrite `${…}` in the bot's commands, so a command ran changed or not at all. 0.8.2 fixes that. A Slack call with a file ID no longer hangs, and Slack requests give up within about 2 minutes.

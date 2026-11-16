@@ -408,7 +408,8 @@ describe("login pages", { timeout: 60_000 }, () => {
     const choices = await stateOf(f, next.path, next.cookie);
     expect(choices.choices!.oauth.find((choice) => choice.id === "fake-paste")).toMatchObject({ replaces: true });
     expect(choices.choices!.oauth.find((choice) => choice.id === "fake-device")).toMatchObject({ replaces: false });
-    await http(f, "POST", `${next.path}login`, { body: { provider: "fake-paste", way: "oauth" }, cookie: next.cookie });
+    const stored = choices.choices!.oauth.find((choice) => choice.id === "fake-paste")!.stored;
+    await http(f, "POST", `${next.path}login`, { body: { provider: "fake-paste", way: "oauth", replace: stored }, cookie: next.cookie });
     const replacing = await until(f, next.path, next.cookie, (state) => state.login?.question !== undefined, "the code question");
     expect(replacing.login!.replaces).toBe(true);
     await http(f, "POST", `${next.path}answer`, { body: { question: replacing.login!.question!.id, value: f.site.code }, cookie: next.cookie });
@@ -494,8 +495,11 @@ describe("login pages under load and with odd keys", { timeout: 60_000 }, () => 
 
   /** Sign in to fake-key on this page with this key, and return the page's state after. */
   async function signInKey(path: string, cookie: string, key: string): Promise<LoginState> {
-    const before = (await stateOf(f, path, cookie)).outcomes?.length ?? 0;
-    expect((await http(f, "POST", `${path}login`, { body: { provider: "fake-key", way: "api_key" }, cookie })).json).toEqual({ ok: true });
+    const now = await stateOf(f, path, cookie);
+    const before = now.outcomes?.length ?? 0;
+    // As the page does after "Sign in and replace": it sends back the stored login the person confirmed to replace.
+    const stored = now.choices!.api_key.find((choice) => choice.id === "fake-key")!.stored;
+    expect((await http(f, "POST", `${path}login`, { body: { provider: "fake-key", way: "api_key", ...(stored ? { replace: stored } : {}) }, cookie })).json).toEqual({ ok: true });
     const asked = await until(f, path, cookie, (state) => state.login?.question?.type === "secret", "the key question");
     expect((await http(f, "POST", `${path}answer`, { body: { question: asked.login!.question!.id, value: key }, cookie })).json).toEqual({ ok: true });
     return until(f, path, cookie, (state) => state.login === undefined && (state.outcomes?.length ?? 0) > before, "the outcome");
@@ -595,6 +599,73 @@ describe("login pages under load and with odd keys", { timeout: 60_000 }, () => 
     expect(woke).toHaveLength(1);
     expect(woke[0]!.note).toContain("signed in to Fake Key (provider fake-key, API key)");
     expect(woke[0]!.note).not.toMatch(/restarted|lost|nobody/);
+  });
+
+  it("writes the login down before pi lists its models, so the link's end says nothing of nobody, and wakes once", async () => {
+    // pi lists the models slowly once it saved the key.
+    let saved = false;
+    let listed!: () => void;
+    const held = new Promise<void>((resolve) => (listed = resolve));
+    const login = f.models.login.bind(f.models);
+    f.models.login = async (...args) => {
+      const credential = await login(...args);
+      saved = true;
+      return credential;
+    };
+    for (const name of ["getAvailable", "getAvailableOfType"] as const) {
+      const list = (f.models[name] as (...args: unknown[]) => Promise<unknown>).bind(f.models);
+      (f.models as unknown as Record<string, unknown>)[name] = async (...args: unknown[]) => {
+        if (saved) await held;
+        return list(...args);
+      };
+    }
+    const { path, cookie } = await started(f);
+    expect((await http(f, "POST", `${path}login`, { body: { provider: "fake-key", way: "api_key" }, cookie })).json).toEqual({ ok: true });
+    const asked = await until(f, path, cookie, (state) => state.login?.question?.type === "secret", "the key question");
+    await http(f, "POST", `${path}answer`, { body: { question: asked.login!.question!.id, value: "sk-listed-later" }, cookie });
+    for (const deadline = Date.now() + 3_000; (await f.sql.get<{ n: number }>("SELECT COUNT(*) AS n FROM bot_logins"))!.n === 0; ) {
+      if (Date.now() > deadline) throw new Error("timed out waiting for the login's row while pi lists");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(saved).toBe(true);
+    f.state.now += LOGIN_MINUTES * 60_000 + 1;
+    await f.pages.login.checkExpiry();
+    expect(f.woke.map((wake) => wake.note).join("\n")).not.toContain("nobody signed in");
+    listed();
+    await waitFor(() => f.woke.length > 0, { what: "the login's wake" });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(f.woke).toHaveLength(1);
+    expect(f.woke[0]!.note).toContain("signed in to Fake Key (provider fake-key, API key)");
+  });
+
+  it("asks before replacing a login the page did not show, or one that changed after the person confirmed", async () => {
+    const quiet = await started(f);
+    // This page showed fake-key with nothing stored, so the person was never asked about replacing.
+    expect((await stateOf(f, quiet.path, quiet.cookie)).choices!.api_key.find((choice) => choice.id === "fake-key")).toEqual({ id: "fake-key", name: "Fake Key", replaces: false });
+    const other = await started(f);
+    await signInKey(other.path, other.cookie, "sk-first");
+    // Now it asks for the login, from the choices it showed: it is asked first, and no key is asked for before.
+    expect((await http(f, "POST", `${quiet.path}login`, { body: { provider: "fake-key", way: "api_key" }, cookie: quiet.cookie })).json).toEqual({ ok: true });
+    const ask = await until(f, quiet.path, quiet.cookie, (state) => state.login?.question !== undefined, "a question");
+    expect(ask.login!.question).toMatchObject({ type: "replace", provider: "Fake Key" });
+    await http(f, "POST", `${quiet.path}answer`, { body: { question: ask.login!.question!.id, value: "cancel" }, cookie: quiet.cookie });
+    await until(f, quiet.path, quiet.cookie, (state) => state.login === undefined && (state.outcomes?.length ?? 0) > 0, "the cancel");
+    expect((await f.models.getAuth("fake-key"))?.auth.apiKey).toBe("sk-first");
+
+    // The person confirms replacing the key that is there; another page saves a new one before this login starts.
+    const confirmed = (await stateOf(f, quiet.path, quiet.cookie)).choices!.api_key.find((choice) => choice.id === "fake-key")!.stored;
+    expect(confirmed).toEqual(expect.any(String));
+    await signInKey(other.path, other.cookie, "sk-second");
+    expect((await http(f, "POST", `${quiet.path}login`, { body: { provider: "fake-key", way: "api_key", replace: confirmed }, cookie: quiet.cookie })).json).toEqual({ ok: true });
+    const again = await until(f, quiet.path, quiet.cookie, (state) => state.login?.question !== undefined, "a question");
+    expect(again.login!.question).toMatchObject({ type: "replace" });
+    await http(f, "POST", `${quiet.path}answer`, { body: { question: again.login!.question!.id, value: "replace" }, cookie: quiet.cookie });
+    const key = await until(f, quiet.path, quiet.cookie, (state) => state.login?.question?.type === "secret", "the key question");
+    await http(f, "POST", `${quiet.path}answer`, { body: { question: key.login!.question!.id, value: "sk-third" }, cookie: quiet.cookie });
+    await until(f, quiet.path, quiet.cookie, (state) => state.login === undefined && state.outcomes?.at(-1)?.ok === true, "the login");
+    expect((await f.models.getAuth("fake-key"))?.auth.apiKey).toBe("sk-third");
+    await waitFor(() => f.woke.length === 3, { what: "three wakes" });
+    expect(f.woke[2]!.note).toContain("It replaced the fake-key key that pi had before.");
   });
 
   it("counts a login that pi saved but whose models did not follow", async () => {

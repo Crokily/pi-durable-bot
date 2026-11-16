@@ -293,7 +293,7 @@ export class PageRequests {
     }
     const result =
       rest === "/login"
-        ? await bot.login.begin(token, secret, String(value.provider ?? ""), value.way as "oauth" | "api_key")
+        ? await bot.login.begin(token, secret, String(value.provider ?? ""), value.way as "oauth" | "api_key", typeof value.replace === "string" ? value.replace : undefined)
         : rest === "/answer"
           ? await bot.login.answer(token, secret, String(value.question ?? ""), typeof value.value === "string" ? value.value : "")
           : rest === "/cancel"

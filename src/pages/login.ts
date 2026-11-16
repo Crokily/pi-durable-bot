@@ -109,6 +109,11 @@ export interface Choice {
   readonly name: string;
   /** pi has a login or key of this provider stored now, which a new one replaces. */
   readonly replaces: boolean;
+  /**
+   * What is stored, as a word that holds no secret, for a replace the person confirmed: the page sends it back with the
+   * login, and the login asks again when what is stored differs at its turn.
+   */
+  readonly stored?: string;
 }
 
 /** One of pi's events as the page shows it. URLs are http or https only, as pi checks them. */
@@ -204,6 +209,8 @@ interface Running {
   readonly way: AuthType;
   /** From the person's choice; checked again when the login gets its turn. */
   replaces: boolean;
+  /** The stored login the person confirmed to replace on the page (Choice.stored), if any. */
+  readonly confirmed?: string;
   readonly abort: AbortController;
   /** Why the login was stopped: the person cancelled it, or the link ended. */
   stopped?: "cancelled" | "ended";
@@ -325,9 +332,12 @@ export class BotLogins {
   /** The providers the page offers: pi's subscriptions, and pi's providers that take an API key (also TypeSafe). */
   async #choices(): Promise<{ oauth: Choice[]; api_key: Choice[] }> {
     const models = this.#models();
-    const stored = await storedProviders(models);
+    const stored = await storedCredentials(models);
     const providers = models.getProviders();
-    const choice = (provider: Provider, name: string): Choice => ({ id: provider.id, name, replaces: stored.has(provider.id) });
+    const choice = (provider: Provider, name: string): Choice => {
+      const now = stored.get(provider.id);
+      return now === undefined ? { id: provider.id, name, replaces: false } : { id: provider.id, name, replaces: true, stored: now };
+    };
     return {
       oauth: providers.filter((provider) => provider.auth.oauth).map((provider) => choice(provider, oauthName(provider))),
       api_key: providers.filter((provider) => provider.auth.apiKey?.login).map((provider) => choice(provider, provider.name)),
@@ -494,7 +504,7 @@ export class BotLogins {
   }
 
   /** The person chose a provider and a way: pi's login runs, and its questions and events go to the page. */
-  async begin(token: string, secret: string | undefined, provider: string, way: AuthType): Promise<Acted> {
+  async begin(token: string, secret: string | undefined, provider: string, way: AuthType, replace?: string): Promise<Acted> {
     const own = await this.#own(token, secret);
     if ("ok" in own) return own;
     const { row, live } = own;
@@ -512,7 +522,8 @@ export class BotLogins {
     if (this.#stopped || this.#live.get(row.id) !== live) return { ok: false, status: 410, code: "ended", error: "This link has ended." };
     const choice = choices[way].find((item) => item.id === provider);
     if (!choice) return { ok: false, status: 400, error: `pi has no ${way === "oauth" ? "subscription login" : "API key"} for ${JSON.stringify(provider)}` };
-    const login: Running = { provider, name: choice.name, way, replaces: choice.replaces, abort: new AbortController(), events: [] };
+    const confirmed = typeof replace === "string" && replace.length <= 100 ? { confirmed: replace } : {};
+    const login: Running = { provider, name: choice.name, way, replaces: choice.replaces, ...confirmed, abort: new AbortController(), events: [] };
     live.login = login;
     await this.#sql.run("UPDATE bot_login_links SET running = ? WHERE id = ?", provider, row.id);
     this.#bump(live);
@@ -655,14 +666,13 @@ export class BotLogins {
   }
 
   /**
-   * The login's turn has come: what it replaces is checked again. A provider that got a login while this one waited is
-   * replaced only when the person says so on the page.
+   * The login's turn has come: what it replaces is checked again. A stored login is replaced only when the person
+   * confirmed on the page that they replace this one, as it is now; else the page asks, before any of pi's questions.
    */
   async #checkReplaces(live: Live, login: Running): Promise<void> {
-    const now = (await storedProviders(this.#models())).has(login.provider);
-    const asked = login.replaces;
-    login.replaces = now;
-    if (now && !asked) {
+    const now = (await storedCredentials(this.#models())).get(login.provider);
+    login.replaces = now !== undefined;
+    if (now !== undefined && now !== login.confirmed) {
       this.#bump(live);
       const answer = await this.#ask(live, login, { id: randomBytes(9).toString("base64url"), type: "replace", provider: login.name }, [login.abort.signal]);
       if (answer !== "replace") {
@@ -694,6 +704,7 @@ export class BotLogins {
         this.#options.print("login page: pi saved the login but did not update its models", { link: linkId(row), provider: login.provider });
       }
       committed = true;
+      saved.set(login.provider, (saved.get(login.provider) ?? 0) + 1);
     } catch (error) {
       const reason = login.stopped === "cancelled" ? "Cancelled." : error instanceof Error ? error.message : String(error);
       failure = { ok: false, provider: login.provider, name: login.name, way: login.way, cancelled: login.stopped === "cancelled", error: clip(reason) };
@@ -711,10 +722,10 @@ export class BotLogins {
       this.#bump(live);
       return;
     }
-    // pi has the login now. It is written down at once, with a note without the model's try, so that the end of the
-    // link or a restart while the model is tried never says that nobody signed in.
+    // pi has the login now. It is written down at once, before pi is asked for anything more, with a note without the
+    // models, so that the end of the link or a restart while they are listed and tried never says that nobody signed in.
     const base: Extract<Outcome, { ok: true }> = { ok: true, provider: login.provider, name: login.name, way: login.way, replaced: login.replaces, models: 0 };
-    const first = await this.#loginNote(row, base);
+    const first = noteText(row, base, undefined);
     const n = await this.#sql.transaction(async (tx) => {
       const last = await tx.get<{ n: number | null }>("SELECT MAX(n) AS n FROM bot_logins WHERE link_id = ?", row.id);
       const next = (last?.n ?? 0) + 1;
@@ -764,21 +775,9 @@ export class BotLogins {
   /** The note of a login's wake: the provider, what it replaced, and the models and judges the bot can use with it now. */
   async #loginNote(row: LinkRow, outcome: Extract<Outcome, { ok: true }>): Promise<string> {
     const models = this.#models();
-    const list = (names: string[]) => (names.length > MAX_LISTED ? `${names.slice(0, MAX_LISTED).join(", ")} and ${names.length - MAX_LISTED} more` : names.join(", "));
     // pi may fail to list them just after a login (its models did not follow yet): the note then leaves them out.
     const listed = await Promise.all([models.getAvailable(outcome.provider), models.getAvailableOfType("classifier", outcome.provider)]).catch(() => undefined);
-    const chat = (listed?.[0] ?? []).map((model) => `${model.provider}/${model.id}`);
-    const judges = (listed?.[1] ?? []).map((model) => `${model.provider}/${model.id}`);
-    const parts = [
-      `login page: someone used link ${linkId(row)} (made for ${madeFor(row.made_for)}) and signed in to ${outcome.name} (provider ${outcome.provider}, ${wayWords(outcome.way)}), for every bot and pi on this computer.`,
-      outcome.replaced ? `It replaced the ${outcome.provider} ${outcome.way === "oauth" ? "login" : "key"} that pi had before.` : "",
-      chat.length > 0 ? `Usable now: ${list(chat)}.` : "",
-      judges.length > 0 ? `Judges usable now: ${list(judges)}.` : "",
-      outcome.model ? (outcome.modelProblem ? `${outcome.model} did not answer when Pots tried it with this login.` : `${outcome.model} answered when Pots tried it.`) : "",
-      outcome.judge ? (outcome.judgeProblem ? `${outcome.judge} did not answer when Pots tried it as a judge.` : `${outcome.judge} answered when Pots tried it as a judge.`) : "",
-      listed && chat.length === 0 && judges.length === 0 ? "pi lists no model or judge for this login." : "",
-    ];
-    return parts.filter(Boolean).join(" ");
+    return noteText(row, outcome, listed && { chat: listed[0].map((model) => `${model.provider}/${model.id}`), judges: listed[1].map((model) => `${model.provider}/${model.id}`) });
   }
 
   async #wakeLogin(linkRowId: number, n: number): Promise<void> {
@@ -914,10 +913,37 @@ export class BotLogins {
   }
 }
 
-/** The providers pi has a login or key of now. pi's ModelRuntime lists them without a secret; a plain Models does not. */
-async function storedProviders(models: Models): Promise<Set<string>> {
+/**
+ * Logins saved through login pages in this process, per provider. With the kind pi lists, they tell one stored login
+ * from the next without a secret: a login another page saved over the one a person confirmed to replace is a new one.
+ */
+const saved = new Map<string, number>();
+
+/**
+ * The providers pi has a login or key of now, each with a word for what is stored (Choice.stored). pi's ModelRuntime
+ * lists them without a secret; a plain Models does not.
+ */
+async function storedCredentials(models: Models): Promise<Map<string, string>> {
   const listing = (models as Partial<Pick<ModelRuntime, "listCredentials">>).listCredentials;
-  return new Set((listing ? await listing.call(models).catch(() => []) : []).map((item) => item.providerId));
+  const items = listing ? await listing.call(models).catch(() => []) : [];
+  return new Map(items.map((item) => [item.providerId, `${item.type}.${saved.get(item.providerId) ?? 0}`]));
+}
+
+/** A login's note, with the models and judges pi listed, or none when it was not asked or could not list them. */
+function noteText(row: LinkRow, outcome: Extract<Outcome, { ok: true }>, listed: { chat: string[]; judges: string[] } | undefined): string {
+  const list = (names: string[]) => (names.length > MAX_LISTED ? `${names.slice(0, MAX_LISTED).join(", ")} and ${names.length - MAX_LISTED} more` : names.join(", "));
+  const chat = listed?.chat ?? [];
+  const judges = listed?.judges ?? [];
+  const parts = [
+    `login page: someone used link ${linkId(row)} (made for ${madeFor(row.made_for)}) and signed in to ${outcome.name} (provider ${outcome.provider}, ${wayWords(outcome.way)}), for every bot and pi on this computer.`,
+    outcome.replaced ? `It replaced the ${outcome.provider} ${outcome.way === "oauth" ? "login" : "key"} that pi had before.` : "",
+    chat.length > 0 ? `Usable now: ${list(chat)}.` : "",
+    judges.length > 0 ? `Judges usable now: ${list(judges)}.` : "",
+    outcome.model ? (outcome.modelProblem ? `${outcome.model} did not answer when Pots tried it with this login.` : `${outcome.model} answered when Pots tried it.`) : "",
+    outcome.judge ? (outcome.judgeProblem ? `${outcome.judge} did not answer when Pots tried it as a judge.` : `${outcome.judge} answered when Pots tried it as a judge.`) : "",
+    listed && chat.length === 0 && judges.length === 0 ? "pi lists no model or judge for this login." : "",
+  ];
+  return parts.filter(Boolean).join(" ");
 }
 
 /** A subscription's name as pots login shows it. */

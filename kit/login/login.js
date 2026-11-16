@@ -254,18 +254,19 @@ function renderConfirm(session, item) {
     session,
     ...header(fill(W.replaceTitle, { provider: item.name })),
     h("p", { text: fill(W.replaceText, { provider: item.name }) }),
-    h("button", { type: "button", class: "big", onclick: begin, text: W.replaceGo }),
+    h("button", { type: "button", class: "big", onclick: () => begin(true), text: W.replaceGo }),
     h("button", { type: "button", class: "plain", onclick: () => ((ui.screen = "choose"), render()), text: W.back }),
   );
 }
 
-async function begin() {
+/** Start pi's login. confirmed: the person said here to replace the login that is stored, as the choices showed it. */
+async function begin(confirmed = false) {
   const item = ui.pending;
   if (!item) return;
   ui.screen = "choose";
   ui.message = "";
   ui.seen = (link.outcomes || []).length;
-  const answer = await api("login", { provider: item.id, way: item.way });
+  const answer = await api("login", { provider: item.id, way: item.way, ...(confirmed && item.stored ? { replace: item.stored } : {}) });
   if (!answer.ok) {
     ui.message = answer.status === 0 ? fill(W.network, { bot: facts.bot }) : answer.error || W.network;
     render();

@@ -2,7 +2,9 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
-## Unreleased
+## 0.8.4 (2026-11-16)
+
+A Microsoft Teams channel, as a preview: a bot sets up its own Teams app with Microsoft's Teams CLI while the person signs in on their phone, and then reads and answers in channels, threads, group chats and DMs, with mentions, reactions, Adaptive Card buttons, files in DMs and backfill from Microsoft Graph. It is tested with fakes of Microsoft's services and with Microsoft 365 Agents Playground, not yet in a real Microsoft 365 organisation; what has not been tried is listed below. ws 8.23.0 fixes a memory exhaustion attack over WebSocket.
 
 ### Added
 - **Microsoft Teams, as a preview.** A bot connects Teams itself with the `teams-channel` skill: it runs Microsoft's Teams CLI, gives the person a device code to sign in with their work account on their phone or computer, makes the app, its bot and its secret in one command (the CLI writes the secret straight to `~/.pots/secrets/teams-<bot>.env`, so the bot never sees it), asks for the permissions it reads with (resource-specific consent: all messages of the teams and chats it is added to, not only @mentions), sends the install link, and signs the person out of the CLI again (`teams logout`). For a person who is not an admin, it writes a note for their admin to allow custom apps. The bot.json entry is `{ "id": "teams", "type": "teams", "secrets": "~/.pots/secrets/teams-<bot>.env" }`.
@@ -12,6 +14,7 @@ What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm inst
 
 ### Changed
 - **An older edit no longer replaces a newer one in the log.** An edit that a backfill read before a later edit came live (on any channel) adds nothing; edits with the same time still apply in the order they come.
+- **ws 8.23.0** (was 8.22.2). It fixes a denial of service: a peer that sent many Pings and stopped reading could make ws buffer Pongs until memory ran out.
 
 ## 0.8.3 (2026-11-16)
 

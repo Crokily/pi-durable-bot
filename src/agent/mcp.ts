@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { ImageContent, Models, TextContent } from "@earendil-works/pi-ai";
 import type { LoadedMcpConfig, McpExposure, McpServerConfig, McpServerEntry } from "@earendil-works/pi-coding-agent";
 import { defineExtension, defineTool, type Extension, type ToolRegistration } from "@earendil-works/pi-durable";
@@ -95,15 +95,17 @@ interface Runtime {
 }
 
 async function loadPi(): Promise<Pi> {
-  const [{ getAgentDir }, config, servers, tools, resources, extension] = await Promise.all([
+  // pi-mcp has pi's tool names (createMcpToolName, mcpNamespace) since pi 1.5.1.
+  const [{ getAgentDir }, { createMcpToolName, mcpNamespace }, config, servers, tools, resources, extension] = await Promise.all([
     import("@earendil-works/pi-coding-agent"),
+    import("@earendil-works/pi-mcp"),
     import(piModule("./extensions/mcp/config.js")),
     import(piModule("./core/mcp-servers.js")),
     import(piModule("./extensions/mcp/tools.js")),
     import(piModule("./extensions/mcp/resources.js")),
     import(piModule("./extensions/mcp/index.js")),
   ]);
-  return { getAgentDir, ...config, ...servers, ...tools, ...resources, ...extension } as Pi;
+  return { getAgentDir, createMcpToolName, mcpNamespace, ...config, ...servers, ...tools, ...resources, ...extension } as Pi;
 }
 
 async function loadRuntime(): Promise<Runtime> {

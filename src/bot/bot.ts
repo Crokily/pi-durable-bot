@@ -14,6 +14,7 @@ import { createCodemode } from "../agent/codemode.ts";
 import { SCREEN_VARIABLES, screenOf } from "../agent/screen.ts";
 import { createJudge } from "../agent/judge.ts";
 import { Mcp } from "../agent/mcp.ts";
+import { piLoginHelpers } from "../agent/models.ts";
 import { openResources } from "../agent/resources.ts";
 import { CommandScopes, scopeSupport } from "../agent/scopes.ts";
 import { loadChannel } from "../channels/load.ts";
@@ -267,6 +268,7 @@ export class Bot implements WakeTarget {
       wake: (note, requestId) => timers.add(Date.now(), note, { source: "pages", requestId }),
       print,
       desktop: { vnc: () => current().vnc, screen: () => screenOf(current().screen, process.env) },
+      login: { models: () => env.models, ...piLoginHelpers },
     });
     // Crash tests: between the steps of a password page's submission. The next start must finish the sequence.
     Object.assign(pages.crashTests, secretCrashTests(paths.dir, print));
@@ -457,6 +459,7 @@ export class Bot implements WakeTarget {
     try {
       await this.#pages.stopCleanup();
       await this.#pages.desktop.stop();
+      this.#pages.login.stop();
       await this.#control.stop();
       await this.#gateway.pauseWakes();
       await this.#agent.close();
@@ -749,6 +752,12 @@ export class Bot implements WakeTarget {
           ...(optional(body.input) ? { input: optional(body.input)! } : {}),
           ...(optional(body.area) ? { area: optional(body.area)! } : {}),
           ...(typeof body.minutes === "number" ? { minutes: body.minutes } : {}),
+          ...(optional(body.for) ? { person: optional(body.for)! } : {}),
+        }),
+      "POST /page/login": async (body: Record<string, unknown>) =>
+        this.#env.pages.login(this.#pages, {
+          ...(optional(body.provider) ? { provider: optional(body.provider)! } : {}),
+          ...(optional(body.text) ? { text: optional(body.text)! } : {}),
           ...(optional(body.for) ? { person: optional(body.for)! } : {}),
         }),
       "GET /page/server": async () => this.#env.pages.status(),

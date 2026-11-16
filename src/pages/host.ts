@@ -23,6 +23,8 @@ export const QUICK_TUNNEL_NOTE =
   "This link goes through a Cloudflare Quick Tunnel: its address changes when Pots restarts, Cloudflare can see the page's content, and Cloudflare says Quick Tunnels are for testing and development.";
 export const QUICK_TUNNEL_SECRET_NOTE =
   "This link goes through a Cloudflare Quick Tunnel: its address changes when Pots restarts, Cloudflare can see what is typed on the page, and Cloudflare says Quick Tunnels are for testing and development.";
+export const QUICK_TUNNEL_LOGIN_NOTE =
+  "This link goes through a Cloudflare Quick Tunnel: its address changes when Pots restarts, and Cloudflare can see what the page shows and what is typed on it. A device code is safe there. A copy code or a pasted address is not: Cloudflare sees it and the sign-in link, which can be enough to finish the sign-in (Anthropic's sign-in link holds its PKCE verifier). An API key typed on the page is seen as on the password page. Cloudflare says Quick Tunnels are for testing and development.";
 export const QUICK_TUNNEL_DESKTOP_NOTE =
   "This link goes through a Cloudflare Quick Tunnel: its address changes when Pots restarts, Cloudflare can see your screen and every key typed on the page, and Cloudflare says Quick Tunnels are for testing and development.";
 
@@ -189,6 +191,8 @@ export class PageHost {
     }
     if (!start) return { ...(this.#tunnel?.address ? { base: this.#tunnel.address } : {}), via: "quick-tunnel" };
     if (this.#port === undefined) throw new Error(`the page server is not running: ${this.#problem ?? "it is starting"}`);
+    // A link made while the host stops starts no tunnel that nothing would stop.
+    if (this.#stopped) throw new Error("the page server is stopping");
     this.#tunnel ??= new QuickTunnel({
       target: `http://127.0.0.1:${this.#port}`,
       home: this.#options.home,
@@ -266,9 +270,32 @@ export class PageHost {
     };
   }
 
+  /**
+   * pots page login: a link to Pots' own login page, where one person signs in to a model provider with a subscription
+   * or an API key, for every bot and pi on this computer.
+   */
+  async login(bot: BotPages, input: { provider?: string; text?: string; person?: string }): Promise<{ link: string; url: string; expires: string; via: Via; note?: string }> {
+    this.#ready();
+    const made = await bot.login.create(input);
+    let address: { base?: string; via: Via };
+    try {
+      address = await this.#address(true);
+    } catch (error) {
+      await bot.revoke(made.id);
+      throw error;
+    }
+    return {
+      link: made.id,
+      url: `${address.base}/g/${made.token}/`,
+      expires: new Date(made.expiresAt).toISOString(),
+      via: address.via,
+      ...(address.via === "quick-tunnel" ? { note: QUICK_TUNNEL_LOGIN_NOTE } : {}),
+    };
+  }
+
   /** pots page unlink: by link ID or by URL. */
   async unlink(bot: BotPages, link: string): Promise<string> {
-    const token = /\/(?:p|s|d)\/([A-Za-z0-9_-]{16,128})(?:\/|$)/.exec(link)?.[1];
+    const token = /\/(?:p|s|d|g)\/([A-Za-z0-9_-]{16,128})(?:\/|$)/.exec(link)?.[1];
     const revoked = await bot.revoke(token ?? link.trim());
     if (!revoked) throw new Error(`there is no link ${JSON.stringify(link)} of this bot (pots page list shows them)`);
     return `Unlinked ${revoked}.`;
@@ -288,7 +315,7 @@ export class PageHost {
     return {
       via: address.via,
       address: address.base ?? null,
-      ...(address.base ? {} : { addressNote: problem ?? "no Quick Tunnel runs now; the next pots page link, pots page secret or pots page desktop starts one, and these links work again at its address" }),
+      ...(address.base ? {} : { addressNote: problem ?? "no Quick Tunnel runs now; the next pots page link, secret, desktop or login starts one, and these links work again at its address" }),
       pages: listing.pages.map((page) => ({
         page: page.page,
         kept: page.kept,
@@ -319,6 +346,18 @@ export class PageHost {
         started: iso(link.started),
         ended: iso(link.ended),
         connected: link.connected,
+      })),
+      loginLinks: listing.loginLinks.map((link) => ({
+        link: link.link,
+        url: url(`/g/${link.token}/`),
+        for: link.for,
+        provider: link.provider,
+        created: iso(link.created),
+        expires: iso(link.expires),
+        state: link.state,
+        started: iso(link.started),
+        ended: iso(link.ended),
+        signedIn: link.signedIn,
       })),
     };
   }

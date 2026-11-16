@@ -3,8 +3,8 @@ import { Argument, Command, Flag } from "effect/cli";
 import { control, printResult, resolveBot } from "./control.ts";
 
 // Pages: web pages the bot writes in its pages/ folder, served by the gateway, with links it gives out; the password
-// page, Pots' own, that writes what a person types to a file in the secrets folder; and the desktop page, Pots' own,
-// with which a person sees and controls the bot's screen.
+// page, Pots' own, that writes what a person types to a file in the secrets folder; the desktop page, Pots' own, with
+// which a person sees and controls the bot's screen; and the login page, Pots' own, where a person signs in to a model.
 
 const bot = Flag.String("bot").pipe(Flag.optional, Flag.withDescription("Which bot. Default: $POTS_BOT, or the only bot."));
 const person = Flag.String("for").pipe(
@@ -32,20 +32,20 @@ const link = Command.make(
 
 const unlink = Command.make(
   "unlink",
-  { link: Argument.String("link").pipe(Argument.withDescription("A link ID such as L3, S2 or D1, or the link's URL.")), bot },
+  { link: Argument.String("link").pipe(Argument.withDescription("A link ID such as L3, S2, D1 or G1, or the link's URL.")), bot },
   (input) =>
     Effect.gen(function* () {
       const id = yield* resolveBot(input.bot);
       yield* printResult(yield* control(id, "POST", "/page/unlink", { link: input.link }));
     }),
-).pipe(Command.withDescription("Take a link back: it shows Not found from then on. A desktop link that is in use ends at once."));
+).pipe(Command.withDescription("Take a link back: it shows Not found from then on. A desktop or login link that is in use ends at once."));
 
 const list = Command.make("list", { bot }, (input) =>
   Effect.gen(function* () {
     const id = yield* resolveBot(input.bot);
     yield* printResult(yield* control(id, "GET", "/page/list"));
   }),
-).pipe(Command.withDescription("The bot's pages with their links, last opened and last changed, its password links and its desktop links."));
+).pipe(Command.withDescription("The bot's pages with their links, last opened and last changed, its password links, desktop links and login links."));
 
 const secret = Command.make(
   "secret",
@@ -110,7 +110,34 @@ const desktop = Command.make(
   ),
 );
 
+const login = Command.make(
+  "login",
+  {
+    provider: Flag.String("provider").pipe(
+      Flag.optional,
+      Flag.withDescription("The provider to sign in to, as pi names it, such as anthropic, openai-codex or typesafe (pots login --list shows what is signed in). Default: the person chooses."),
+    ),
+    text: Flag.String("text").pipe(Flag.optional, Flag.withDescription("What the page says to the person: what to sign in to, and why.")),
+    person,
+    bot,
+  },
+  (input) =>
+    Effect.gen(function* () {
+      const id = yield* resolveBot(input.bot);
+      const body = {
+        ...(Option.isSome(input.provider) ? { provider: input.provider.value } : {}),
+        ...(Option.isSome(input.text) ? { text: input.text.value } : {}),
+        ...(Option.isSome(input.person) ? { for: input.person.value } : {}),
+      };
+      yield* printResult(yield* control(id, "POST", "/page/login", body));
+    }),
+).pipe(
+  Command.withDescription(
+    "Make a login link: Pots' own page, where one person signs in to a model provider with a subscription, or adds an API key (also TypeSafe's, for Jev), from any device, for every bot and pi on this computer. A new login replaces the provider's old one, and the page says so first. Nothing happens before they press Start, and only the browser that pressed Start first can use it. It works for an hour unopened, then 15 minutes after Start, for several logins. You are woken once for each login, with the provider and the models you can use now, never the login itself; and once at the end when nobody signed in.",
+  ),
+);
+
 export const pageCommand = Command.make("page").pipe(
-  Command.withDescription("Web pages the bot writes in its pages/ folder, the links to them, password pages and desktop pages."),
-  Command.withSubcommands([link, unlink, list, secret, desktop]),
+  Command.withDescription("Web pages the bot writes in its pages/ folder, the links to them, password pages, desktop pages and login pages."),
+  Command.withSubcommands([link, unlink, list, secret, desktop, login]),
 );

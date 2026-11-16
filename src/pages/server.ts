@@ -6,6 +6,8 @@ import type { Print } from "../gateway/config.ts";
 import { DESKTOP_COOKIE } from "./desktop.ts";
 import { desktopHeaders, pickLang, renderDesktopEnded, renderDesktopPage } from "./desktop-page.ts";
 import { contentType, openFile, pageFolder, pathSegments, type Resolved } from "./files.ts";
+import { LOGIN_COOKIE, LOGIN_MINUTES } from "./login.ts";
+import { renderLoginEnded, renderLoginPage } from "./login-page.ts";
 import { renderFailed, renderNotFound, renderSecretExpired, renderSecretForm, renderSecretSaved, renderSecretUsed, SECRET_PAGE_HEADERS } from "./secret-page.ts";
 import type { BotPages, OpenedLink } from "./store.ts";
 
@@ -20,8 +22,16 @@ import type { BotPages, OpenedLink } from "./store.ts";
 //   POST /d/<token>/start             Start: binds the link to this browser with a cookie
 //   POST /d/<token>/end               {"how": "done" | "cannot", "note"}: the person hands the desktop back
 //   WebSocket /d/<token>/ws           the VNC connection of a started link, from the browser that started it
+//   GET  /g/<token>/                  the login page, Pots' own; its script is in the kit (kit/login/)
+//   GET  /g/<token>/state[?after=N]   the login link's state; with after, it waits until the state is newer than N
+//   POST /g/<token>/start             Start: binds the link to this browser with a cookie
+//   POST /g/<token>/login             {"provider", "way": "oauth" | "api_key"}: pi's login begins
+//   POST /g/<token>/answer            {"question", "value"}: the answer to pi's open question
+//   POST /g/<token>/cancel            the sign-in that runs stops
+//   POST /g/<token>/done              the person is done: the link ends
 // Every response says Referrer-Policy: no-referrer and X-Content-Type-Options: nosniff. The bot's pages get no CSP; the
-// password page gets a sandbox of its own, and the desktop page a CSP that lets it load and talk only to this address.
+// password page gets a sandbox of its own, and the desktop and login pages a CSP that lets them load and talk only to
+// this address.
 
 /** The largest body of a page's answers or a password page's form. */
 export const MAX_BODY = 64 * 1024;
@@ -34,6 +44,7 @@ const PAGE_PATH = new RegExp(`^/p/(${TOKEN})(/.*)?$`);
 const SECRET_PATH = new RegExp(`^/s/(${TOKEN})/?$`);
 const DESKTOP_PATH = new RegExp(`^/d/(${TOKEN})(/.*)?$`);
 const DESKTOP_SOCKET = new RegExp(`^/d/(${TOKEN})/ws$`);
+const LOGIN_PATH = new RegExp(`^/g/(${TOKEN})(/.*)?$`);
 /** The largest message a desktop page's browser sends; noVNC's are small, a pasted text the largest. */
 const MAX_SOCKET_MESSAGE = 4 * 1024 * 1024;
 /** Tokens found, by the bot they belong to, so a request asks one bot's database, not all. */
@@ -101,6 +112,8 @@ export class PageRequests {
     if (secret) return this.#secret(request, response, secret[1]!);
     const desktop = DESKTOP_PATH.exec(path);
     if (desktop) return this.#desktop(request, response, desktop[1]!, desktop[2], query);
+    const login = LOGIN_PATH.exec(path);
+    if (login) return this.#login(request, response, login[1]!, login[2], query);
     if (path.startsWith("/__pots/kit/")) return this.#kit(request, response, path.slice("/__pots/kit/".length));
     return text(response, 404, "Not found.");
   }
@@ -136,12 +149,17 @@ export class PageRequests {
   }
 
   /** The bot whose desktop link has this token. */
-  async #desktopOwner(token: string): Promise<BotPages | undefined> {
+  #desktopOwner(token: string): Promise<BotPages | undefined> {
+    return this.#owner(token, async (bot) => (await bot.desktop.view(token)) !== undefined);
+  }
+
+  /** The bot whose link has this token, as has() finds it. */
+  async #owner(token: string, has: (bot: BotPages) => Promise<boolean>): Promise<BotPages | undefined> {
     const bots = [...this.#host.bots()];
     const owner = this.#owners.get(token);
     const known = bots.find((bot) => bot.id === owner);
     for (const bot of known ? [known] : bots) {
-      if (!(await bot.desktop.view(token))) continue;
+      if (!(await has(bot))) continue;
       if (this.#owners.size >= CACHE_LIMIT) this.#owners.clear();
       this.#owners.set(token, bot.id);
       return bot;
@@ -222,6 +240,66 @@ export class PageRequests {
     if (value.how !== "done" && value.how !== "cannot") return json(response, 400, { ok: false, error: '"how" must be "done" or "cannot"' });
     const result = await bot.desktop.end(token, secret, value.how, typeof value.note === "string" ? value.note : "");
     if (!result.ok) return json(response, result.status, { ok: false, error: result.error });
+    json(response, 200, result);
+  }
+
+  async #login(request: IncomingMessage, response: ServerResponse, token: string, rest: string | undefined, query: string): Promise<void> {
+    const method = request.method ?? "GET";
+    // Relative links in the page need the closing "/", as a page's.
+    if (rest === undefined) return method === "GET" || method === "HEAD" ? redirect(response, `${token}/${query}`) : text(response, 404, "Not found.");
+    const lang = pickLang(request.headers["accept-language"]);
+    for (const [name, value] of Object.entries(desktopHeaders([request.headers.host, ...this.#host.publicHosts()]))) response.setHeader(name, value);
+    const bot = await this.#owner(token, async (each) => (await each.login.view(token)) !== undefined);
+    const secret = cookie(request, LOGIN_COOKIE);
+    if (rest === "/") {
+      if (method !== "GET" && method !== "HEAD") return text(response, 405, "Use GET.");
+      const view = bot ? await bot.login.view(token, secret) : undefined;
+      if (!bot || !view) return html(response, 404, renderLoginEnded("missing", "", lang));
+      if (view.state === "open" || view.state === "started") {
+        const providerName = view.provider ? bot.login.providerName(view.provider) : undefined;
+        return html(response, 200, renderLoginPage(view, bot.botName, { lang, quickTunnel: this.#host.quickTunnel(), minutes: LOGIN_MINUTES, ...(providerName ? { providerName } : {}) }));
+      }
+      return html(response, 410, renderLoginEnded(view.state, bot.botName, lang));
+    }
+    if (rest === "/state") {
+      if (method !== "GET") return text(response, 405, "Use GET.");
+      const after = /[?&]after=(\d{1,15})(?:&|$)/.exec(query)?.[1];
+      const state = bot ? await bot.login.state(token, secret, after === undefined ? undefined : Number(after)) : undefined;
+      if (!state) return json(response, 404, { state: "missing" });
+      if (response.destroyed) return;
+      return json(response, 200, state);
+    }
+    if (!["/start", "/login", "/answer", "/cancel", "/done"].includes(rest)) return text(response, 404, "Not found.");
+    if (method !== "POST") return text(response, 405, "Use POST.");
+    if (!this.#sameSite(request)) return json(response, 403, { ok: false, error: "This request did not come from the login page." });
+    if (!bot) return json(response, 404, { ok: false, code: "missing", error: "This link does not work." });
+    if (rest === "/start") {
+      request.resume();
+      const result = await bot.login.start(token, secret);
+      if (!result.ok) return json(response, result.status, { ok: false, code: result.code, error: result.error });
+      const seconds = Math.max(60, Math.ceil((result.view.expiresAt - Date.now()) / 1000) + 60);
+      // No Path: the browser takes the folder of this request's path, /g/<token>, with any path a proxy put in front.
+      response.setHeader("set-cookie", `${LOGIN_COOKIE}=${result.secret}; Max-Age=${seconds}; HttpOnly; SameSite=Strict${secureRequest(request) ? "; Secure" : ""}`);
+      return json(response, 200, { ok: true, now: Date.now(), expires: result.view.expiresAt, started: result.view.startedAt });
+    }
+    const body = await readBody(request);
+    if (!body) return json(response, 400, { ok: false, error: `the body is over ${MAX_BODY / 1024} KB` }, true);
+    let value: Record<string, unknown>;
+    try {
+      value = JSON.parse(body.toString("utf8") || "{}") as Record<string, unknown>;
+      if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("not an object");
+    } catch {
+      return json(response, 400, { ok: false, error: "the body is not a JSON object" });
+    }
+    const result =
+      rest === "/login"
+        ? await bot.login.begin(token, secret, String(value.provider ?? ""), value.way as "oauth" | "api_key", typeof value.replace === "string" ? value.replace : undefined)
+        : rest === "/answer"
+          ? await bot.login.answer(token, secret, String(value.question ?? ""), typeof value.value === "string" ? value.value : "")
+          : rest === "/cancel"
+            ? await bot.login.cancel(token, secret)
+            : await bot.login.done(token, secret);
+    if (!result.ok) return json(response, result.status, { ok: false, ...(result.code ? { code: result.code } : {}), error: result.error });
     json(response, 200, result);
   }
 

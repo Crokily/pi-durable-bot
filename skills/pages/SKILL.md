@@ -1,6 +1,6 @@
 ---
 name: pages
-description: Web pages you write and send to people as a link. A display page shows what is too big for a chat message (a plan, a report, tables, charts); an answer page collects many answers at once (choices, text, comments on sections, approve or reject) and sends them back to you; the Pots password page takes a secret such as a token. Also how page links reach the internet (Cloudflare Quick Tunnel, Tailscale Funnel), website projects, and cleanup. Use when a chat message is too small for what you must show or ask, or when a person has to give you a secret.
+description: Web pages you write and send to people as a link. A display page shows what is too big for a chat message (a plan, a report, tables, charts); an answer page collects many answers at once (choices, text, comments on sections, approve or reject) and sends them back to you; the Pots password page takes a secret such as a token; the Pots login page signs this computer in to a model. Also how page links reach the internet (Cloudflare Quick Tunnel, Tailscale Funnel), website projects, and cleanup. Use when a chat message is too small for what you must show or ask, or when a person has to give you a secret.
 ---
 
 # Pages
@@ -19,6 +19,7 @@ A guide, not a rule; you decide.
 | Many inputs at once: choices, text, a comment on each step, approve or reject | An answer page | One page, one submit |
 | A secret: a password, a token, a key | The Pots password page (`pots page secret`) | The value goes straight to a file in the secrets folder, never into the chat, the log or your conversation |
 | A step only a person can do on your screen: a sign-in, a CAPTCHA, an approval | The Pots desktop page (`pots page desktop`): the desktop-page skill | They see and control your screen from their phone or computer, and hand it back |
+| A login to a model: a subscription or an API key, also TypeSafe's for Jev | The Pots login page (`pots page login`) | They sign in from any device; pi keeps the login, and you never see it |
 
 Never ask for a secret in a chat message, and never write your own page for one. If someone pastes a secret into a chat, tell them that the chat keeps it, and suggest they replace it. In the terminal channel (`pots chat`), ask-secret works as before.
 
@@ -45,7 +46,7 @@ pots page unlink <link ID or URL>                 # the link stops working at on
 pots page list                                    # your pages, their links, when each was last opened and changed
 ```
 
-`pots page list` also lists your password links (`secretLinks`, IDs S1, S2, …) and desktop links (`desktopLinks`, D1, D2, …), and `pots page unlink` takes those back too.
+`pots page list` also lists your password links (`secretLinks`, IDs S1, S2, …), desktop links (`desktopLinks`, D1, D2, …) and login links (`loginLinks`, G1, G2, …), and `pots page unlink` takes those back too.
 
 `pots page link` prints JSON: `{"link": "<link ID>", "url": "https://…/p/<token>/", "via": "public-url" or "quick-tunnel", "note": "…"}`. `note` comes with a Quick Tunnel and gives its facts (see below). Nobody can guess a link, but anyone who has it can open it, and a link can be forwarded.
 
@@ -190,12 +191,40 @@ secret page: someone used link <link ID> (made for <person address | anyone>) an
 
 You never see the values; they are not in the log, the wake or a trace. Then use the file as after ask-secret, for example as `secrets` of a channel in bot.json. The file has the values exactly as they were typed, one `KEY=value` line each, so never `source` it or `.` it in a shell: a value can hold `$(…)`. To use one value in a command, read just that line, for example `"$(grep '^SLACK_BOT_TOKEN=' ~/.pots/secrets/slack-ada.env | cut -d= -f2-)"`, and never print it. Send the link in a DM to that person when you can. With a Quick Tunnel, tell them every time that Cloudflare can see what they type into the page (see below), and offer Tailscale Funnel.
 
+## The login page
+
+When you need a model or a judge that is not signed in on this computer, or a login has expired, and the person who pays for it is not at a terminal here, send them a login link:
+
+```sh
+pots page login --provider openai-codex --text "Sign in with your ChatGPT account, so I can use GPT for the reports" --for slack:@U123
+```
+
+`--provider` is optional: without it, they choose. pi's provider IDs are in `pots login --list` (those signed in) and in the error of a wrong `--provider`. It prints JSON: `{"link": "G1", "url": "https://…/g/<token>/", "expires": "<time>", "via": …, "note": …}`.
+
+The page is Pots' own. It runs pi's own login on this computer, as `pots login` does in a terminal: the person chooses a subscription (ChatGPT, Claude, GitHub Copilot, Grok, Kimi and more) or an API key (any of pi's providers, also TypeSafe for Jev), and the page shows what pi asks and shows. A sign-in that needs a browser on this computer works from their phone too: where pi offers a device code or a copy code, the page puts it first; otherwise they copy the address of the page that cannot load at the end and paste it. Ways that need setting up on this computer itself (an AWS credential chain or profile, Google's Application Default Credentials or a service account file) are not offered there; the page tells them to ask you, and you set those up in your shell.
+
+- Nothing happens before they press Start, and only the browser that pressed Start first can use the link. It works for an hour unopened, then 15 minutes after Start, for one login or several, until they press Done.
+- A login is for every bot and pi program of this user on this computer, and a new one replaces the provider's old one. The page says so before they sign in.
+- Logins belong to whoever pays for them. Send the link to the person who runs you, or to someone they named, in a DM.
+- When Pots restarts during a sign-in, that sign-in is lost and the link ends; you are told, and a new link lets them try again.
+- A local or OpenAI-compatible server is not on the page. Add it to pi's `~/.pi/agent/models.json` yourself. When it needs a key, take the key with the password page, and give `apiKey` as a command that reads it, as pi allows (`"apiKey": "!grep '^LOCAL_KEY=' ~/.pots/secrets/local-ada.env | cut -d= -f2-"`).
+
+You are woken once for each login:
+
+```
+login page: someone used link G1 (made for slack:@U123) and signed in to OpenAI (ChatGPT Plus/Pro) (provider openai-codex, subscription), for every bot and pi on this computer. Usable now: openai-codex/…, …. openai-codex/gpt-… answered when Pots tried it.
+```
+
+It says when the login replaced one, and lists the judges for a provider that has them. You never see a key, a code, a sign-in address or the account. The page tried pi's default model of the provider, as `pots login` does, but chose nothing for you: the model you think with is `model` in your bot.json, and which models do which work is the person's to say, so ask them, or follow what your AGENTS.md says. When nobody signed in by the end of the link, you are woken once more with that, and with how many sign-ins failed; the page showed them why.
+
+When you cannot think at all, because your only login has expired, you cannot make the link. The person, or an agent in a terminal on this computer, then runs `pots login --link`: it serves the same page without a bot, prints the link, and prints each login.
+
 ## Where links point: a Quick Tunnel or your own address
 
 Pots serves pages on this computer only (127.0.0.1, at `pagePort` in `~/.pots/settings.json`). The internet reaches them in one of two ways:
 
 - `publicUrl` in `~/.pots/settings.json` is set (a Tailscale Funnel address, a domain, a reverse proxy): links use it, and no Quick Tunnel starts. `via` is `public-url`.
-- `publicUrl` is not set: Pots starts a Cloudflare [Quick Tunnel](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/) at the first `pots page link`, `pots page secret` or `pots page desktop`, and keeps it until the gateway stops. `via` is `quick-tunnel`. All bots of this computer share it.
+- `publicUrl` is not set: Pots starts a Cloudflare [Quick Tunnel](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/) at the first `pots page link`, `pots page secret`, `pots page desktop` or `pots page login`, and keeps it until the gateway stops. `via` is `quick-tunnel`. All bots of this computer share it.
 
 What a Quick Tunnel means, from Cloudflare's docs and how it works:
 

@@ -9,6 +9,7 @@ import type { Sql } from "../core/sql.ts";
 import type { Print } from "../gateway/config.ts";
 import { BotDesktop } from "./desktop.ts";
 import { folderVersion, identity, listPageNames, pageFolder, pageNameProblem } from "./files.ts";
+import { BotLogins, type LoginOptions } from "./login.ts";
 
 // A bot's pages and links, in its own bot.sqlite: each link is written before it is given out, so it works after a
 // restart; it goes with its page, or with the bot. A link is to one folder: when that folder is deleted, or another
@@ -140,6 +141,7 @@ export interface PageListing {
   }[];
   secretLinks: { link: string; token: string; file: string; keys: string[]; for: string | null; created: number; expires: number; state: "open" | "used" | "expired" }[];
   desktopLinks: Awaited<ReturnType<BotDesktop["list"]>>;
+  loginLinks: Awaited<ReturnType<BotLogins["list"]>>;
 }
 
 export interface BotPagesOptions {
@@ -158,6 +160,8 @@ export interface BotPagesOptions {
   readonly clock?: () => number;
   /** For desktop pages: bot.json's vnc and screen, read at each use, and the screen leases (by default this process's). */
   readonly desktop?: { readonly vnc: () => VncSetting | undefined; readonly screen: () => Screen | undefined; readonly leases?: () => ScreenLeases };
+  /** For login pages: pi's models of this process, and how a login is tried. Without it, no login link can be made. */
+  readonly login?: Omit<LoginOptions, "sql" | "wake" | "print" | "clock">;
 }
 
 /** "made for X", for the notes and the page: who a link was made for, never who used it. */
@@ -173,6 +177,8 @@ export class BotPages {
   readonly dir: string;
   /** The bot's desktop pages. */
   readonly desktop: BotDesktop;
+  /** The bot's login pages. */
+  readonly login: BotLogins;
   readonly #sql: Sql;
   readonly #options: BotPagesOptions;
   readonly #clock: () => number;
@@ -187,10 +193,11 @@ export class BotPages {
   /** Test hooks: a crash between the steps of a password page's submission. */
   readonly crashTests = { beforeSecretWrite: () => {}, afterSecretWrite: () => {}, afterSecretUsed: () => {} };
 
-  private constructor(options: BotPagesOptions, desktop: BotDesktop) {
+  private constructor(options: BotPagesOptions, desktop: BotDesktop, login: BotLogins) {
     this.id = options.id;
     this.dir = options.dir;
     this.desktop = desktop;
+    this.login = login;
     this.#sql = options.sql;
     this.#options = options;
     this.#clock = options.clock ?? Date.now;
@@ -214,7 +221,15 @@ export class BotPages {
       print: options.print,
       ...(options.clock ? { clock: options.clock } : {}),
     });
-    return new BotPages(options, desktop);
+    const login = await BotLogins.open({
+      models: () => undefined,
+      ...options.login,
+      sql: options.sql,
+      wake: options.wake,
+      print: options.print,
+      ...(options.clock ? { clock: options.clock } : {}),
+    });
+    return new BotPages(options, desktop, login);
   }
 
   /** Run work alone for this page, in this process: the one gateway is the only process that serves and cleans. */
@@ -264,6 +279,7 @@ export class BotPages {
    */
   async resume(): Promise<void> {
     await this.desktop.resume();
+    await this.login.resume();
     for (const row of await this.#sql.all<SecretRow>("SELECT * FROM bot_secret_links WHERE state = 'writing'")) {
       // Only the claim's own line in the file shows that its write happened: a file with the keys may be an older one.
       if (await this.#written(row)) await this.#sql.run("UPDATE bot_secret_links SET state = 'used', used_at = ? WHERE id = ?", this.#clock(), row.id);
@@ -357,10 +373,12 @@ export class BotPages {
     return { id: secretId({ id }), token, expiresAt };
   }
 
-  /** Revoke a link by its ID (L3, S2, D1) or its token. The link ID, or undefined when there is no such link. */
+  /** Revoke a link by its ID (L3, S2, D1, G1) or its token. The link ID, or undefined when there is no such link. */
   async revoke(link: string): Promise<string | undefined> {
     const desktop = await this.desktop.revoke(link);
     if (desktop) return desktop;
+    const login = await this.login.revoke(link);
+    if (login) return login;
     const now = this.#clock();
     return this.#sql.transaction(async (tx) => {
       const number = /^([LS])(\d+)$/.exec(link);
@@ -419,6 +437,7 @@ export class BotPages {
         state: secretState(row, now),
       })),
       desktopLinks: await this.desktop.list(),
+      loginLinks: await this.login.list(),
     };
   }
 
@@ -544,7 +563,7 @@ export class BotPages {
    * Delete each page under pages/ (not pages/keep/) that nobody opened or linked and nothing changed for PAGE_DAYS days, with its
    * links; the records of a page whose folder is gone go by the same rule. Each page is looked at again right before it
    * is deleted, alone for that page until it is gone, so one opened, linked or changed meanwhile stays, and no link is
-   * made to it while it goes. Password and desktop links are deleted 7 days after they were made, once they ended. For tests, hooks.beforeDelete
+   * made to it while it goes. Password, desktop and login links are deleted 7 days after they were made, once they ended. For tests, hooks.beforeDelete
    * runs between the first look and the second, and hooks.beforeRemove after the second, before the folder is removed.
    * The names of the deleted pages.
    */
@@ -577,6 +596,7 @@ export class BotPages {
     }
     await this.#sql.run("DELETE FROM bot_secret_links WHERE created_at < ? AND state IN ('open', 'used', 'revoked') AND (state != 'used' OR woken_at IS NOT NULL)", this.#clock() - SECRET_KEEP_MS);
     await this.desktop.cleanup();
+    await this.login.cleanup();
     return deleted;
   }
 }

@@ -2,9 +2,9 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
-## Unreleased
+## 0.8.3 (2026-11-16)
 
-A person can sign the bot's computer in to a model from a link, on a phone or any computer, with no terminal. Pots runs on pi 1.5.2 (was 1.5.0), Effect 4.1.4 and ws 8.22.2. MCP servers work better: a script no longer fails because of one server's schema, and large or unusual server replies no longer hang or slow down.
+Sign in to a model from a chat app: the bot sends a login link, and the person signs the bot's computer in to a model provider from a phone or any computer, with no terminal (`pots page login`, or `pots login --link`). Pots runs on pi 1.5.2 (was 1.5.0), Effect 4.1.4 and ws 8.22.2; MCP servers work better: a script no longer fails because of one server's schema, and large or unusual server replies no longer hang or slow down.
 
 ### Added
 - **A login page: `pots page login`.** It gives the bot a one-time link to a page of Pots' own, where one person signs in to a model provider with a subscription (ChatGPT, Claude, GitHub Copilot, Grok, Kimi and more) or adds an API key (any of pi's providers, also TypeSafe's for the Jev judge). The login is pi's own, as in `pots login`, run in the gateway, and pi keeps it in `~/.pi/agent/auth.json`, for every bot and pi program of that user on the computer. The page shows what pi asks and shows: a choice, a field, a sign-in link, a device code with a copy button, and pi's progress, which it follows while pi waits for the person. Where pi offers a browser way and a device-code or copy-code way, the second works from another device, so the page puts it first and marks it; ways that need setting up on the computer itself (an AWS credential chain or profile, Google's Application Default Credentials or a service account file) are left out, and the page says the bot can set them up. For a sign-in whose browser ends on a `localhost` address, the page says to paste that address. `--provider` makes the link for one provider; `--text` is what the page says; `--for` names the person.

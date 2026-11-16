@@ -66,11 +66,13 @@ Link them relative to the page's link, not its folder on disk: from a page's `in
 
 ## Display pages
 
-A display page exists to get information across. For each piece of information, pick the form that a reader takes in fastest, the way a good report or a Claude artifact does: a number, a chart, a table, a timeline, a calculator. When a sentence says it faster, write the sentence. Add no decoration for its own sake.
+**The goal.** A display page exists to get information across better than plain text in a chat can. That is its only job. For each piece of information, ask what lets the reader take it in fastest. When a better form fits the information, use it: a chart for amounts, a timeline for dates, two options side by side, a table to sort and search, a calculator for "what if". When a sentence says it faster, write the sentence. Never put in a chart, a card or a widget for show: a special form that does not help the reader is noise. A page of clear text with one good chart is better than a page full of components.
+
+All that follows serves this goal: plain words make the text fast to read, the right form makes the shape of the information visible, and the layout puts more of it in view at once.
 
 **The text.** Write the page's text in plain words, in the style of ASD-STE100 Simplified Technical English applied to whatever language the reader uses: short sentences, one idea per sentence, common words, active voice. Use the reader's own words for things (the terms they already use), and do not invent new terms. Put the answer first: the title, one sentence with the conclusion, then two to four key numbers.
 
-**The form.** A guide, not a rule:
+**The form.** A guide, not a rule. Use a row only when the information has that shape:
 
 | Information | A good form | With the kit |
 |---|---|---|
@@ -88,7 +90,7 @@ A display page exists to get information across. For each piece of information, 
 | A choice between options | Side by side, the differences marked, then an answer form | `pots-cols`, an answer form |
 | Details that only some readers need | Folded away | `<details>` |
 
-**The layout.** Use the device. On a computer, put text next to its chart, cards in columns and calendars side by side; on a phone, one column. Text keeps a comfortable line length; `pots-wide` lets a block use the full width. The page itself never scrolls sideways; a wide table scrolls inside itself.
+**The layout.** Use the device. On a computer, put text next to its chart, cards in columns and calendars side by side; on a phone, one column. Text keeps a comfortable line length; `pots-wide` lets a block, also a table or a bar chart, use the full width. The page itself never scrolls sideways; a wide table scrolls inside itself.
 
 ### What the kit gives
 
@@ -98,8 +100,9 @@ A display page exists to get information across. For each piece of information, 
 - Colours with a meaning: `pots-good`, `pots-warn`, `pots-bad` on a note, a badge, a stat or a chart row; `pots-info` on a badge. Text: `pots-muted`, `pots-num` (a right-aligned number cell). `pots-hl` highlights anything your script points at.
 - In your own CSS, use the kit's colours so dark mode works: `--pots-bg`, `--pots-soft`, `--pots-text`, `--pots-muted`, `--pots-line`, `--pots-accent`, `--pots-accent-soft`, `--pots-good`, `--pots-warn`, `--pots-bad` (each also `-soft`), and the chart colours `--pots-c1` to `--pots-c7`.
 - With `pots-ui.js`:
-  - `<table data-pots-chart="bar|stack|line">` becomes a chart. Bar and stack: the first column names the rows, the second gives the values. Line: each row is a point on the x axis, each number column a line. `data-marks="380 You; 300 Her"` draws reference lines on bars, `data-max` or `data-min` fixes the scale, a `<caption>` becomes the title, and `data-pots-show="…"` names the button that shows the numbers. The table stays on the page, folded, so the numbers are one tap away.
+  - `<table data-pots-chart="bar|stack|line">` becomes a chart. Bar and stack: the first column names the rows, the second gives the values. Line: each row is a point on the x axis, each number column a line. `data-marks="380 You; 300 Her"` draws reference lines on bars, `data-max` or `data-min` fixes the scale (a line chart starts at zero unless its values sit far from zero; `data-min="0"` keeps zero), a `<caption>` becomes the title, and `data-pots-show="…"` names the button that shows the numbers. The table stays on the page, folded, so the numbers are one tap away.
   - `<div data-pots-tabs>` with `<section data-tab="Name">` children shows one at a time; `data-pots-tabs="phone"` does so only on a phone and shows all of them on a computer. `data-current` on a section opens it first; `box.potsSelect(i)` opens one from your script, and the box sends a `pots-tab` event.
+  - Every table goes in a `<div class="pots-scroll">`, so it can take the full width and a wide one scrolls inside it.
   - `<table data-pots-sort>`: a click on a column header sorts it. `<input type="search" data-pots-filter="#list">` hides the rows of that table, or its `[data-pots-item]` elements, that do not contain the text, and sends a `pots-filter` event.
 
 ### Your own components

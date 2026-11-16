@@ -209,7 +209,15 @@ describe("the pages skill", () => {
   const ui = readFileSync(join(repo, "kit", "pots-ui.js"), "utf8");
   const display = text.slice(text.indexOf("## Display pages"), text.indexOf("## Answer pages"));
 
-  it("asks for plain words in the reader's own terms", () => {
+  it("starts from the goal: get information across better than plain text, in a better form only when it fits", () => {
+    const goal = display.indexOf("**The goal.**");
+    expect(goal).toBeGreaterThan(0);
+    expect(display.indexOf("**The text.**")).toBeGreaterThan(goal);
+    expect(display).toContain("A display page exists to get information across better than plain text in a chat can.");
+    expect(display).toContain("Never put in a chart, a card or a widget for show");
+  });
+
+    it("asks for plain words in the reader's own terms", () => {
     expect(display).toContain(
       "Write the page's text in plain words, in the style of ASD-STE100 Simplified Technical English applied to whatever language the reader uses: short sentences, one idea per sentence, common words, active voice. Use the reader's own words for things (the terms they already use), and do not invent new terms.",
     );

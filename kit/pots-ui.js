@@ -12,6 +12,7 @@
  *   <table data-pots-sort>                     click a column header to sort.
  *   <input data-pots-filter="#list">           hides rows, or [data-pots-item] elements, that do not contain the text.
  *   <nav class="pots-toc">                     marks the section on screen.
+ *   every <table>                              goes in a <div class="pots-scroll">, so a wide one scrolls inside it.
  * It sets only textContent and CSS custom properties, never HTML from text, so it works under the private-page CSP.
  */
 (function () {
@@ -105,7 +106,7 @@
       cls: r.className,
       cells: [...r.cells].slice(1).map((c) => ({ text: c.textContent.trim(), v: num(c.textContent) })),
     }));
-    const fig = el("figure", "pots-chart pots-" + type);
+    const fig = el("figure", "pots-chart pots-" + type + (table.classList.contains("pots-wide") ? " pots-wide" : ""));
     if (table.caption) fig.append(el("figcaption", null, table.caption.textContent.trim()));
     table.before(fig);
     if (type === "stack") stack(fig, data);
@@ -169,7 +170,7 @@
       s.style.setProperty("--v", pct(d.cells[0].v, total));
       barEl.append(s);
       const li = el("li");
-      li.append(el("i", "pots-s" + ((i % 7) + 1)), el("span", null, d.label), el("span", "pots-v", d.cells[0].text + "  " + Math.round((d.cells[0].v / total) * 100) + "%"));
+      li.append(el("i", "pots-s" + ((i % 7) + 1)), el("span", null, d.label), el("span", "pots-v", d.cells[0].text + " · " + Math.round((d.cells[0].v / total) * 100) + "%"));
       legend.append(li);
     });
     fig.append(barEl, legend);
@@ -181,8 +182,10 @@
     const series = (data[0] ? data[0].cells : []).map((_, s) => ({ name: head[s + 1] || "", pts: data.map((d) => (d.cells[s] ? d.cells[s].v : NaN)) }));
     const all = series.flatMap((s) => s.pts).filter((v) => !isNaN(v));
     if (!all.length) return;
-    let lo = table.hasAttribute("data-min") ? parseFloat(table.getAttribute("data-min")) : Math.min(0, ...all);
     let hi = Math.max(...all);
+    const min = Math.min(...all);
+    // From zero, unless the values sit far from it; then from just below the lowest, so the change shows.
+    let lo = table.hasAttribute("data-min") ? parseFloat(table.getAttribute("data-min")) : min > 0 && hi - min < min ? min - (hi - min) * 0.25 : Math.min(0, min);
     const step = niceStep((hi - lo) / 4 || 1);
     lo = Math.floor(lo / step) * step;
     hi = Math.ceil(hi / step) * step;
@@ -192,19 +195,21 @@
       if (!W || W === last) return;
       last = W;
       const H = Math.max(180, Math.min(300, Math.round(W * 0.45)));
-      const L = 44, R = 12, Tp = 10, B = 28;
+      const L = 8 + 7 * Math.max(fmt(lo).length, fmt(hi).length), R = 12, Tp = 10, B = 28;
       const x = (i) => L + (data.length < 2 ? (W - L - R) / 2 : (i * (W - L - R)) / (data.length - 1));
       const y = (v) => Tp + (H - Tp - B) * (1 - (v - lo) / (hi - lo || 1));
       const s = svg("svg", { viewBox: "0 0 " + W + " " + H, width: W, height: H, role: "img" });
       s.setAttribute("aria-label", (fig.querySelector("figcaption") || {}).textContent || "chart");
       for (let v = lo; v <= hi + step / 2; v += step) {
-        s.append(svg("line", { class: "pots-axis", x1: L, x2: W - R, y1: y(v), y2: y(v) }));
-        s.append(svg("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end" }, fmt(v)));
+        s.append(svg("line", { class: v === lo ? "pots-axis pots-base" : "pots-axis", x1: L, x2: W - R, y1: y(v), y2: y(v) }));
+        s.append(svg("text", { x: L - 8, y: y(v) + 4, "text-anchor": "end" }, fmt(v)));
       }
       const every = Math.ceil(data.length / Math.max(2, Math.floor((W - L - R) / 64)));
       data.forEach((d, i) => {
         const end = i === data.length - 1 && data.length > 1;
-        if (i % every === 0 || end) s.append(svg("text", { x: x(i), y: H - 8, "text-anchor": end ? "end" : "middle" }, d.label));
+        // Every few labels, and the last one; a label too close to the last one gives way to it.
+        if (end || (i % every === 0 && data.length - 1 - i >= every * 0.6))
+          s.append(svg("text", { x: x(i), y: H - 6, "text-anchor": end ? "end" : i === 0 ? "start" : "middle" }, d.label));
       });
       series.forEach((se, k) => {
         let p = "";
@@ -213,16 +218,17 @@
           p += (p ? "L" : "M") + x(i).toFixed(1) + " " + y(v).toFixed(1);
         });
         s.append(svg("path", { d: p, class: "pots-s" + ((k % 7) + 1) }));
-        se.pts.forEach((v, i) => {
-          if (!isNaN(v)) s.append(svg("circle", { cx: x(i), cy: y(v), r: 3, class: "pots-s" + ((k % 7) + 1) }));
-        });
+        if (data.length <= 24)
+          se.pts.forEach((v, i) => {
+            if (!isNaN(v)) s.append(svg("circle", { cx: x(i), cy: y(v), r: 3.5, class: "pots-s" + ((k % 7) + 1) }));
+          });
       });
       box.replaceChildren(s);
       if (series.length > 1) {
         const legend = el("ul", "pots-legend");
         series.forEach((se, k) => {
           const li = el("li");
-          li.append(el("i", "pots-s" + ((k % 7) + 1)), el("span", null, se.name), el("span"));
+          li.append(el("i", "pots-s" + ((k % 7) + 1)), el("span", null, se.name));
           legend.append(li);
         });
         box.append(legend);
@@ -319,8 +325,17 @@
     update();
   }
 
+  /* ---- Tables: a box that scrolls a wide table, so the table itself can take the full width ---- */
+  function scroller(table) {
+    if (table.parentElement.classList.contains("pots-scroll")) return;
+    const box = el("div", "pots-scroll" + (table.classList.contains("pots-wide") ? " pots-wide" : ""));
+    table.before(box);
+    box.append(table);
+  }
+
   function start() {
     document.querySelectorAll("table[data-pots-chart]").forEach(chart);
+    document.querySelectorAll("table").forEach(scroller);
     document.querySelectorAll("table[data-pots-sort]").forEach(sortable);
     document.querySelectorAll("[data-pots-tabs]").forEach(tabs);
     document.querySelectorAll("input[data-pots-filter]").forEach(filter);

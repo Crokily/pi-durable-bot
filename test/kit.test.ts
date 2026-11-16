@@ -237,9 +237,9 @@ describe("the page kit", () => {
   });
 
   it("styles the parts that pots-ui.js draws, and lays a choice's explanation under its label", () => {
-    for (const name of ["pots-tabbar", "pots-off", "pots-chart", "pots-hbars", "pots-fill", "pots-mark", "pots-stackbar", "pots-legend", "pots-data", "pots-sort", "pots-hide", "pots-toc", "pots-cols", "pots-stats", "pots-wide"])
+    for (const name of ["pots-tabbar", "pots-off", "pots-chart", "pots-hbars", "pots-fill", "pots-mark", "pots-stackbar", "pots-legend", "pots-data", "pots-sort", "pots-hide", "pots-toc", "pots-cols", "pots-stats", "pots-wide", "pots-scroll"])
       expect(css, name).toContain(`.${name}`);
-    for (const name of ["pots-tabbar", "pots-off", "pots-chart", "pots-hbars", "pots-fill", "pots-mark", "pots-stackbar", "pots-legend", "pots-data", "pots-sort", "pots-hide"]) expect(ui, name).toContain(name);
+    for (const name of ["pots-tabbar", "pots-off", "pots-chart", "pots-hbars", "pots-fill", "pots-mark", "pots-stackbar", "pots-legend", "pots-data", "pots-sort", "pots-hide", "pots-scroll"]) expect(ui, name).toContain(name);
     // The first stylesheet made a choice a flex row, which squeezed a title and its explanation into columns.
     expect(css).toMatch(/label:has\(> input\[type="radio"\]\)[^{]*\{[^}]*display: block;/);
     expect(css).toMatch(/> :is\(small, \.pots-muted\) \{\s*display: block;/);

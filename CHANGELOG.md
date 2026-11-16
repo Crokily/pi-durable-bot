@@ -4,7 +4,15 @@ What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm inst
 
 ## Unreleased
 
+Pots runs on pi 1.5.2 (was 1.5.0), Effect 4.1.4 and ws 8.22.2. MCP servers work better: a script no longer fails because of one server's schema, and large or unusual server replies no longer hang or slow down.
+
 ### Changed
+- **pi 1.5.2.** What the bot gains:
+  - **Code mode and MCP tools.** Every code mode script failed with `URI malformed` when any MCP tool had a `$ref` with a bad percent escape in its schema, even a script that did not call that tool; now that parameter shows as `unknown`. `console.*` output shows `NaN` and `Infinity` instead of `null`.
+  - **MCP servers.** Large stdio replies are no longer slow, a Streamable HTTP reply with CR-only line endings no longer fails, a reply over the size limit is rejected and its connection closed, and a stdio server whose main process had ended no longer stays running after it disconnects. `pots mcp list` sends the pi login's token to servers that sign in with one (`"auth": { "provider": … }`, such as Radius), instead of saying they need a sign-in; when that login is missing, `pots mcp` tells you to sign in with `pots login`.
+  - **Models.** Claude Fable 5.2 (`claude-fable-5-2`) is in the `anthropic` provider. A stream cut short after the reply had begun is tried again. Claude Sonnet 5 no longer gets a temperature it rejects. Anthropic and Bedrock no longer send tools as strict again on every turn after Claude rejected that, which cost a failed request each turn. An OpenAI-compatible server such as vLLM 0.20+ no longer gets `"tools": []` (a 400 error) when the bot has no tools for a request. A connection error says its cause, such as a refused connection or a bad certificate. pi's default model for each provider is newer (for `anthropic`, Claude Opus 5.5), which `pots login` and `pots init` recommend after a sign-in.
+  - **Agent runs.** A task no longer stays waiting when the last of its parallel tool calls ends at the wrong moment.
+- **Effect 4.1.4 and ws 8.22.2**, patch releases. ws now decodes a user name and password in a WebSocket URL.
 - **The bot watches a coding agent's command line as it would a child.** When it hands work to Claude Code, Codex or a similar command line running in the background, its prompt now says that such a run shows nothing while it works and says nothing when it ends: the bot has the command wake it at the end (`pots wake --from`) and sets itself wakes to look at its output, report progress, and notice a run that died.
 
 ## 0.8.2 (2026-11-16)

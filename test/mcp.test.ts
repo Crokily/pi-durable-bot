@@ -1,4 +1,6 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
@@ -119,6 +121,31 @@ describe("code mode and MCP servers", { timeout: 90_000 }, () => {
     expect(again.status).toBe(1);
     expect(again.stderr).toBe(`No global MCP server named "shouter" in ${file}.\n`);
     expect((await mcp("list")).stdout).toBe(`No MCP servers configured. Add them to ${file} or .pi/mcp.json.\n`);
+  });
+
+  it("names pots login, not pi's commands, for a server that signs in with a pi login", async () => {
+    model = await startFakeModel(script);
+    gateway = new TestGateway({ model });
+    // A server that wants a sign-in, as one does before the pi login exists.
+    const server = createServer((_request, response) => response.writeHead(401).end());
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/mcp`;
+      mkdirSync(join(gateway.home, "pi"), { recursive: true });
+      writeFileSync(join(gateway.home, "pi", "mcp.json"), JSON.stringify({ mcpServers: { radius: { url, auth: { provider: "example" } } } }));
+
+      const listed = await mcp("list");
+      expect(listed.stdout).toBe(`radius: needs sign-in (codemode, global)\n  ${url}\n  sign in with: pots login (provider example)\n`);
+      const login = await mcp("login", "radius");
+      expect(login.status).toBe(1);
+      expect(login.stderr).toBe('MCP server "radius" uses the credentials of provider "example". Sign in to it with "pots login" (provider example).\n');
+      const logout = await mcp("logout", "radius");
+      expect(logout.status).toBe(1);
+      expect(logout.stderr).toBe('MCP server "radius" uses the credentials of provider "example". pots mcp logout does not sign out of it.\n');
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 
   it("reads the .pi/mcp.json of a bot's workspace in that folder, as the bot does, and asks pi's trust elsewhere", async () => {

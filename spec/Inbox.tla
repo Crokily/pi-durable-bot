@@ -16,6 +16,11 @@
 (* the time between Flush and RecordWake. The code decides the groups of a *)
 (* place one after the other; the model lets them overlap, which includes  *)
 (* that order.                                                             *)
+(*                                                                         *)
+(* Not modelled: what an event says. Apply writes every event; the log     *)
+(* code (src/gateway/log.ts) also drops a message it already has and an    *)
+(* edit older than the edit it has (edited_at), marking the inbox row      *)
+(* done without a wake. The model does not check that ordering.            *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets
 

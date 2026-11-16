@@ -725,6 +725,142 @@ describe("Teams: backfill", () => {
     expect(fake.requests).toEqual([]);
   });
 
+  it("reads every page of a thread's replies, as Graph gives them in no order, and the roots after them", async () => {
+    const since = 1731800000000;
+    const root = since - 9000;
+    const { channel, fake, events, sink } = await connect({ state, lastAlive: since, places: [`teams:#${CHANNEL}`] });
+    const reply = (id: number, fields: Record<string, unknown> = {}) => graphMessage(id, { replyToId: String(root), ...fields });
+    const unchanged = (from: number) => Array.from({ length: 50 }, (_each, index) => reply(from + index));
+    // The expanded replies and the next page of them changed nothing; the page after has an old reply edited while Pots
+    // was down. The thread is on the first page of roots for it, so the next page of roots is read too, and its page
+    // after, which has nothing changed, ends the reading.
+    fake.route("GET", "/graph/v1.0/teams/team-aad-1/channels/[^/]+/messages", (request) => {
+      const page = request.query.get("page");
+      if (page === "2") return { value: [graphMessage(since + 50, { replies: [] })], "@odata.nextLink": `${fake.graph}/teams/team-aad-1/channels/x/messages?page=3` };
+      if (page === "3") return { value: [graphMessage(since - 20_000, { replies: [] })], "@odata.nextLink": `${fake.graph}/teams/team-aad-1/channels/x/messages?page=4` };
+      return {
+        value: [graphMessage(root, { replies: unchanged(root + 100), "replies@odata.nextLink": `${fake.graph}/teams/team-aad-1/channels/x/messages/${root}/replies?page=2` })],
+        "@odata.nextLink": `${fake.graph}/teams/team-aad-1/channels/x/messages?page=2`,
+      };
+    });
+    fake.route("GET", `/graph/v1.0/teams/team-aad-1/channels/[^/]+/messages/${root}/replies`, (request) =>
+      request.query.get("page") === "2"
+        ? { value: unchanged(root + 200), "@odata.nextLink": `${fake.graph}/teams/team-aad-1/channels/x/messages/${root}/replies?page=3` }
+        : { value: [reply(root + 300, { lastModifiedDateTime: at(since + 30), lastEditedDateTime: at(since + 30), body: { contentType: "html", content: "<p>changed</p>" } })] },
+    );
+    await channel.backfill(sink);
+    expect(fake.requested("GET", `/graph/v1.0/teams/team-aad-1/channels/[^/]+/messages/${root}/replies`).map((request) => request.query.get("page"))).toEqual(["2", "3"]);
+    expect(fake.requested("GET", "/graph/v1.0/teams/team-aad-1/channels/[^/]+/messages").map((request) => request.query.get("page"))).toEqual([null, "2", "3"]);
+    const happenings = await translated(channel, events);
+    expect(happenings.map((h) => [h.kind, h.message, h.at, h.text])).toEqual([
+      ["message", `teams:#${CHANNEL}/${root}/${root + 300}`, root + 300, "changed"],
+      ["edit", `teams:#${CHANNEL}/${root}/${root + 300}`, since + 30, "changed"],
+      ["message", `teams:#${CHANNEL}/${since + 50}`, since + 50, `message ${since + 50}`],
+    ]);
+  });
+
+  it("keeps where a backfill that failed began, which live messages do not move, and the next start reads from there", async () => {
+    const before = 1731800000000;
+    const { channel, fake, sink, sockets, events, dir } = await connect({ state, lastAlive: before - 60_000, places: [`teams:#${CHAT}`], newest: { [`teams:#${CHAT}`]: `teams:#${CHAT}/${before}` } });
+    const kept = () => JSON.parse(readFileSync(join(dir, "channels", "teams.json"), "utf8")).recovering;
+    // While Pots was down, two messages came; Graph gives their first page, then refuses the next.
+    let refuse = true;
+    fake.route("GET", "/graph/v1.0/chats/[^/]+/messages", (request) =>
+      request.query.get("page") === "1"
+        ? refuse
+          ? new Reply(403, { error: { code: "Forbidden", message: "no" } })
+          : { value: [] }
+        : { value: [graphMessage(before + 20), graphMessage(before + 10)], "@odata.nextLink": `${fake.graph}/chats/x/messages?page=1` },
+    );
+    await channel.backfill(sink);
+    expect(events).toEqual([]);
+    expect(kept()).toEqual({ [CHAT]: before });
+
+    // A live message comes after: the log's newest message is now past the two that were not read.
+    await sockets.send(activity({ id: String(before + 100), timestamp: at(before + 100) }));
+    expect(events.map((event) => event.id)).toEqual([`message:${CHAT}/${before + 100}`]);
+    expect(kept()).toEqual({ [CHAT]: before });
+    await channel.stop();
+
+    // The next start, with the live message as the newest logged one: it reads from where the failed backfill began.
+    refuse = false;
+    const again = new TeamsChannel("teams", { secrets: join(dir, "teams.env"), mode: "socket", playground: false }, { botDir: dir, botName: "Pots", http: fakeHttp().http, log: () => {} }, {
+      serviceUrl: fake.serviceUrl,
+      graph: fake.graph,
+      token: fakeToken,
+      socket: fakeSockets().make,
+    });
+    const later = memorySink({ lastAlive: before + 100, places: [`teams:#${CHAT}`], newest: { [`teams:#${CHAT}`]: `teams:#${CHAT}/${before + 100}` } });
+    cleanup.push(() => again.stop());
+    await again.start(later.sink);
+    await again.backfill(later.sink);
+    const filters = fake.requested("GET", "/graph/v1.0/chats/[^/]+/messages").flatMap((request) => request.query.get("$filter") ?? []);
+    expect(filters).toEqual([`lastModifiedDateTime gt ${at(before)}`, `lastModifiedDateTime gt ${at(before)}`]);
+    expect(later.events.map((event) => event.raw.message.id)).toEqual([String(before + 10), String(before + 20)]);
+    // Read whole: the next backfill starts from the log again.
+    expect(kept()).toEqual({});
+  });
+
+  it("requests that wait for a token wait for one getting, and what it gives after stop goes nowhere", async () => {
+    const gettings: { scope: string; resolve: (token: string) => void; reject: (error: Error) => void }[] = [];
+    const token = (scope: string | string[]) =>
+      new Promise<string>((resolve, reject) => {
+        gettings.push({ scope: String(scope), resolve: () => resolve(fakeToken(scope)), reject });
+      });
+    const { channel, fake } = await connect({ endpoints: { token, timeouts: { request: 30, retry: 400 } } });
+    fake.route("POST", "/teams/v3/conversations/.*/activities", () => ({ id: "1731800000200" }));
+    fake.route("GET", "/graph/v1.0/me", () => ({}));
+    const unobserved: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unobserved.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    cleanup.push(async () => {
+      process.off("unhandledRejection", onUnhandled);
+    });
+    const already = gettings.length;
+    // Two sends and a Graph call, each tried again after each try's time runs out.
+    const tries = [channel.send(`teams:#${CHAT}`, "one", "s1"), channel.send(`teams:#${CHAT}`, "two", "s2"), channel.call("graph:GET /me", {})];
+    const ended = await Promise.allSettled(tries);
+    expect(ended.map((each) => each.status === "rejected" && /did not answer: .*gave up/.test(String(each.reason)))).toEqual([true, true, true]);
+    const started = gettings.slice(already);
+    expect(started.map((each) => each.scope.includes("graph") ? "graph" : "bot").sort()).toEqual(["bot", "graph"]);
+    await channel.stop();
+    // The SDK takes no signal: the getting ends after stop. A token sends nothing, and an error is taken.
+    started[0]!.resolve("late");
+    started[1]!.reject(new Error("login refused"));
+    await sleep(100);
+    expect(fake.requests).toEqual([]);
+    expect(gettings.length).toBe(already + 2);
+    expect(unobserved).toEqual([]);
+  });
+
+  it("a request that is stopped before it begins starts no token getting, and leaves no error untaken", async () => {
+    let gettings = 0;
+    const { channel, fake } = await connect({
+      endpoints: {
+        token: (scope) => {
+          gettings++;
+          return fakeToken(scope);
+        },
+      },
+    });
+    const unobserved: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unobserved.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    cleanup.push(async () => {
+      process.off("unhandledRejection", onUnhandled);
+    });
+    const file = { url: `${fake.serviceUrl}/v3/attachments/a1/views/original` };
+    const already = gettings;
+    await expect(channel.fetchFile(file, AbortSignal.abort(new Error("the reader went away")))).rejects.toThrow(/the reader went away/);
+    expect(gettings).toBe(already);
+    await channel.stop();
+    await expect(channel.fetchFile(file, AbortSignal.timeout(5000))).rejects.toThrow(/stopped/);
+    await sleep(100);
+    expect(gettings).toBe(already);
+    expect(unobserved).toEqual([]);
+    expect(fake.requests).toEqual([]);
+  });
+
   it("keeps what it learned for the next start, readable only by this user", async () => {
     const { sockets, dir } = await connect();
     await sockets.send(inChannel({}));

@@ -94,6 +94,11 @@ interface State {
   people: Record<string, { id?: string; name?: string }>;
   /** The DM conversation with each person, by Entra object ID or Teams ID. */
   dms: Record<string, string>;
+  /**
+   * By conversation: where a backfill began that has not ended well. Live messages do not move it; the next backfill
+   * starts from it at the latest, and only a whole reading of the place removes it.
+   */
+  recovering: Record<string, number>;
 }
 
 /** Where a message is: its conversation, and the root of its thread in a channel. */
@@ -236,6 +241,8 @@ export class TeamsChannel implements ChannelAdapter {
   readonly #droppedAt = new Map<string, number>();
   /** Where the backfill starts in each known place, by conversation: read before the channel connects. */
   #starts = new Map<string, number>();
+  /** The token being got, for each kind, and when it began. */
+  readonly #tokens = new Map<"bot" | "graph", { work: Promise<string | undefined>; started: number }>();
 
   constructor(id: string, options: TeamsOptions, env: ChannelEnv, endpoints: TeamsEndpoints = {}) {
     this.id = id;
@@ -308,7 +315,7 @@ export class TeamsChannel implements ChannelAdapter {
         const since = (this.#droppedAt.get(geo) ?? Date.now()) - 60_000;
         this.#droppedAt.delete(geo);
         sink.log("socket reconnected", { region: geo });
-        this.#refilling = this.#track(this.#refilling.then(() => this.#backfill(sink, () => since)).catch((error) => sink.log("backfill failed", { error: String(error) })));
+        this.#recover(sink, () => since).catch((error) => sink.log("backfill failed", { error: String(error) }));
       });
       try {
         await app.start();
@@ -350,6 +357,7 @@ export class TeamsChannel implements ChannelAdapter {
     }
     const app = this.#app;
     this.#app = undefined;
+    this.#tokens.clear();
     await app?.stop().catch(() => {});
     await Promise.allSettled([...this.#backfills]);
     await this.#storing.catch(() => {});
@@ -830,24 +838,39 @@ export class TeamsChannel implements ChannelAdapter {
     const lastAlive = sink.lastAlive();
     if (lastAlive === undefined || this.#options.playground) return;
     const starts = this.#starts;
-    await this.#track(this.#backfill(sink, (conversation) => starts.get(conversation) ?? lastAlive));
+    await this.#recover(sink, (conversation) => starts.get(conversation) ?? lastAlive);
+  }
+
+  /** A backfill after the ones under way: one at a time, so each place's recovery start is kept by one of them. */
+  #recover(sink: ChannelSink, startOf: (conversation: string) => number): Promise<void> {
+    const run = this.#refilling.then(() => this.#backfill(sink, startOf));
+    this.#refilling = run.catch(() => {});
+    return this.#track(run);
   }
 
   /**
-   * Each place is read whole before anything of it is stored: a place whose reading fails stores nothing, so its newest
-   * logged message, where the next backfill starts, does not pass what was not read. stop ends it.
+   * Each place is read whole before anything of it is stored. Before any place is read, the start of each is kept in
+   * the state file (or an earlier start kept there, by a backfill that did not end well), and only a whole reading of
+   * the place removes it: live messages that came meanwhile do not move where the next backfill starts. stop ends it.
    */
   async #backfill(sink: ChannelSink, startOf: (conversation: string) => number): Promise<void> {
     const stopping = this.#stopping.signal;
-    let added = 0;
+    const recovering = this.#state.recovering;
+    const places: { place: string; conversation: string; kind: string; since: number }[] = [];
     for (const place of await sink.places()) {
-      if (stopping.aborted) return;
       const parsed = this.#tryParse(place);
       if (!parsed || !("conversation" in parsed)) continue;
       const conversation = parsed.conversation;
       const kind = placeKind(conversation, this.#state.conversations[conversation]?.type);
       if (kind === "dm") continue;
-      const since = startOf(conversation);
+      const since = Math.min(startOf(conversation), recovering[conversation] ?? Infinity);
+      recovering[conversation] = since;
+      places.push({ place, conversation, kind, since });
+    }
+    if (places.length) this.#save();
+    let added = 0;
+    for (const { place, conversation, kind, since } of places) {
+      if (stopping.aborted) return;
       try {
         const messages = kind === "channel" ? await this.#channelHistory(conversation, since) : await this.#chatHistory(conversation, since);
         messages.sort((a, b) => (Date.parse(a.createdDateTime ?? "") || 0) - (Date.parse(b.createdDateTime ?? "") || 0));
@@ -856,6 +879,9 @@ export class TeamsChannel implements ChannelAdapter {
           await sink.receive(`history:${conversation}/${message.id}:${message.lastModifiedDateTime ?? ""}`, { source: "history", conversation, message, since } satisfies Raw);
           added++;
         }
+        if (stopping.aborted) return;
+        delete recovering[conversation];
+        this.#save();
       } catch (error) {
         if (stopping.aborted) return;
         sink.log("backfill skipped a place; it is read again from the same start next time", { place, error: errorText(error) });
@@ -867,7 +893,8 @@ export class TeamsChannel implements ChannelAdapter {
   /**
    * A channel's messages changed after since, from Graph: root messages with their replies. Graph gives the roots
    * newest first by the last change in the whole thread, its replies included, and filters nothing by time: read pages
-   * until one has no thread changed after since.
+   * until one has no thread changed after since. Graph gives no such order for a thread's replies, so every page of the
+   * replies of each root read is read.
    */
   async #channelHistory(channel: string, since: number): Promise<GraphMessage[]> {
     const team = await this.#teamGroup(channel);
@@ -877,14 +904,9 @@ export class TeamsChannel implements ChannelAdapter {
       let changed = false;
       for (const root of page) {
         const replies = [...(root.replies ?? [])];
-        // The replies Graph did not expand (all of them, if it expanded none): newest first, until a page has nothing newer.
+        // The replies Graph did not expand (all of them, if it expanded none), to the end.
         const rest = root.replies === undefined ? `${this.#graph}${base}/${encodeURIComponent(root.id)}/replies?$top=50` : root["replies@odata.nextLink"];
-        if (rest && (root.replies === undefined || replies.some((reply) => changedAfter(reply, since)))) {
-          for await (const more of this.#pages(rest)) {
-            replies.push(...more);
-            if (!more.some((reply) => changedAfter(reply, since))) break;
-          }
-        }
+        if (rest) for await (const more of this.#pages(rest)) replies.push(...more);
         const newer = replies.filter((reply) => changedAfter(reply, since));
         if (changedAfter(root, since)) found.push(withoutReplies(root));
         found.push(...newer.map((reply) => ({ ...withoutReplies(reply), replyToId: reply.replyToId ?? root.id })));
@@ -1057,7 +1079,7 @@ export class TeamsChannel implements ChannelAdapter {
     if (url.protocol === "https:" && isSharePoint(url.hostname) && url.searchParams.has("tempauth")) {
       // A DM file's own download link.
     } else if (this.#connectorOrigins().has(connectorOrigin(url) ?? "")) {
-      const token = await abortable(this.#token("bot"), AbortSignal.any([signal, this.#stopping.signal, AbortSignal.timeout(this.#requestTimeout)]));
+      const token = await abortable(() => this.#token("bot"), AbortSignal.any([signal, this.#stopping.signal, AbortSignal.timeout(this.#requestTimeout)]));
       headers = token ? { authorization: `Bearer ${token}` } : {};
     } else if (isSharePoint(url.hostname)) {
       throw new Error("Teams gives files in channels and group chats as SharePoint links; reading them needs Graph file permissions (Files.Read.All or Sites.Read.All) that an admin grants. Ask the person to send the file in a DM, or to share it with you another way.");
@@ -1107,13 +1129,27 @@ export class TeamsChannel implements ChannelAdapter {
     return this.#endpoints.timeouts?.request ?? REQUEST_TIMEOUT_MS;
   }
 
-  /** The bot's token for Teams, or the app's token for Graph; never one in playground mode. */
-  async #token(kind: "bot" | "graph"): Promise<string | undefined> {
+  /**
+   * The bot's token for Teams, or the app's token for Graph; never one in playground mode. The SDK and MSAL take no
+   * signal, so a getting that a request stops waiting for goes on: the requests of the next minute (as long as a
+   * request is tried) wait for the same one rather than begin more, and what it gives after stop goes nowhere.
+   */
+  #token(kind: "bot" | "graph"): Promise<string | undefined> {
     const app = this.#app;
     if (!app) throw new TeamsError(`channel ${this.id} is not started`);
-    if (this.#options.playground) return undefined;
-    const token = kind === "bot" ? await app.tokenProvider.getAppToken() : await app.tokenProvider.getAppToken(app.cloud.graphScope, this.#tenantId);
-    return token ? String(token) : undefined;
+    if (this.#options.playground) return Promise.resolve(undefined);
+    const known = this.#tokens.get(kind);
+    if (known && Date.now() - known.started < (this.#endpoints.timeouts?.retry ?? RETRY_MS) + this.#requestTimeout) return known.work;
+    const provider = app.tokenProvider;
+    const work = (kind === "bot" ? provider.getAppToken() : provider.getAppToken(app.cloud.graphScope, this.#tenantId)).then((token) => (token ? String(token) : undefined));
+    const getting = { work, started: Date.now() };
+    this.#tokens.set(kind, getting);
+    void work
+      .finally(() => {
+        if (this.#tokens.get(kind) === getting) this.#tokens.delete(kind);
+      })
+      .catch(() => {});
+    return work;
   }
 
   /**
@@ -1132,7 +1168,7 @@ export class TeamsChannel implements ChannelAdapter {
       let wait: number;
       let failure: string;
       try {
-        const token = await abortable(this.#token(kind), signal);
+        const token = await abortable(() => this.#token(kind), signal);
         const response = await fetch(url, {
           method,
           headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(body !== undefined ? { "content-type": "application/json" } : {}), accept: "application/json" },
@@ -1317,10 +1353,14 @@ function connectorOrigin(url: URL): string | undefined {
   return undefined;
 }
 
-/** The promise, or the signal's reason once it aborts: for work that takes no signal, such as getting a token. */
-function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+/**
+ * What start gives, or the signal's reason once it aborts: for work that takes no signal, such as getting a token. It
+ * does not start once the signal has aborted, and an end of the work that comes after is taken and dropped.
+ */
+function abortable<T>(start: () => Promise<T>, signal: AbortSignal): Promise<T> {
   if (signal.aborted) return Promise.reject(signal.reason);
   return new Promise<T>((resolve, reject) => {
+    const work = start();
     const abort = () => reject(signal.reason);
     signal.addEventListener("abort", abort, { once: true });
     work.then(
@@ -1373,9 +1413,9 @@ function errorText(error: unknown): string {
 function readState(file: string): State {
   try {
     const value = JSON.parse(readFileSync(file, "utf8")) as Partial<State>;
-    return { conversations: value.conversations ?? {}, people: value.people ?? {}, dms: value.dms ?? {} };
+    return { conversations: value.conversations ?? {}, people: value.people ?? {}, dms: value.dms ?? {}, recovering: value.recovering ?? {} };
   } catch {
-    return { conversations: {}, people: {}, dms: {} };
+    return { conversations: {}, people: {}, dms: {}, recovering: {} };
   }
 }
 

@@ -2,6 +2,11 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
+## Unreleased
+
+### Changed
+- **The bot hands most of its work to children.** Its prompt said only that longer work goes to children, so the main agent, which thinks less deeply, still did much of the work and answered questions that needed thought itself. Now it hands children most of the work, including research, checks and questions that need careful thought (advice, analysis, plans, decisions), and does itself only what is quick and certain.
+
 ## 0.8.4 (2026-11-16)
 
 A Microsoft Teams channel, as a preview: a bot sets up its own Teams app with Microsoft's Teams CLI while the person signs in on their phone, and then reads and answers in channels, threads, group chats and DMs, with mentions, reactions, Adaptive Card buttons, files in DMs and backfill from Microsoft Graph. It is tested with fakes of Microsoft's services and with Microsoft 365 Agents Playground, not yet in a real Microsoft 365 organisation; what has not been tried is listed below. ws 8.23.0 fixes a memory exhaustion attack over WebSocket.

@@ -1,0 +1,498 @@
+/*
+ * The login page of Pots: a person signs in to a model provider for the bot's computer. Phone first, also for
+ * computers. Pots' own page; bots do not use this file.
+ */
+
+:root {
+  color-scheme: light dark;
+  --bg: #f6f6f3;
+  --card: #ffffff;
+  --text: #1d1d1f;
+  --muted: #5f6368;
+  --line: #dcdcd7;
+  --go: #1f9d6b;
+  --bad: #c0392b;
+  --sheet: #f4f4f2;
+  --tile: #ffffff;
+  --soft: #e6e6e3;
+  --warn-bg: #fff6e0;
+  --warn-fg: #6b4a00;
+  --font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans CJK SC", "Segoe UI", system-ui, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141516;
+    --card: #1f2022;
+    --text: #ececea;
+    --muted: #a2a6ab;
+    --line: #34373a;
+    --bad: #ff8a7e;
+    --sheet: #1f2022;
+    --tile: #2c2d30;
+    --soft: #2c2d30;
+    --warn-bg: #3a2f12;
+    --warn-fg: #f3d58a;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  font: 15px/1.4 var(--font);
+  color: var(--text);
+  background: var(--bg);
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ---- Start and end pages ---- */
+
+.page {
+  max-width: 520px;
+  min-height: 100%;
+  margin: 0 auto;
+  padding: calc(40px + env(safe-area-inset-top)) 22px calc(22px + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+}
+
+.who {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.ava {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  flex: none;
+  background: linear-gradient(135deg, #4fb3a5, #1f7a70);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+}
+
+.ask {
+  margin: 18px 0 14px;
+  background: var(--card);
+  border-radius: 18px;
+  padding: 16px;
+  font-size: 19px;
+  line-height: 1.45;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+/* Long text, or text of several lines, in the regular weight: easier to read than a big bold block. */
+.ask.long {
+  font-size: 16.5px;
+  line-height: 1.6;
+  font-weight: 450;
+  padding: 16px 18px;
+}
+
+/* The bot's words: a paragraph per line, and a numbered or bulleted line hangs under its mark. */
+.words p {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.words p + p {
+  margin-top: 0.4em;
+}
+
+.words .gap {
+  height: 0.2em;
+}
+
+.words .step {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 0.45em;
+}
+
+.words .n {
+  min-width: 1.1em;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.ask .n {
+  color: var(--go);
+}
+
+.meta {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.fold {
+  font-size: 13px;
+  margin-top: 12px;
+  color: var(--muted);
+}
+
+.fold summary {
+  cursor: pointer;
+}
+
+.fold p {
+  margin: 6px 0 0;
+  line-height: 1.5;
+}
+
+.msg {
+  color: var(--bad);
+  font-size: 14px;
+  min-height: 1.4em;
+  margin: 14px 0 0;
+}
+
+#start.page {
+  padding-bottom: 0;
+}
+
+/* Start stays in sight at the bottom while long text scrolls under it. */
+.go {
+  margin-top: auto;
+  position: sticky;
+  bottom: 0;
+  padding: 18px 0 calc(16px + env(safe-area-inset-bottom));
+  background: linear-gradient(to bottom, color-mix(in srgb, var(--bg), transparent 100%), var(--bg) 18px);
+}
+
+.go .msg {
+  margin: 0 0 10px;
+  min-height: 0;
+}
+
+.go .msg:empty {
+  display: none;
+}
+
+.big {
+  width: 100%;
+  text-align: center;
+  background: var(--go);
+  color: #fff;
+  font-weight: 700;
+  font-size: 18px;
+  border-radius: 16px;
+  padding: 16px;
+}
+
+.big:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.fine {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+  margin: 10px 0 0;
+  line-height: 1.5;
+}
+
+.ended {
+  text-align: center;
+}
+
+.ended h1 {
+  font-size: 21px;
+  margin: 0 0 8px;
+}
+
+.check {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  margin: 100px auto 18px;
+  display: grid;
+  place-items: center;
+}
+
+.check.good {
+  background: var(--go);
+}
+
+.check.gone {
+  background: var(--muted);
+}
+
+.check::after {
+  content: "";
+  width: 22px;
+  height: 12px;
+  border: solid #fff;
+  border-width: 0 0 3px 3px;
+  transform: translateY(-3px) rotate(-45deg);
+}
+
+.check.gone::after {
+  width: 26px;
+  height: 0;
+  border-width: 0 0 3px 0;
+  transform: none;
+}
+
+/* ---- The session ---- */
+
+#session h1 {
+  font-size: 21px;
+  margin: 0 0 4px;
+}
+
+#session > p {
+  line-height: 1.5;
+}
+
+.tabs {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 8px;
+  margin: 16px 0 12px;
+}
+
+.tab {
+  text-align: left;
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: var(--soft);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tab span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.tab.on {
+  background: var(--card);
+  box-shadow: 0 0 0 2px var(--go);
+}
+
+.search,
+.question input {
+  width: 100%;
+  font: inherit;
+  font-size: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  color: var(--text);
+  margin: 0 0 10px;
+}
+
+.search:focus,
+.question input:focus {
+  outline: 2px solid var(--go);
+  outline-offset: 1px;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.item {
+  text-align: left;
+  background: var(--card);
+  border-radius: 14px;
+  padding: 13px 15px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.item .name {
+  font-weight: 600;
+}
+
+.item .id {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.item.best {
+  box-shadow: 0 0 0 2px var(--go);
+}
+
+.badge {
+  font-size: 12px;
+  color: var(--go);
+  font-weight: 600;
+  flex-basis: 100%;
+}
+
+.foot {
+  margin-top: auto;
+  padding-top: 18px;
+}
+
+.plain {
+  display: block;
+  width: 100%;
+  text-align: center;
+  padding: 14px;
+  margin-top: 8px;
+  border-radius: 14px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.plain.small {
+  display: inline-block;
+  width: auto;
+  padding: 8px 14px;
+  margin: 0;
+  background: var(--soft);
+  color: var(--text);
+}
+
+a.big {
+  display: block;
+  text-decoration: none;
+  margin: 10px 0 0;
+}
+
+.event {
+  background: var(--card);
+  border-radius: 16px;
+  padding: 14px 16px;
+  margin: 14px 0 0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.event p {
+  margin: 0 0 8px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.event a:not(.big) {
+  color: var(--go);
+}
+
+.coderow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 4px 0 6px;
+}
+
+.code {
+  font: 700 28px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.08em;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  margin: 14px 0 0;
+}
+
+.spin {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  border-top-color: var(--go);
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.question {
+  margin: 18px 0 0;
+}
+
+.q {
+  display: block;
+  font-weight: 600;
+  margin: 0 0 10px;
+  line-height: 1.45;
+}
+
+.question .fine,
+#session .fine {
+  text-align: left;
+}
+
+.warn {
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0 0 12px;
+}
+
+.result {
+  font-size: 16px;
+  margin: 8px 0 0;
+  overflow-wrap: anywhere;
+}
+
+#session .check {
+  margin: 40px auto 18px;
+}
+
+#session .check + h1,
+#session .check + h1 + .meta {
+  text-align: center;
+}
+
+#session .big {
+  margin-top: 22px;
+}
+
+#session .msg:empty {
+  display: none;
+}

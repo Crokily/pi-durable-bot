@@ -115,6 +115,7 @@ Some things do not fit in a chat message. For a plan, a report or a dashboard, t
 - **Buttons and forms in the chat.** On Slack and Discord the bot sends the platform's own buttons, menus and forms; on Telegram, inline buttons. A click wakes it within a second, and a form opens at once.
 - **A password page for secrets.** When the bot needs an API key from you, it sends a one-time link to a page of Pots' own. You type the key there. It goes into a file in the secrets folder, never into the chat, the log or a trace.
 - **A desktop page for the steps only you can do.** When a sign-in, a CAPTCHA or an approval needs you, the bot sends a one-time link. On your phone or computer you see its whole screen, do the step, and press Done; the bot is woken with your note and carries on. On a phone the picture fills the screen, and the bot's desktop takes your phone's shape when its VNC server can change size; you type into a field that sends each character as you go. Pots signs in to the VNC server on the bot's computer itself, so its password stays there, and nothing shows before you press Start. While you have the screen, the bot's screen commands do not run.
+- **A login page for models.** When a model login expires, or you want another model or a judge, the bot sends a one-time link. On your phone or computer you sign in with your subscription (a device code or a copy code works from any device) or paste an API key, also TypeSafe's for Jev, as many as you need, then press Done. pi keeps the login on the bot's computer, for every bot there; the bot is told which provider and which models it can use now, never the login. When no bot can think, because its only login expired, `pots login --link` on that computer prints such a link.
 - **No public address needed.** The first link starts a Cloudflare Quick Tunnel, so pages work from a laptop behind a home router. For a fixed address, the bot sets up Tailscale Funnel with you, or uses your own domain.
 
 ### ⏰ Its own schedule
@@ -172,7 +173,7 @@ To add another bot, ask a bot you have to make one, or run `pots bot new <name> 
 | Command | What it does |
 |---|---|
 | `pots init` | Set up your first bot, or another one |
-| `pots login` | Sign in to models and judges, or add API keys or local servers, one after another, for every bot on this computer; `--list` shows what can be used |
+| `pots login` | Sign in to models and judges, or add API keys or local servers, one after another, for every bot on this computer; `--list` shows what can be used; `--link` prints a link to a login page instead, for a person on any device |
 | `pots mcp add \| remove \| list \| login \| logout` | The [MCP servers](#mcp-servers) of every bot on this computer, and sign-ins to them |
 | `pots chat` | Talk to a bot in this terminal |
 | `pots status` | The gateway, the service and each bot |

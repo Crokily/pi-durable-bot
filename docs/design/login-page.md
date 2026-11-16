@@ -1,6 +1,6 @@
 # Design: the login page
 
-Status: design only, nothing built. Written 2026-11-16 against Pots 0.8.2 and pi 1.5.0 (`@earendil-works/pi-ai`, `pi-coding-agent`).
+Status: built, with the owner's decisions of 2026-11-16: D1 A, D2 A, D3 A, D4 A, D5 B, D6 A, D7 A, D8 A; open questions: no owner concept in code (1), per Linux user (2), no local servers on the page (3), the way that works from another device marked (4), ways for the computer itself left out (5), no sign-out (6). Written 2026-11-16 against Pots 0.8.2 and pi 1.5.0 (`@earendil-works/pi-ai`, `pi-coding-agent`).
 
 ## The problem
 

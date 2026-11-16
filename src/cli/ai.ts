@@ -67,7 +67,7 @@ const setUpWay = (models: Models, way: "oauth" | "api_key" | "local") =>
       const error = yield* tryLogin(models, providerId, way);
       if (error !== undefined) return { failed: `Login failed: ${error}` };
       const chat = yield* Effect.promise(() => models.getAvailable(providerId));
-      if (chat.length > 0) return { model: yield* chooseModel(models, chat, yield* Effect.promise(() => piDefaultModel(providerId))) };
+      if (chat.length > 0) return { model: yield* chooseModel(models, chat, yield* Effect.promise(async () => (await piModels()).piDefaultModel(providerId))) };
       const judges = (yield* Effect.promise(() => models.getAvailableOfType("classifier", providerId))).map((model) => `${model.provider}/${model.id}`);
       if (judges.length === 0) return { failed: "Signed in, but pi lists no model or judge for this login." };
       // As with a model: better to learn here than on the bot's first group message that the key is wrong.
@@ -182,27 +182,11 @@ const chooseModel = (models: Models, available: readonly Model<Api>[], piDefault
     }
   });
 
-/** Ask the model for a word. The reason it cannot answer, or undefined when it can. */
-const tryModel = (models: Models, model: Model<Api>) =>
-  Effect.promise(async () => {
-    try {
-      const reply = await models.completeSimple(
-        model,
-        { messages: [{ role: "user", content: "Say OK.", timestamp: Date.now() }] },
-        { signal: AbortSignal.timeout(60_000) },
-      );
-      return reply.stopReason === "error" || reply.stopReason === "aborted" ? (reply.errorMessage ?? reply.stopReason) : undefined;
-    } catch (error) {
-      return error instanceof Error ? error.message : String(error);
-    }
-  });
+/** pi's model layer, loaded when it is needed, so pots starts fast. */
+const piModels = () => import("../agent/models.ts");
 
-/** The model pi itself picks after a login to this provider. */
-async function piDefaultModel(providerId: string): Promise<string | undefined> {
-  const { piModule } = await import("../agent/models.ts");
-  const { defaultModelPerProvider } = (await import(piModule("./core/model-resolver.js"))) as { defaultModelPerProvider: Record<string, string> };
-  return defaultModelPerProvider[providerId];
-}
+/** Ask the model for a word. The reason it cannot answer, or undefined when it can. */
+const tryModel = (models: Models, model: Model<Api>) => Effect.promise(async () => (await piModels()).modelProblem(models, model));
 
 /**
  * Run pi's login flow for a provider in this terminal. Why it failed, or undefined when it worked; Ctrl+C in one of its
@@ -211,7 +195,7 @@ async function piDefaultModel(providerId: string): Promise<string | undefined> {
 const tryLogin = (models: Models, providerId: string, type: AuthType) =>
   Effect.gen(function* () {
     const terminal = yield* Effect.context<Prompt.Environment>();
-    const deviceId = yield* Effect.promise(piDeviceId);
+    const deviceId = yield* Effect.promise(async () => (await piModels()).piDeviceId());
     const error = yield* Effect.promise(() =>
       models.login(providerId, type, terminalInteraction(terminal), { getDeviceId: () => deviceId }).then(
         () => undefined,
@@ -286,39 +270,7 @@ export const checkJudge = (models: Models, judge: string, mainModel: string) =>
   });
 
 /** Ask the judge about one message. The reason it cannot answer, or undefined when it can. mainModel: the bot's, for "main". */
-const tryJudge = (models: Models, judge: string, mainModel = "") =>
-  Effect.promise(async () => {
-    const { createJudge } = await import("../agent/judge.ts");
-    let timer: NodeJS.Timeout | undefined;
-    const timeout = new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error("no answer within 60 seconds")), 60_000)));
-    try {
-      const asked = createJudge(judge, models, () => mainModel)?.judge({
-        name: "Pots",
-        responsibilities: "The team's releases.",
-        place: "general (channel)",
-        earlier: [],
-        latest: [{ what: "new message", author: "alice", time: new Date().toISOString(), text: "Is the build green?" }],
-      });
-      await Promise.race([asked, timeout]);
-      return undefined;
-    } catch (error) {
-      return error instanceof Error ? error.message : String(error);
-    } finally {
-      clearTimeout(timer);
-    }
-  });
-
-/**
- * This installation's ID in pi's settings, as the pi command line keeps it. Some logins send it: Sign in with ChatGPT
- * fails without one.
- */
-async function piDeviceId(): Promise<string> {
-  const { SettingsManager: Settings } = await import("@earendil-works/pi-coding-agent");
-  const settings = Settings.create(process.cwd());
-  const id = settings.getOrCreateDeviceId();
-  await settings.flush();
-  return id;
-}
+const tryJudge = (models: Models, judge: string, mainModel = "") => Effect.promise(async () => (await piModels()).judgeProblem(models, judge, mainModel));
 
 /**
  * pi's login callbacks, answered with prompts in this terminal. They use the same terminal as the other prompts: a

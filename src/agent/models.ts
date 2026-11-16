@@ -1,4 +1,4 @@
-import type { AnyModel, Models, Provider } from "@earendil-works/pi-ai";
+import type { AnyModel, Api, Model, Models, Provider } from "@earendil-works/pi-ai";
 import { type LazyStreamObserver, lazyStream } from "@earendil-works/pi-ai/api/lazy";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { TelemetrySpan } from "@earendil-works/pi-telemetry";
@@ -73,3 +73,65 @@ export async function requireModel<T extends AnyModel>(models: Models, model: st
   if (!refreshed) throw new Error(`unknown model ${model}`);
   return refreshed;
 }
+
+/** The model pi itself picks after a login to this provider. */
+export async function piDefaultModel(providerId: string): Promise<string | undefined> {
+  const { defaultModelPerProvider } = (await import(piModule("./core/model-resolver.js"))) as { defaultModelPerProvider: Record<string, string> };
+  return defaultModelPerProvider[providerId];
+}
+
+/**
+ * This installation's ID in pi's settings, as the pi command line keeps it. Some logins send it: Sign in with ChatGPT
+ * fails without one.
+ */
+export async function piDeviceId(): Promise<string> {
+  const { SettingsManager: Settings } = await import("@earendil-works/pi-coding-agent");
+  const settings = Settings.create(process.cwd());
+  const id = settings.getOrCreateDeviceId();
+  await settings.flush();
+  return id;
+}
+
+/** Ask the model for a word. The reason it cannot answer, or undefined when it can. */
+export async function modelProblem(models: Models, model: Model<Api>): Promise<string | undefined> {
+  try {
+    const reply = await models.completeSimple(model, { messages: [{ role: "user", content: "Say OK.", timestamp: Date.now() }] }, { signal: AbortSignal.timeout(60_000) });
+    return reply.stopReason === "error" || reply.stopReason === "aborted" ? (reply.errorMessage ?? reply.stopReason) : undefined;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
+/** Ask the judge about one message. The reason it cannot answer, or undefined when it can. mainModel: the bot's, for "main". */
+export async function judgeProblem(models: Models, judge: string, mainModel = ""): Promise<string | undefined> {
+  const { createJudge } = await import("./judge.ts");
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error("no answer within 60 seconds")), 60_000)));
+  try {
+    const asked = createJudge(judge, models, () => mainModel)?.judge({
+      name: "Pots",
+      responsibilities: "The team's releases.",
+      place: "general (channel)",
+      earlier: [],
+      latest: [{ what: "new message", author: "alice", time: new Date().toISOString(), text: "Is the build green?" }],
+    });
+    await Promise.race([asked, timeout]);
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** What a login page needs of pi, beyond its models: its device ID, its default models, and a try of a model or judge. */
+export const piLoginHelpers = {
+  deviceId: piDeviceId,
+  defaultModel: piDefaultModel,
+  tryModel: async (models: Models, name: string) => {
+    const { provider, modelId } = modelRef(name);
+    const model = models.getModel(provider, modelId);
+    return model ? modelProblem(models, model) : `pi does not know ${name}`;
+  },
+  tryJudge: (models: Models, judge: string) => judgeProblem(models, judge),
+};

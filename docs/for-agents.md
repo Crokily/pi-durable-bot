@@ -55,6 +55,8 @@ Do the setup yourself, in your own shell. Only one step is your person's: signin
    > Run `pots login` in your terminal. Choose "Sign in with a subscription", then ChatGPT, and sign in: that is the model your bot thinks with. Then choose "Use an API key", then TypeSafe, and paste your TypeSafe key: that is Jev, which decides which group messages wake your bot. Then choose "Done".
 
    `pots login` takes each key with hidden input and does not take an empty one. It tries each model and judge, says that it is ready or why not, and comes back to its menu, so both go in one run; "Done" lists what pi can use. On a computer without a browser, such as a server over SSH, a sign-in prints a link and asks for the code the page shows (choose "Copy code login (headless)" when it is offered). Then run `pots login --list` again.
+
+   When your person will not use a terminal on that computer, run `pots login --link` yourself and give them the link it prints. They open it on their phone or another computer, press Start, and sign in there: with a subscription (the page puts a device code or a copy code first), or with an API key, also TypeSafe's. They can add several, then press Done. It needs no bot yet. The command serves the page until they press Done, or 15 minutes after Start (an hour unopened), prints each login and then what pi can use, so wait for it to end. Without a `publicUrl` in `~/.pots/settings.json`, the link goes through a Cloudflare Quick Tunnel and the command says so: Cloudflare can see what is typed on the page. A device code or a copy code is safe there; tell them that an API key typed there is not private.
 5. **Make the bot:**
    ```sh
    pots init --yes --name "Ada" --model openai/gpt-6.1-sol --about "our team's research and ops assistant" --no-chat
@@ -71,11 +73,12 @@ Tell your person:
 - **Talk to the bot:** `pots chat`. Leave with Ctrl+C; the bot keeps working.
 - **Tell it where to work.** For example, "join our Slack". It sets the app up itself. Then invite it to the right channels (`/invite @its-name`). Like a new hire, it joins only the places it is invited to.
 - **Which models do which work is theirs to say.** The bot talks at `medium` thinking and hands longer work to children at `xhigh` or `max`, on its own model unless it chooses another one for a child. At its first start it asks your person which models they want for which work, and keeps the answer in its AGENTS.md.
+- **Sign in from anywhere.** When a login expires, or they want another model or Jev, they ask the bot, for example "sign me in to Claude". It sends a one-time link to a login page of Pots' own, where they sign in from any device; the bot is told which models it can use, never the login. When the bot cannot think because its only login expired, `pots login --link` on its computer prints such a link.
 - **Change it by talking to it.** Its persona, responsibilities, model and judge live in its folder, `~/.pots/bots/<id>/`, and the bot edits them itself. People can edit them too; changes apply within seconds.
 
 | Command | What it does |
 |---|---|
-| `pots login` | Sign in to models and judges, or add API keys or local servers, one after another (in a terminal); `--list` shows what can be used |
+| `pots login` | Sign in to models and judges, or add API keys or local servers, one after another (in a terminal); `--list` shows what can be used; `--link` prints a link to a login page for any device instead |
 | `pots mcp add` / `list` / `remove` | MCP servers for every bot and pi on this computer, in pi's `~/.pi/agent/mcp.json`, with the options of `pi mcp` (`pots mcp --help`); the bot calls their tools from code mode scripts: short JavaScript programs it writes to call its tools |
 | `pots mcp login <server>` | Sign in to an MCP server in the browser (in a terminal) |
 | `pots status` | The gateway, the service and each bot |

@@ -76,6 +76,7 @@ export function workSection(facts: PromptFacts): string {
   pots page link <name> [--for <person address>]   a link to your page pages/<name>/ for people; the pages skill says more
   pots page unlink <link ID or URL> | list
   pots page secret --file <name>.env --keys A,B [--text <text>] [--for <person address>]   a one-time Pots page where a person writes secrets into that file
+  pots page login [--provider <id>] [--text <text>] [--for <person address>]   a one-time Pots page where a person signs in to a model provider with a subscription or adds an API key (also TypeSafe's, for Jev), from any device. Logins are for every bot and pi on this computer, and a new one replaces the provider's old one. You are told which provider and which models are now usable, never the login. Logins belong to whoever pays for them and every bot here shares them, so send this link to the person who runs you, or to someone they named, as a coworker hands the company card only to its owner
   pots page desktop --text <text> [--for <person address>] [--input password|code|text] [--area x,y,w,h] [--minutes 15]   a one-time Pots page where a person sees and controls your screen, and hands it back; the desktop-page skill says more
   pots form add <name> <JSON, or -> | remove <name> | list   a Slack or Discord form that a button with the ID form:<name> opens
   pots context

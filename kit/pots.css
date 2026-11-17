@@ -12,7 +12,7 @@
   --pots-text: #111827;
   --pots-muted: #586174;
   --pots-line: #e3e6ec;
-  /* One strong accent, for structure: section marks, numbers, chips, links. A second hue only in the header's glow. */
+  /* One accent, for structure: section marks, numbers, chips, links. A second hue only in the header's top bar. */
   --pots-accent: #3b4fe0;
   --pots-accent-2: #8b5cf6;
   --pots-accent-soft: #eef0ff;
@@ -54,35 +54,38 @@
 }
 
 @media (prefers-color-scheme: dark) {
+  /* Dark mode is quiet: muted colours that are bright only where reading needs them. */
   :root {
-    --pots-bg: #0d0f14;
-    --pots-soft: #191c23;
-    --pots-text: #e9ebf1;
-    --pots-muted: #9ba3b4;
-    --pots-line: #262a33;
-    --pots-accent: #8c9cff;
-    --pots-accent-2: #b48cff;
-    --pots-accent-soft: #1b2042;
-    --pots-accent-text: #0d0f1c;
-    --pots-good: #62d39b;
-    --pots-good-soft: #10281d;
-    --pots-warn: #ffc06b;
-    --pots-warn-soft: #2e2310;
-    --pots-bad: #ff8b80;
-    --pots-bad-soft: #351819;
-    --pots-raised: #14171e;
-    --pots-tint: color-mix(in srgb, var(--pots-accent) 9%, var(--pots-bg));
-    --pots-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --pots-shadow-2: 0 1px 2px rgba(0, 0, 0, 0.4), 0 10px 28px -8px rgba(0, 0, 0, 0.6);
-    --pots-c1: #8c9cff;
-    --pots-c2: #f5a26b;
-    --pots-c3: #5cc8b8;
-    --pots-c4: #c79be0;
-    --pots-c5: #e3c35a;
-    --pots-c6: #ec8db6;
-    --pots-c7: #9aa3b2;
+    --pots-bg: #0f1115;
+    --pots-soft: #1a1d23;
+    --pots-text: #e4e6eb;
+    --pots-muted: #9aa1ae;
+    --pots-line: #272a31;
+    --pots-accent: #95a0dc;
+    --pots-accent-2: #a99bd6;
+    --pots-accent-soft: #1d2133;
+    --pots-accent-text: #0f1115;
+    --pots-good: #6cbf96;
+    --pots-good-soft: #15241d;
+    --pots-warn: #dcb072;
+    --pots-warn-soft: #2a2217;
+    --pots-bad: #e58f86;
+    --pots-bad-soft: #2d1b1b;
+    --pots-raised: #15181d;
+    --pots-tint: color-mix(in srgb, var(--pots-accent) 5%, var(--pots-bg));
+    --pots-tint-line: color-mix(in srgb, var(--pots-accent) 12%, var(--pots-line));
+    --pots-shadow-1: none;
+    --pots-shadow-2: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 20px -10px rgba(0, 0, 0, 0.5);
+    --pots-c1: #95a0dc;
+    --pots-c2: #d99a6c;
+    --pots-c3: #66b2a6;
+    --pots-c4: #b398c9;
+    --pots-c5: #cdb468;
+    --pots-c6: #d290ad;
+    --pots-c7: #949cab;
   }
 }
+
 
 *,
 *::before,
@@ -476,11 +479,11 @@ small {
 [data-icon="list"] { --pots-icon: var(--pots-i-list); }
 
 /* The opening: <header> with <h1>, one sentence with the answer, and a quiet line of who and when.
-   It is the one designed surface of the page: a panel with an accent bar, a soft glow and a display-size title, so the
-   first screen starts with the answer. The body text after it stays on the plain background.
+   It is the one designed surface of the page: a light tinted panel with a thin accent bar and a display-size title, so
+   the first screen starts with the answer. The body text after it stays on the plain background.
    Optional: <p class="pots-eyebrow"> over the title (the kind of page, the project), <p class="pots-meta"> with <span>s
    (date, status, who) that show as chips, and key numbers or points as its last part.
-   <header class="pots-ink"> is a dark band instead, for a page that should look bold. */
+   In dark mode it is quieter still: a faint tint and a thin accent line, no glow and no dot grid. */
 :is(main, .pots-page) > header:first-child {
   position: relative;
   isolation: isolate;
@@ -513,6 +516,19 @@ small {
   background: radial-gradient(color-mix(in srgb, var(--pots-text) 16%, transparent) 1px, transparent 1.4px) 0 0 / 18px 18px;
   -webkit-mask: linear-gradient(250deg, #000, transparent 45%);
   mask: linear-gradient(250deg, #000, transparent 45%);
+}
+@media (prefers-color-scheme: dark) {
+  :is(main, .pots-page) > header:first-child {
+    background: var(--pots-tint);
+    box-shadow: none;
+  }
+  :is(main, .pots-page) > header:first-child::before {
+    height: 2px;
+    background: color-mix(in srgb, var(--pots-accent) 55%, var(--pots-bg));
+  }
+  :is(main, .pots-page) > header:first-child::after {
+    content: none;
+  }
 }
 @media (min-width: 720px) {
   :is(main, .pots-page) > header:first-child {
@@ -553,32 +569,6 @@ small {
 :is(main, .pots-page) > header:first-child > :is(.pots-stats, .pots-points, .pots-cols, .pots-grid) {
   max-width: none;
   margin-top: 26px;
-}
-/* The bold version: a dark band, light text, a brighter glow. It sets the colours inside it, so its parts follow. */
-:is(main, .pots-page) > header.pots-ink:first-child {
-  --pots-text: #f2f4fa;
-  --pots-muted: #a9b2c7;
-  --pots-line: rgba(255, 255, 255, 0.13);
-  --pots-raised: rgba(255, 255, 255, 0.06);
-  --pots-soft: rgba(255, 255, 255, 0.08);
-  --pots-accent: #a3b1ff;
-  --pots-accent-soft: rgba(163, 177, 255, 0.16);
-  --pots-accent-text: #0b0f24;
-  --pots-good: #6ee0a8;
-  --pots-good-soft: rgba(110, 224, 168, 0.14);
-  --pots-warn: #ffc875;
-  --pots-warn-soft: rgba(255, 200, 117, 0.14);
-  --pots-bad: #ff958b;
-  --pots-bad-soft: rgba(255, 149, 139, 0.14);
-  --pots-shadow-1: none;
-  color: var(--pots-text);
-  border-color: rgba(255, 255, 255, 0.08);
-  background:
-    radial-gradient(80% 120% at 100% 0%, rgba(139, 92, 246, 0.45), transparent 60%),
-    radial-gradient(70% 110% at 0% 100%, rgba(59, 79, 224, 0.5), transparent 65%),
-    radial-gradient(50% 80% at 60% 120%, rgba(42, 157, 143, 0.28), transparent 70%),
-    #0b1024;
-  box-shadow: var(--pots-shadow-2);
 }
 .pots-eyebrow {
   display: flex;

@@ -5,6 +5,7 @@ What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm inst
 ## Unreleased
 
 ### Changed
+- **The bot hands people only the step it cannot do.** When a task has a step that needs the person (a sign-in, an ID check, a CAPTCHA, an approval), it does every other step itself and hands them only that step, for example with a desktop page link, not the whole task.
 - **The bot hands most of its work to children.** Its prompt said only that longer work goes to children, so the main agent, which thinks less deeply, still did much of the work and answered questions that needed thought itself. Now it hands children most of the work, including research, checks and questions that need careful thought (advice, analysis, plans, decisions), and does itself only what is quick and certain.
 
 ## 0.8.4 (2026-11-16)

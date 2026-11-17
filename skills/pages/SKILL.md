@@ -58,7 +58,7 @@ pots page list                                    # your pages, their links, whe
 
 Pots serves a kit for pages, all optional:
 
-- `pots.css`: a calm look for reading, light and dark. One column on a phone; on a computer, the contents at the side and blocks that use the width.
+- `pots.css`: a calm look for reading, light and dark, with Inter for Latin text (in `fonts/`). One column on a phone; on a computer, the contents at the side and blocks that use the width.
 - `pots-ui.js`: charts from tables, tabs, sorting, filtering, and contents that follow the reader. Offline, and it works under the private-page CSP (see Content-Security-Policy).
 - `pots.js`: sends a form's answers to Pots.
 
@@ -92,27 +92,27 @@ All that follows serves this goal: plain words make the text fast to read, the r
 
 **The layout.** Use the device. On a computer, put text next to its chart, cards in columns and calendars side by side; on a phone, one column. Text keeps a comfortable line length; `pots-wide` lets a block, also a table or a bar chart, use the full width. The page itself never scrolls sideways; a wide table scrolls inside itself.
 
-**The look.** A page is an information page that the reader reads and answers, not a landing page. Make it clean and calm, not flashy: order and clarity show the care, not bold colour or effects. The kit draws the look; you give it the structure it draws. A page of only headings and paragraphs looks like a plain file, and the reader sees no order on the first screen. Each part below also tells the reader something:
+**The look.** A page is an information page that the reader reads and answers, not a landing page. The kit draws it clean and calm: near-black text on a plain background, hairlines instead of boxes, and one accent colour (blue) for what the reader acts on or looks for: links, numbers, the chosen and the recommended choice, focus. You give it the structure it draws:
 
-- **The header.** Start `<main>` with a `<header>`; the kit shows it as the one designed surface of the page: a light tinted panel with a thin accent bar and a large title (in dark mode only a faint tint). In it, in this order: `<p class="pots-eyebrow" data-icon="…">` with the kind of page (Proposal, Weekly report, Decision), the `<h1>`, one sentence with the answer, `<p class="pots-meta">` with a `<span>` for each fact about the page (date, who it is for, status; a status span takes `pots-good`, `pots-warn` or `pots-bad`), and last two to four key numbers (`pots-stats`) or key points (`pots-points`).
-- **Sections.** Each `<h2>` starts on a line with an accent. Give it an icon, `<h2 data-icon="lock">Access</h2>`, or a number when the order matters (decisions to make, steps of a plan): `<h2><span class="pots-no">2</span>Costs</h2>`.
-- **Icons.** `data-icon="name"` on any element puts a small line icon before its text: on the eyebrow, section headings, meta chips, card headings, badges, a stat, a step, `<summary>`, a note (it replaces the note's sign). Use an icon where it names the kind of thing faster than a word (a date, a person, a risk, a code reference), not on every line. The names: check, x, info, warn, question, ban, arrow, up, down, clock, calendar, user, users, bot, chat, mail, link, lock, key, shield, eye, search, chart, file, code, terminal, settings, money, place, globe, star, bolt, flag, bell, list.
-- **Colour.** One accent for structure, and the meaning colours `pots-good`, `pots-warn`, `pots-bad` for good, risky and bad. Body text stays on the plain background. Do not add gradients, glows or dark bands of your own; the kit's colours already work in light and dark mode.
+- **The header.** Start `<main>` with a `<header>`: `<p class="pots-eyebrow" data-icon="…">` with the kind of page (Proposal, Weekly report, Decision), the `<h1>`, one sentence with the answer, `<p class="pots-meta">` with a `<span>` for each fact about the page (date, who it is for, status; a status span takes `pots-good`, `pots-warn` or `pots-bad`), and last, if they help, two to four key numbers (`pots-stats`) or key points (`pots-points`).
+- **Sections.** Plain `<h2>` headings, with a number when the order matters (decisions to make, steps of a plan): `<h2><span class="pots-no">2</span>Costs</h2>`.
+- **Icons.** `data-icon="name"` puts a small line icon before an element's text. Use it where the reader scans: the eyebrow, the meta facts, card headings, badges, a stat, a note. Headings and `<summary>` stay plain. Notes and questions get their icon from the kit. The names: check, x, info, warn, question, ban, arrow, up, down, clock, calendar, user, users, bot, chat, mail, link, lock, key, shield, eye, search, chart, file, code, terminal, settings, money, place, globe, star, bolt, flag, bell, list.
+- **Colour.** The accent, and `pots-good`, `pots-warn`, `pots-bad` only for a status. Do not add colours, gradients, glows or shadows of your own. To change the accent for a page, put one line in its CSS: `:root { --pots-accent: light-dark(#0d7466, #5fbfae); }` (the light and the dark colour).
 
 Which part for which content:
 
 | Content | Part |
 |---|---|
-| Options, places, people to compare; before and after | `pots-card` in `pots-grid` or `pots-cols`. Its first `<h3>` is a strip across its top; `pots-good`, `pots-warn`, `pots-bad` colour it; `pots-info` marks the one you recommend. |
+| Options, places, people to compare; before and after | `pots-card` in `pots-grid` or `pots-cols`: a hairline over it, its first `<h3>` its title. `pots-good`, `pots-warn`, `pots-bad` mark its status; `pots-info` (a fine accent border and tint) marks the one you recommend. |
 | Key numbers, with a change | `pots-stats`; in a `pots-stat`: `<small class="pots-delta pots-good" data-icon="up">12% on May</small>`; `data-icon` on the stat |
-| What to take away | `ul.pots-points` (ticks; `data-icon` on an item), `ol.pots-points` (numbers) |
+| What to take away | `ul.pots-points` (dots; `data-icon` on an item), `ol.pots-points` (numbers) |
 | What the reader must not miss: a risk, a deadline, what changed | `pots-note`, one or two on a page; a `<b>` at its start is its title |
 | How something works, a decision path | `pots-flow`: `pots-node` boxes joined by arrows; a fork in `pots-lanes`, one `pots-lane` per way |
 | Steps, a timeline | `ol.pots-steps` (numbers), `ul.pots-steps` (dots); `<time>` first in an item shows a date over it |
-| Words the reader must learn | `dl.pots-terms`, each `<div><dt>…</dt><dd>…</dd></div>` a small card |
+| Words the reader must learn | `dl.pots-terms`, each `<div><dt>…</dt><dd>…</dd></div>` a term and its meaning |
 | What someone said | `blockquote.pots-quote` with a `<footer>` for who said it |
 
-Boxes work by contrast. Most of the page stays text on the plain background, with a few boxes where they help; a page where every paragraph is in a card looks as flat as a page with no cards. In your own CSS, use the kit's surfaces so your parts match: `--pots-raised` (a card's background), `--pots-line`, `--pots-radius`, `--pots-shadow-1`.
+Boxes work by contrast. Most of the page stays text on the plain background; the kit boxes only notes, questions and the recommended card. In your own CSS, use the kit's parts so yours match: `--pots-line`, `--pots-soft` (a quiet surface), `--pots-accent-soft` (a light accent tint), `--pots-radius`.
 
 ### What the kit gives
 
@@ -122,7 +122,7 @@ Boxes work by contrast. Most of the page stays text on the plain background, wit
 - Blocks: `pots-stats` with `pots-stat` (`<div class="pots-stat"><b>€8,400</b><span>total</span></div>`) and `pots-delta`, `pots-points` (key points), `pots-card`, `pots-note`, `pots-steps`, `pots-flow` with `pots-node`, `pots-lanes` and `pots-lane`, `pots-terms`, `pots-kv` (a `<dl>` of names and values), `blockquote.pots-quote`, `pots-badge`, `pots-no` (a section number in a heading).
 - Icons: `data-icon="name"` on any element; `<i data-icon="name"></i>` is the icon alone. They are CSS masks from `data:` URLs, so a page's CSP must allow `img-src data:`, as the one under Content-Security-Policy does. In your own CSS, `var(--pots-i-lock)` is the lock as a mask image.
 - Colours with a meaning: `pots-good`, `pots-warn`, `pots-bad` on a note, a badge, a stat or a chart row; `pots-info` on a badge. Text: `pots-muted`, `pots-num` (a right-aligned number cell). `pots-hl` highlights anything your script points at.
-- In your own CSS, use the kit's colours so dark mode works: `--pots-bg`, `--pots-soft`, `--pots-raised`, `--pots-tint`, `--pots-text`, `--pots-muted`, `--pots-line`, `--pots-accent`, `--pots-accent-soft`, `--pots-good`, `--pots-warn`, `--pots-bad` (each also `-soft`), and the chart colours `--pots-c1` to `--pots-c7`; and its shapes: `--pots-radius-s`, `--pots-radius`, `--pots-radius-l`, `--pots-radius-xl`, `--pots-shadow-1`, `--pots-shadow-2`.
+- In your own CSS, use the kit's colours so dark mode works: `--pots-bg`, `--pots-soft`, `--pots-text`, `--pots-muted`, `--pots-faint`, `--pots-line`, `--pots-accent`, `--pots-accent-soft`, `--pots-accent-line`, `--pots-good`, `--pots-warn`, `--pots-bad` (each also `-soft`), and the chart colours `--pots-c1` (the accent) to `--pots-c7`; and its shapes: `--pots-radius-s`, `--pots-radius`, `--pots-radius-l`.
 - With `pots-ui.js`:
   - `<table data-pots-chart="bar|stack|line">` becomes a chart. Bar and stack: the first column names the rows, the second gives the values. Line: each row is a point on the x axis, each number column a line. `data-marks="380 You; 300 Her"` draws reference lines on bars, `data-max` or `data-min` fixes the scale (a line chart starts at zero unless its values sit far from zero; `data-min="0"` keeps zero), a `<caption>` becomes the title, and `data-pots-show="…"` names the button that shows the numbers. The table stays on the page, folded, so the numbers are one tap away.
   - `<div data-pots-tabs>` with `<section data-tab="Name">` children shows one at a time; `data-pots-tabs="phone"` does so only on a phone and shows all of them on a computer. `data-current` on a section opens it first; `box.potsSelect(i)` opens one from your script, and the box sends a `pots-tab` event.

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 
@@ -226,8 +226,16 @@ describe("the page kit", () => {
   it("styles light and dark, and loads nothing from elsewhere", () => {
     expect(css).toMatch(/@media \(prefers-color-scheme: dark\)/);
     expect(css).not.toMatch(/@import/);
-    // Icons and the flow's arrowheads are data: URLs, drawn from the stylesheet itself.
-    expect(css).not.toMatch(/url\((?!"data:image\/svg\+xml,)/);
+    // Icons and the flow's arrowheads are data: URLs, drawn from the stylesheet itself; the one font is in the kit, with its licence.
+    expect(css).not.toMatch(/url\((?!"data:image\/svg\+xml,|"fonts\/InterVariable-latin\.woff2")/);
+    expect(existsSync(new URL("../kit/fonts/InterVariable-latin.woff2", import.meta.url))).toBe(true);
+    expect(readFileSync(new URL("../kit/fonts/Inter-LICENSE.txt", import.meta.url), "utf8")).toContain("SIL Open Font License");
+  });
+
+  it("sets the accent, light and dark, in one line a page can override", () => {
+    const lines = css.split("\n").filter((line) => /^\s*--pots-accent:/.test(line));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/light-dark\(#[0-9a-f]{6}, #[0-9a-f]{6}\)/);
   });
 
   it("keeps every class and colour of the first stylesheet, so pages written for it look right", () => {

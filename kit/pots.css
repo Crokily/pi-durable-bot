@@ -1,234 +1,214 @@
 /*
  * Pots page kit: the stylesheet. Link it from a page as ../../__pots/kit/pots.css.
- * Reading first: one calm background, a comfortable line length, one column on a phone and the full width of a computer
- * (contents at the side, text next to its chart, cards in columns). System fonts only, light and dark.
- * pots-ui.js adds the moving parts (charts from tables, tabs, sorting, filtering); everything reads without it.
+ * Reading first, calm and plain: Inter for Latin text and the system's font for Chinese, Japanese and Korean, text in
+ * near-black greys, hairlines instead of boxes, and one accent colour for what the reader acts on or looks for:
+ * links, key numbers, the selected and the recommended choice, focus. Status colours mean a status only.
+ * No gradients, glows or shadows. Light and dark. pots-ui.js adds the moving parts (charts from tables, tabs, sorting,
+ * filtering); everything reads without it.
+ * Type and spacing after Linear's docs: weights 400 / 510 / 590, title 2.5rem at -.022em, radii 4/6/8/12.
  */
+
+@font-face {
+  font-family: "Inter Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  /* Inter 4, OFL 1.1: fonts/Inter-LICENSE.txt */
+  src: url("fonts/InterVariable-latin.woff2") format("woff2-variations");
+  /* Latin only, without curly quotes and the ellipsis, so Chinese text keeps its own full-width “” and …. */
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-2017, U+201E-2025, U+2027-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
 
 :root {
   color-scheme: light dark;
+  /* The accent, light and dark, in one place. A page can change it with one line of its own:
+     :root { --pots-accent: light-dark(#0d7466, #5fbfae); }   (teal-green) */
+  --pots-accent: light-dark(#1f5fcc, #7ea6e8);
   --pots-bg: #ffffff;
-  --pots-soft: #f3f4f7;
-  --pots-text: #111827;
-  --pots-muted: #586174;
-  --pots-line: #e3e6ec;
-  /* One accent, for structure: section marks, numbers, chips, links. A second hue only in the header's top bar. */
-  --pots-accent: #3b4fe0;
-  --pots-accent-2: #8b5cf6;
-  --pots-accent-soft: #eef0ff;
-  --pots-accent-text: #ffffff;
-  --pots-good: #137a52;
-  --pots-good-soft: #e5f5ed;
-  --pots-warn: #965700;
-  --pots-warn-soft: #fff3df;
-  --pots-bad: #c7352a;
-  --pots-bad-soft: #fdeceb;
-  /* chart colours, in order */
-  --pots-c1: #3b4fe0;
-  --pots-c2: #d4692c;
-  --pots-c3: #2a9d8f;
-  --pots-c4: #a259c4;
-  --pots-c5: #b08900;
-  --pots-c6: #d4508a;
-  --pots-c7: #8a94a6;
-  /* Surfaces: a card sits a little above the page; only the header is tinted. */
-  --pots-raised: #ffffff;
-  --pots-tint: color-mix(in srgb, var(--pots-accent) 6%, var(--pots-bg));
-  --pots-tint-line: color-mix(in srgb, var(--pots-accent) 18%, var(--pots-line));
-  --pots-shadow-1: 0 1px 2px rgba(17, 24, 39, 0.05), 0 1px 1px rgba(17, 24, 39, 0.03);
-  --pots-shadow-2: 0 1px 2px rgba(17, 24, 39, 0.05), 0 8px 24px -6px rgba(17, 24, 39, 0.12);
-  --pots-radius-s: 8px;
-  --pots-radius: 12px;
-  --pots-radius-l: 18px;
-  --pots-radius-xl: 24px;
-  --pots-measure: 42rem;
+  --pots-soft: #f7f7f8;
+  --pots-soft-2: #f0f1f3;
+  --pots-text: #1b1d22;            /* headings, names, numbers */
+  --pots-text-2: #2e3238;          /* body text */
+  --pots-muted: #4f545d;           /* lead text, explanations, labels: 7.6:1 on white */
+  --pots-faint: #6a6f78;           /* section numbers, placeholders, separators: 5:1 on white */
+  --pots-line: #e4e5e8;
+  --pots-line-2: #d3d5da;
+  --pots-good: #1a7f3c;
+  --pots-warn: #a95006;
+  --pots-bad: #c2352f;
+  --pots-info: var(--pots-accent);
+  --pots-good-dot: #27a644;
+  --pots-warn-dot: #f2792f;
+  --pots-bad-dot: #e5534b;
+  /* chart colours, in order: the accent first, no violet */
+  --pots-c1: var(--pots-accent);
+  --pots-c2: #d9772b;
+  --pots-c3: #3b9a5c;
+  --pots-c4: #c49a1a;
+  --pots-c5: #cc5470;
+  --pots-c6: #5d8aa8;
+  --pots-c7: #9298a1;
+  --pots-r-s: 4px;
+  --pots-r: 6px;
+  --pots-r-m: 8px;
+  --pots-r-l: 12px;
+  --pots-measure: 40rem;
   --pots-width: 64rem;
   --pots-toc: 12rem;
-  --pots-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", "PingFang SC", "Hiragino Sans GB",
-    "Noto Sans CJK SC", "Source Han Sans SC", "Microsoft YaHei", "Noto Sans", Arial, sans-serif;
-  --pots-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-  /* old names, kept for pages written for the first kit */
+  --pots-font: "Inter Variable", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Noto Sans CJK SC", "Source Han Sans SC", "Hiragino Sans GB", "Microsoft YaHei", Roboto, sans-serif;
+  --pots-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Noto Sans Mono CJK SC", "DejaVu Sans Mono", monospace;
+  /* Made from the colours above, so they follow the accent and dark mode. */
+  --pots-accent-text: var(--pots-bg);
+  --pots-accent-soft: color-mix(in srgb, var(--pots-accent) 7%, var(--pots-bg));
+  --pots-accent-line: color-mix(in srgb, var(--pots-accent) 32%, var(--pots-line));
+  --pots-good-soft: color-mix(in srgb, var(--pots-good) 7%, var(--pots-bg));
+  --pots-warn-soft: color-mix(in srgb, var(--pots-warn) 7%, var(--pots-bg));
+  --pots-bad-soft: color-mix(in srgb, var(--pots-bad) 7%, var(--pots-bg));
+  --pots-raised: var(--pots-bg);
+  /* old names, kept for pages written for earlier kits */
   --pots-surface: var(--pots-bg);
   --pots-border: var(--pots-line);
   --pots-code-bg: var(--pots-soft);
+  --pots-radius-s: var(--pots-r);
+  --pots-radius: var(--pots-r-m);
+  --pots-radius-l: var(--pots-r-l);
+  --pots-radius-xl: var(--pots-r-l);
+  --pots-tint: var(--pots-accent-soft);
+  --pots-tint-line: var(--pots-accent-line);
+  --pots-shadow-1: none;
+  --pots-shadow-2: none;
+  --pots-accent-2: var(--pots-accent);
 }
 
 @media (prefers-color-scheme: dark) {
-  /* Dark mode is quiet: muted colours that are bright only where reading needs them. */
+  /* Dark is as calm: soft greys on near-black, and colours a little muted. */
   :root {
-    --pots-bg: #0f1115;
-    --pots-soft: #1a1d23;
-    --pots-text: #e4e6eb;
-    --pots-muted: #9aa1ae;
-    --pots-line: #272a31;
-    --pots-accent: #95a0dc;
-    --pots-accent-2: #a99bd6;
-    --pots-accent-soft: #1d2133;
-    --pots-accent-text: #0f1115;
-    --pots-good: #6cbf96;
-    --pots-good-soft: #15241d;
-    --pots-warn: #dcb072;
-    --pots-warn-soft: #2a2217;
-    --pots-bad: #e58f86;
-    --pots-bad-soft: #2d1b1b;
-    --pots-raised: #15181d;
-    --pots-tint: color-mix(in srgb, var(--pots-accent) 5%, var(--pots-bg));
-    --pots-tint-line: color-mix(in srgb, var(--pots-accent) 12%, var(--pots-line));
-    --pots-shadow-1: none;
-    --pots-shadow-2: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 20px -10px rgba(0, 0, 0, 0.5);
-    --pots-c1: #95a0dc;
-    --pots-c2: #d99a6c;
-    --pots-c3: #66b2a6;
-    --pots-c4: #b398c9;
-    --pots-c5: #cdb468;
-    --pots-c6: #d290ad;
-    --pots-c7: #949cab;
+    --pots-bg: #0c0d0f;
+    --pots-soft: #141518;
+    --pots-soft-2: #1a1c1f;
+    --pots-text: #eceef1;
+    --pots-text-2: #d3d7de;
+    --pots-muted: #a2a8b2;
+    --pots-faint: #868c96;
+    --pots-line: #24262b;
+    --pots-line-2: #33363c;
+    --pots-good: #5cbf7c;
+    --pots-warn: #e09a5c;
+    --pots-bad: #e8817a;
+    --pots-good-dot: #3fae5f;
+    --pots-warn-dot: #e0874a;
+    --pots-bad-dot: #e0645c;
+    --pots-c2: #d99062;
+    --pots-c3: #5fb07c;
+    --pots-c4: #cdb04e;
+    --pots-c5: #d6809a;
+    --pots-c6: #84a8c2;
+    --pots-c7: #8e949d;
+    --pots-accent-soft: color-mix(in srgb, var(--pots-accent) 9%, var(--pots-bg));
+    --pots-accent-line: color-mix(in srgb, var(--pots-accent) 34%, var(--pots-line));
+    --pots-good-soft: color-mix(in srgb, var(--pots-good) 8%, var(--pots-bg));
+    --pots-warn-soft: color-mix(in srgb, var(--pots-warn) 8%, var(--pots-bg));
+    --pots-bad-soft: color-mix(in srgb, var(--pots-bad) 8%, var(--pots-bg));
+    --pots-raised: var(--pots-soft);
   }
 }
-
 
 *,
 *::before,
 *::after {
   box-sizing: border-box;
 }
-
 html {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
   background: var(--pots-bg);
 }
-
+/* text-large: 1.0625rem / 1.6, the size of Linear's docs prose on a computer. Chinese gets more leading. */
 body {
   margin: 0;
   background: var(--pots-bg);
-  color: var(--pots-text);
-  font: 17px/1.65 var(--pots-font);
+  color: var(--pots-text-2);
+  font: 400 1.0625rem/1.6 var(--pots-font);
+  font-optical-sizing: auto;
+  font-feature-settings: "cv01", "ss03";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   overflow-wrap: break-word;
   text-autospace: normal;
 }
 body:lang(zh),
 body:lang(ja),
 body:lang(ko) {
-  line-height: 1.75;
+  line-height: 1.78;
+}
+::selection {
+  background: color-mix(in srgb, var(--pots-accent) 22%, transparent);
 }
 
-/* ---- The page: one column on a phone; on a computer the contents sit at the side and blocks use the width ---- */
-
+/* ---- The page ---- */
 main,
 .pots-page {
   width: 100%;
-  max-width: calc(var(--pots-width) + 64px);
+  max-width: calc(var(--pots-width) + 48px);
   margin: 0 auto;
-  padding: 24px max(16px, env(safe-area-inset-right, 0px)) 72px max(16px, env(safe-area-inset-left, 0px));
+  padding: 28px max(20px, env(safe-area-inset-right, 0px)) 80px max(20px, env(safe-area-inset-left, 0px));
 }
 @media (min-width: 720px) {
   main,
   .pots-page {
-    padding: 40px 32px 96px;
-  }
-  .pots-toc {
-    margin: 0 -32px 28px;
-    padding: 6px 26px;
+    padding: 72px 32px 120px;
   }
 }
-
-/* Text keeps a comfortable line length; tables, charts, grids and columns use the full width. */
 :where(p, ul, ol, dl, blockquote, h1, h2, h3, h4, details, header, address, label, figure, .pots-scroll),
 :is(main, .pots-page) > header > * {
   max-width: var(--pots-measure);
 }
-.pots-wide,
-.pots-chart :is(ul, ol, p, details),
-.pots-chart.pots-line {
+.pots-wide {
   max-width: none;
 }
-
 [id] {
-  scroll-margin-top: 64px;
+  scroll-margin-top: 72px;
 }
 
-/* ---- Text: a display title, a clear second level, calm body text ---- */
-
+/* ---- Type: Linear's title scale, weight 590, tight tracking for Latin and lighter for CJK ---- */
 h1,
 h2,
 h3,
 h4 {
-  line-height: 1.3;
-  margin: 1.6em 0 0.5em;
-  font-weight: 650;
+  color: var(--pots-text);
+  font-weight: 590;
   text-wrap: balance;
 }
 h1 {
-  font-size: clamp(2rem, 1.45rem + 2.3vw, 3.1rem);
-  font-weight: 750;
-  line-height: 1.1;
-  letter-spacing: -0.032em;
-  margin-top: 0;
+  margin: 0 0 16px;
+  font-size: 2.5rem;                /* title-5 */
+  line-height: 1.15;
+  letter-spacing: -0.022em;
 }
 h2 {
-  font-size: clamp(1.4rem, 1.25rem + 0.6vw, 1.7rem);
-  font-weight: 700;
-  line-height: 1.25;
-  letter-spacing: -0.022em;
-  margin-top: 2em;
-  margin-bottom: 0.65em;
-}
-/* A section of the page starts on a hairline with a short, thick accent at its start. Inside a box, a heading is plain. */
-:is(main, .pots-page) h2 {
-  position: relative;
-  max-width: none;
-  margin-top: 2.3em;
-  padding-top: 0.9em;
-  background:
-    linear-gradient(var(--pots-accent), var(--pots-accent)) 0 0 / 40px 3px no-repeat,
-    linear-gradient(var(--pots-line), var(--pots-line)) 0 1px / 100% 1px no-repeat;
-}
-:is(.pots-card, .pots-note, .pots-cols, .pots-grid, fieldset, details, [data-pots-question], [data-pots-tabs]) h2 {
-  margin-top: 1.4em;
-  padding-top: 0;
-  background: none;
-}
-/* A section number before a heading's text: <h2><span class="pots-no">2</span>Costs</h2> */
-.pots-no {
-  display: inline-grid;
-  place-items: center;
-  min-width: 1.45em;
-  height: 1.45em;
-  margin-right: 0.5em;
-  padding: 0 0.35em;
-  border-radius: var(--pots-radius-s);
-  background: var(--pots-accent);
-  color: var(--pots-accent-text);
-  font-size: 0.8em;
-  font-weight: 750;
-  letter-spacing: 0;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-  vertical-align: 0.1em;
-  box-shadow: 0 2px 6px -1px color-mix(in srgb, var(--pots-accent) 45%, transparent);
+  margin: 0 0 12px;
+  font-size: 1.5rem;                /* title-3 */
+  line-height: 1.33;
+  letter-spacing: -0.012em;
 }
 h3 {
-  font-size: 1.125rem;
-  letter-spacing: -0.01em;
+  margin: 32px 0 8px;
+  font-size: 1.0625rem;             /* title-1 */
+  line-height: 1.4;
+  letter-spacing: -0.012em;
 }
 h4 {
-  font-size: 1rem;
+  margin: 24px 0 6px;
+  font-size: 0.9375rem;
+  line-height: 1.6;
 }
-:lang(zh) :is(h1, h2, h3),
-:lang(ja) :is(h1, h2, h3),
-:lang(ko) :is(h1, h2, h3) {
-  letter-spacing: 0;
+:lang(zh) :is(h1, h2) {
+  letter-spacing: -0.008em;
 }
-:lang(zh) h1,
-:lang(ja) h1,
-:lang(ko) h1 {
-  letter-spacing: -0.01em;
-  line-height: 1.2;
-}
-:is(h1, h2, h3, h4) small {
-  font-weight: 400;
-  color: var(--pots-muted);
+:lang(zh) h1 {
+  line-height: 1.25;
 }
 p,
 ul,
@@ -245,166 +225,203 @@ p {
 }
 ul,
 ol {
-  padding-left: 1.3em;
+  padding-left: 1.4em;
 }
 li + li {
-  margin-top: 0.3em;
+  margin-top: 4px;
 }
 li::marker {
-  color: var(--pots-muted);
+  color: var(--pots-faint);
 }
-ol > li::marker {
-  color: var(--pots-accent);
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
+b,
+strong {
+  font-weight: 590;
+  color: var(--pots-text);
 }
-ul > li::marker {
-  color: color-mix(in srgb, var(--pots-accent) 70%, var(--pots-muted));
-}
+/* A link is in the accent, with a light underline that darkens under the pointer. */
 a {
   color: var(--pots-accent);
-  text-decoration-thickness: 1px;
-  text-decoration-color: color-mix(in srgb, var(--pots-accent) 45%, transparent);
+  text-decoration: underline;
+  text-decoration-color: var(--pots-accent-line);
   text-underline-offset: 3px;
-  transition: text-decoration-color 0.15s;
+  text-decoration-thickness: 1px;
+  transition: text-decoration-color 0.12s;
 }
 a:hover {
   text-decoration-color: currentColor;
 }
-::selection {
-  background: color-mix(in srgb, var(--pots-accent) 24%, transparent);
-}
-b,
-strong {
-  font-weight: 650;
+a:focus-visible {
+  outline: 2px solid var(--pots-accent);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 hr {
+  height: 1px;
+  margin: 40px 0;
   border: 0;
-  border-top: 1px solid var(--pots-line);
-  margin: 2.4em 0;
-}
-img,
-svg,
-video,
-canvas {
-  max-width: 100%;
-  height: auto;
-}
-figure {
-  margin: 0 0 1.4em;
-}
-figcaption {
-  margin-top: 8px;
-  font-size: 0.88em;
-  color: var(--pots-muted);
-}
-blockquote {
-  margin-left: 0;
-  padding: 0.1em 0 0.1em 1em;
-  border-left: 3px solid var(--pots-line);
-  color: var(--pots-muted);
-}
-/* A pull quote: what someone said, large, with who said it. <blockquote class="pots-quote"><p>…</p><footer>Name</footer> */
-blockquote.pots-quote {
-  position: relative;
-  margin: 1.6em 0;
-  padding: 0.2em 0 0.2em 1.4em;
-  border-left: 3px solid var(--pots-accent);
-  color: var(--pots-text);
-  font-size: 1.18em;
-  font-weight: 500;
-  line-height: 1.5;
-  letter-spacing: -0.01em;
-}
-blockquote.pots-quote > :is(footer, cite, small) {
-  display: block;
-  margin-top: 0.6em;
-  color: var(--pots-muted);
-  font-size: 0.8em;
-  font-style: normal;
-  font-weight: 500;
-  letter-spacing: 0;
-}
-blockquote.pots-quote > :is(footer, cite, small)::before {
-  content: "— ";
-}
-blockquote.pots-quote > :last-child {
-  margin-bottom: 0;
+  background: var(--pots-line);
 }
 code,
 kbd,
 pre {
   font-family: var(--pots-mono);
-  font-size: 0.88em;
+  font-size: 0.86em;
 }
 code {
+  padding: 0.1em 0.35em;
+  border: 1px solid var(--pots-line);
+  border-radius: var(--pots-r-s);
   background: var(--pots-soft);
-  padding: 0.12em 0.4em;
-  border-radius: 6px;
+  color: var(--pots-text);
 }
 pre {
-  background: var(--pots-soft);
   padding: 14px 16px;
-  border-radius: var(--pots-radius);
+  border: 1px solid var(--pots-line);
+  border-radius: var(--pots-r-m);
+  background: var(--pots-soft);
   overflow-x: auto;
-  line-height: 1.5;
+  line-height: 1.6;
 }
 pre code {
-  background: none;
   padding: 0;
+  border: 0;
+  background: none;
+}
+small {
+  font-size: 0.875em;
 }
 small,
 .pots-muted {
   color: var(--pots-muted);
 }
-small {
-  font-size: 0.87em;
+
+/* ---- Sections: space, not lines ---- */
+:is(main, .pots-page) section {
+  margin-top: 88px;
+}
+:is(main, .pots-page) > form > section:first-child {
+  margin-top: 88px;
+}
+section > h2:first-child {
+  margin-bottom: 16px;
+}
+/* A section number: the accent, the same size, so the words lead. */
+.pots-no {
+  display: inline-block;
+  min-width: 1.1em;
+  margin-right: 0.45em;
+  color: var(--pots-accent);
+  font-variant-numeric: tabular-nums;
 }
 
-/* ---- Icons: data-icon="name" on any element puts a small line drawing before its text, in the text's colour.
-   An empty <i data-icon="lock"></i> is the icon alone. CSS only (data: URLs), so it works offline and under the CSP. ---- */
+/* ---- The opening: no panel. A small label in the accent, the title, one sentence in the secondary grey, a quiet line ---- */
+:is(main, .pots-page) > header {
+  margin: 0 0 56px;
+  max-width: none;
+}
+:is(main, .pots-page) > header > * {
+  max-width: 44rem;
+}
+.pots-eyebrow {
+  margin: 0 0 14px;
+  color: var(--pots-accent);
+  font-size: 0.8125rem;             /* text-mini */
+  font-weight: 510;
+  line-height: 1.5;
+  letter-spacing: -0.01em;
+}
+header > h1 + p {
+  margin-bottom: 20px;
+  color: var(--pots-muted);
+  font-size: 1.25rem;
+  line-height: 1.6;
+  letter-spacing: -0.012em;
+}
+header > h1 + p:lang(zh) {
+  letter-spacing: 0;
+  line-height: 1.7;
+}
+/* Who and when: plain text in one line, a dot between the parts; an icon may lead each part. */
+.pots-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 0;
+  margin: 0 0 8px;
+  color: var(--pots-muted);
+  font-size: 0.8125rem;
+  font-weight: 510;
+  line-height: 1.5;
+}
+.pots-meta > * + *::after {
+  content: none;
+}
+.pots-meta > * + * {
+  margin-left: 0;
+}
+.pots-meta > *:not(:last-child)::after {
+  content: "·";
+  margin: 0 10px;
+  color: var(--pots-faint);
+}
+header > .pots-muted:last-child {
+  font-size: 0.875rem;
+}
 
+/* ---- Status words: a small dot in the status colour, the words stay in the text colour.
+   With data-icon the icon takes the dot's place, in the same colour. ---- */
+.pots-good,
+.pots-warn,
+.pots-bad,
+.pots-info {
+  --pots-k: var(--pots-good-dot);
+}
+.pots-warn { --pots-k: var(--pots-warn-dot); }
+.pots-bad { --pots-k: var(--pots-bad-dot); }
+.pots-info { --pots-k: var(--pots-accent); }
+:is(span, b, strong, em, small).pots-good,
+:is(span, b, strong, em, small).pots-warn,
+:is(span, b, strong, em, small).pots-bad {
+  color: var(--pots-text-2);
+}
+:is(span, b, strong, em, small):is(.pots-good, .pots-warn, .pots-bad):not([data-icon])::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin: 0 7px 0 1px;
+  vertical-align: 0.12em;
+  border-radius: 50%;
+  background: var(--pots-k);
+}
+:is(span, b, strong, em, small):is(.pots-good, .pots-warn, .pots-bad, .pots-info)[data-icon]::before {
+  background: var(--pots-k);
+}
+
+/* ---- Icons: data-icon="name" on any element puts a small line drawing before its text, in a muted colour.
+   An empty <i data-icon="lock"></i> is the icon alone. CSS only (data: URLs), so it works offline and under the CSP.
+   Icons mark the places a reader scans: the opening, notes, questions, labels. Section headings and folds stay
+   plain, so an icon there draws nothing. ---- */
 [data-icon]::before {
   content: "";
   display: inline-block;
   flex: none;
-  width: 1.1em;
-  height: 1.1em;
-  margin-right: 0.42em;
-  vertical-align: -0.17em;
-  background: currentColor;
+  width: 1.05em;
+  height: 1.05em;
+  margin-right: 0.4em;
+  vertical-align: -0.16em;
+  background: var(--pots-icon-colour, var(--pots-faint));
   -webkit-mask: var(--pots-icon) center / contain no-repeat;
   mask: var(--pots-icon) center / contain no-repeat;
 }
 [data-icon]:empty::before {
   margin-right: 0;
 }
-/* In a section heading the icon sits on an accent tile: <h2 data-icon="lock">Access</h2> */
-:is(main, .pots-page) h2[data-icon]:not(:is(.pots-card, .pots-note, .pots-cols, .pots-grid, fieldset, details, [data-pots-question], [data-pots-tabs]) h2) {
-  padding-left: 1.85em;
+:is(h1, h2, h3, h4, summary)[data-icon]::before {
+  content: none;
 }
-:is(main, .pots-page) h2[data-icon]:not(:is(.pots-card, .pots-note, .pots-cols, .pots-grid, fieldset, details, [data-pots-question], [data-pots-tabs]) h2)::before {
-  position: absolute;
-  left: 0.32em;
-  top: calc(0.9em + 0.5lh - 0.4em);
-  width: 0.8em;
-  height: 0.8em;
-  margin: 0;
-  color: var(--pots-accent);
-  z-index: 1;
+.pots-eyebrow[data-icon]::before {
+  background: currentColor;
 }
-:is(main, .pots-page) h2[data-icon]:not(:is(.pots-card, .pots-note, .pots-cols, .pots-grid, fieldset, details, [data-pots-question], [data-pots-tabs]) h2)::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: calc(0.9em + 0.5lh - 0.72em);
-  width: 1.44em;
-  height: 1.44em;
-  border-radius: var(--pots-radius-s);
-  background: var(--pots-accent-soft);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pots-accent) 18%, transparent);
-}
-
 :root {
   --pots-i-check: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E");
   --pots-i-x: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M18 6 6 18M6 6l12 12'/%3E%3C/svg%3E");
@@ -478,181 +495,7 @@ small {
 [data-icon="bell"] { --pots-icon: var(--pots-i-bell); }
 [data-icon="list"] { --pots-icon: var(--pots-i-list); }
 
-/* The opening: <header> with <h1>, one sentence with the answer, and a quiet line of who and when.
-   It is the one designed surface of the page: a light tinted panel with a thin accent bar and a display-size title, so
-   the first screen starts with the answer. The body text after it stays on the plain background.
-   Optional: <p class="pots-eyebrow"> over the title (the kind of page, the project), <p class="pots-meta"> with <span>s
-   (date, status, who) that show as chips, and key numbers or points as its last part.
-   In dark mode it is quieter still: a faint tint and a thin accent line, no glow and no dot grid. */
-:is(main, .pots-page) > header:first-child {
-  position: relative;
-  isolation: isolate;
-  overflow: hidden;
-  max-width: none;
-  margin: 0 0 36px;
-  padding: 30px 20px 24px;
-  border: 1px solid var(--pots-tint-line);
-  border-radius: var(--pots-radius-xl);
-  background:
-    radial-gradient(110% 130% at 100% 0%, color-mix(in srgb, var(--pots-accent-2) 13%, transparent), transparent 58%),
-    radial-gradient(90% 120% at 0% 0%, color-mix(in srgb, var(--pots-accent) 12%, transparent), transparent 62%),
-    var(--pots-tint);
-  box-shadow: var(--pots-shadow-1);
-}
-/* The accent bar along its top edge. */
-:is(main, .pots-page) > header:first-child::before {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto;
-  height: 4px;
-  background: linear-gradient(90deg, var(--pots-accent), var(--pots-accent-2) 60%, var(--pots-c3));
-}
-/* A faint dot grid that fades out towards the text. */
-:is(main, .pots-page) > header:first-child::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  background: radial-gradient(color-mix(in srgb, var(--pots-text) 16%, transparent) 1px, transparent 1.4px) 0 0 / 18px 18px;
-  -webkit-mask: linear-gradient(250deg, #000, transparent 45%);
-  mask: linear-gradient(250deg, #000, transparent 45%);
-}
-@media (prefers-color-scheme: dark) {
-  :is(main, .pots-page) > header:first-child {
-    background: var(--pots-tint);
-    box-shadow: none;
-  }
-  :is(main, .pots-page) > header:first-child::before {
-    height: 2px;
-    background: color-mix(in srgb, var(--pots-accent) 55%, var(--pots-bg));
-  }
-  :is(main, .pots-page) > header:first-child::after {
-    content: none;
-  }
-}
-@media (min-width: 720px) {
-  :is(main, .pots-page) > header:first-child {
-    margin-bottom: 44px;
-    padding: 44px 44px 36px;
-  }
-}
-/* On a page of reading width only, such as a form, the panel keeps that width too. */
-:is(main, .pots-page):not(:has(.pots-wide, .pots-toc, .pots-cols, .pots-grid, .pots-stats, .pots-scroll, table)) > header:first-child {
-  max-width: calc(var(--pots-measure) + 2px);
-}
-@media (min-width: 720px) {
-  :is(main, .pots-page):not(:has(.pots-wide, .pots-toc, .pots-cols, .pots-grid, .pots-stats, .pots-scroll, table)) > header:first-child {
-    padding: 36px 32px 30px;
-  }
-}
-:is(main, .pots-page) > header:first-child > h1 {
-  margin-bottom: 0.42em;
-}
-:is(main, .pots-page) > header:first-child > p:not(.pots-muted, .pots-meta, .pots-eyebrow) {
-  font-size: 1.125em;
-  line-height: 1.6;
-  margin-bottom: 0.8em;
-  color: color-mix(in srgb, var(--pots-text) 82%, var(--pots-muted));
-}
-@media (min-width: 720px) {
-  :is(main, .pots-page) > header:first-child > p:not(.pots-muted, .pots-meta, .pots-eyebrow) {
-    font-size: 1.25em;
-    line-height: 1.55;
-  }
-}
-:is(main, .pots-page) > header:first-child > p.pots-muted {
-  font-size: 0.875em;
-}
-:is(main, .pots-page) > header:first-child > :last-child {
-  margin-bottom: 0;
-}
-:is(main, .pots-page) > header:first-child > :is(.pots-stats, .pots-points, .pots-cols, .pots-grid) {
-  max-width: none;
-  margin-top: 26px;
-}
-.pots-eyebrow {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 8px;
-  margin: 0 0 14px;
-  color: var(--pots-accent);
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1.4;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-.pots-eyebrow:lang(zh),
-.pots-eyebrow:lang(ja),
-.pots-eyebrow:lang(ko) {
-  font-size: 0.8125rem;
-  letter-spacing: 0.04em;
-}
-.pots-eyebrow[data-icon]::before {
-  width: 1.35em;
-  height: 1.35em;
-  margin: 0;
-}
-.pots-eyebrow + h1 {
-  margin-top: 0;
-}
-.pots-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 0;
-  list-style: none;
-  font-size: 0.8125rem;
-  line-height: 1.4;
-}
-.pots-meta > * {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0;
-  padding: 5px 11px;
-  border: 1px solid var(--pots-line);
-  border-radius: 999px;
-  background: var(--pots-raised);
-  color: var(--pots-muted);
-  font-weight: 550;
-  box-shadow: var(--pots-shadow-1);
-}
-.pots-meta > :is(b, strong) {
-  color: var(--pots-text);
-  font-weight: 600;
-}
-/* A coloured dot for a status: <span class="pots-good">Approved</span>; with data-icon, the icon takes the colour. */
-.pots-meta > :is(.pots-good, .pots-warn, .pots-bad, .pots-info)::before {
-  content: "";
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--pots-accent);
-}
-.pots-meta > .pots-good::before {
-  background: var(--pots-good);
-}
-.pots-meta > .pots-warn::before {
-  background: var(--pots-warn);
-}
-.pots-meta > .pots-bad::before {
-  background: var(--pots-bad);
-}
-.pots-meta > [data-icon]::before {
-  width: 1.15em;
-  height: 1.15em;
-  margin: 0;
-  border-radius: 0;
-}
-.pots-meta > :is(.pots-good, .pots-warn, .pots-bad, .pots-info) {
-  color: var(--pots-text);
-}
-
-/* ---- Contents: <nav class="pots-toc"> in <main>, after the header ----
-   Phone: a row at the top of the screen that scrolls sideways. Computer: a list at the left that stays in view. */
-
+/* ---- Contents. Phone: a row that scrolls sideways. Computer: Linear's sidebar list at the left ---- */
 .pots-toc {
   position: sticky;
   top: 0;
@@ -661,11 +504,11 @@ small {
   gap: 2px;
   overflow-x: auto;
   scrollbar-width: none;
-  margin: 0 -16px 24px;
-  padding: 6px 10px;
-  background: color-mix(in srgb, var(--pots-bg) 92%, transparent);
-  -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px);
+  margin: 0 -20px 40px;
+  padding: 8px 14px;
+  background: color-mix(in srgb, var(--pots-bg) 90%, transparent);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--pots-line);
 }
 .pots-toc::-webkit-scrollbar {
@@ -673,40 +516,48 @@ small {
 }
 .pots-toc a {
   flex: none;
-  padding: 6px 10px;
-  border-radius: 8px;
+  padding: 4px 8px;
+  border-radius: var(--pots-r);
   color: var(--pots-muted);
-  font-size: 0.875rem;
-  font-weight: 500;
-  line-height: 1.4;
+  font-size: 0.8125rem;
+  font-weight: 510;
+  line-height: 1.5;
+  letter-spacing: -0.01em;
   text-decoration: none;
-  transition: color 0.15s, background-color 0.15s;
+  transition: color 0.12s, background-color 0.12s;
 }
 .pots-toc a:hover {
   color: var(--pots-text);
+  background: var(--pots-soft);
 }
 .pots-toc a[aria-current="true"] {
-  color: var(--pots-text);
-  background: var(--pots-soft);
+  color: var(--pots-accent);
+  background: var(--pots-accent-soft);
 }
 .pots-toc a:focus-visible {
   outline: 2px solid var(--pots-accent);
   outline-offset: -2px;
 }
+@media (min-width: 720px) {
+  .pots-toc {
+    margin: 0 -32px 48px;
+    padding: 8px 26px;
+  }
+}
 @media (min-width: 1080px) {
   :is(main, .pots-page):has(> .pots-toc) {
-    max-width: calc(var(--pots-width) + var(--pots-toc) + 56px + 64px);
-    padding-left: calc(32px + var(--pots-toc) + 56px);
+    max-width: calc(var(--pots-width) + var(--pots-toc) + 64px + 64px);
+    padding-left: calc(32px + var(--pots-toc) + 64px);
   }
   .pots-toc {
     position: fixed;
-    top: 44px;
-    left: calc(max(0px, (100vw - (var(--pots-width) + var(--pots-toc) + 56px + 64px)) / 2) + 32px);
+    top: 72px;
+    left: calc(max(0px, (100vw - (var(--pots-width) + var(--pots-toc) + 64px + 64px)) / 2) + 32px);
     width: var(--pots-toc);
-    max-height: calc(100vh - 88px);
+    max-height: calc(100vh - 120px);
     overflow-y: auto;
     flex-direction: column;
-    gap: 0;
+    gap: 1px;
     margin: 0;
     padding: 0;
     background: none;
@@ -714,176 +565,151 @@ small {
     backdrop-filter: none;
     border-bottom: 0;
   }
-  /* A quiet title over the list, in the page's language. */
   .pots-toc::before {
     content: "On this page";
     display: block;
-    padding: 0 0 12px 14px;
-    color: var(--pots-muted);
+    padding: 0 8px 8px;
+    color: var(--pots-faint);
     font-size: 0.75rem;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    font-weight: 510;
+    line-height: 1.4;
   }
   .pots-toc:lang(zh)::before {
     content: "本页内容";
   }
   .pots-toc a {
-    padding: 5px 12px;
-    border-radius: 0;
-    border-left: 2px solid var(--pots-line);
+    padding: 3px 8px;
     white-space: normal;
-  }
-  .pots-toc a:hover {
-    border-left-color: color-mix(in srgb, var(--pots-text) 30%, var(--pots-line));
-  }
-  .pots-toc a[aria-current="true"] {
-    background: none;
-    color: var(--pots-accent);
-    font-weight: 650;
-    border-left-color: var(--pots-accent);
   }
 }
 
 /* ---- Layout blocks ---- */
-
-/* Side by side on a computer, one under the other on a phone: text next to its chart, two lists, before and after. */
 .pots-cols {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr));
-  gap: 24px 40px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+  gap: 24px 48px;
+  margin: 0 0 1.2em;
   align-items: start;
-  margin: 0 0 1em;
 }
 .pots-cols > * {
   min-width: 0;
+  margin: 0;
 }
-/* Cards in as many columns as fit. */
 .pots-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 16rem), 1fr));
-  gap: 14px;
+  gap: 16px;
   margin: 0 0 1.2em;
 }
+
 .pots-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 16px;
 }
 .pots-row > * {
   flex: 1 1 12rem;
+  margin: 0;
 }
-/* A card. Its first heading is a strip across its top, so cards side by side read as columns:
-   <div class="pots-card pots-good"><h3 data-icon="check">After</h3>…</div> */
+
+/* A card: no box. A hairline over it and its heading; a status shows as a dot before the heading, or as the
+   heading's icon in the status colour. .pots-info is the card that leads (the one to read first, or the choice you
+   recommend): a fine accent border and a light tint. */
 .pots-card {
-  --pots-k: var(--pots-text);
-  border: 1px solid var(--pots-line);
-  border-radius: var(--pots-radius);
-  padding: 16px 18px;
-  margin: 0 0 12px;
-  background: var(--pots-raised);
-  box-shadow: var(--pots-shadow-1);
+  --pots-k: var(--pots-faint);
+  min-width: 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--pots-line);
 }
-.pots-card > :is(h2, h3, h4):first-child {
-  margin: -16px -18px 14px;
-  padding: 11px 18px 10px;
-  border-bottom: 1px solid var(--pots-line);
-  border-radius: calc(var(--pots-radius) - 1px) calc(var(--pots-radius) - 1px) 0 0;
-  background: color-mix(in srgb, var(--pots-k) 4%, var(--pots-raised));
-  color: var(--pots-k);
-  font-size: 0.9375rem;
-  font-weight: 700;
-  line-height: 1.4;
-  letter-spacing: 0;
-}
-.pots-card > :is(h2, h3, h4):first-child small {
-  font-weight: 500;
-}
-/* A card that leads: the one to read first, or the choice you recommend. */
+.pots-card.pots-good { --pots-k: var(--pots-good-dot); }
+.pots-card.pots-warn { --pots-k: var(--pots-warn-dot); }
+.pots-card.pots-bad { --pots-k: var(--pots-bad-dot); }
 .pots-card.pots-info {
   --pots-k: var(--pots-accent);
-  border-color: color-mix(in srgb, var(--pots-accent) 55%, var(--pots-line));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--pots-accent) 55%, var(--pots-line)), var(--pots-shadow-2);
+  padding: 16px 20px 18px;
+  border: 1px solid var(--pots-accent-line);
+  border-radius: var(--pots-r-l);
+  background: var(--pots-accent-soft);
 }
-.pots-card.pots-good {
-  --pots-k: var(--pots-good);
-  border-color: color-mix(in srgb, var(--pots-good) 32%, var(--pots-line));
+.pots-card > :is(h2, h3, h4):first-child {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  font-size: 0.9375rem;
+  line-height: 1.5;
 }
-.pots-card.pots-warn {
-  --pots-k: var(--pots-warn);
-  border-color: color-mix(in srgb, var(--pots-warn) 32%, var(--pots-line));
+.pots-card > :is(h2, h3, h4):first-child::before {
+  content: "";
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin: 0;
+  border-radius: 50%;
+  background: var(--pots-k);
+  -webkit-mask: none;
+  mask: none;
 }
-.pots-card.pots-bad {
-  --pots-k: var(--pots-bad);
-  border-color: color-mix(in srgb, var(--pots-bad) 32%, var(--pots-line));
+.pots-card > :is(h2, h3, h4)[data-icon]:first-child::before {
+  width: 16px;
+  height: 16px;
+  border-radius: 0;
+  -webkit-mask: var(--pots-icon) center / contain no-repeat;
+  mask: var(--pots-icon) center / contain no-repeat;
 }
-.pots-card:is(.pots-info, .pots-good, .pots-warn, .pots-bad) > :is(h2, h3, h4):first-child {
-  background: color-mix(in srgb, var(--pots-k) 10%, var(--pots-raised));
-  border-bottom-color: color-mix(in srgb, var(--pots-k) 20%, var(--pots-line));
+.pots-card.pots-info > :is(h2, h3, h4):first-child {
+  color: var(--pots-accent);
 }
-/* A card without a heading keeps a coloured edge, so its kind still shows. */
-.pots-card:is(.pots-good, .pots-warn, .pots-bad):not(:has(> :is(h2, h3, h4):first-child)) {
-  box-shadow: inset 3px 0 0 var(--pots-k), var(--pots-shadow-1);
+.pots-card > :first-child {
+  margin-top: 0;
+}
+.pots-card > :last-child {
+  margin-bottom: 0;
+}
+.pots-card p {
+  font-size: 0.9375rem;
 }
 a.pots-card {
   display: block;
   color: inherit;
   text-decoration: none;
-  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
 }
-a.pots-card:hover {
-  border-color: color-mix(in srgb, var(--pots-accent) 40%, var(--pots-line));
-  box-shadow: var(--pots-shadow-2);
-  transform: translateY(-1px);
+a.pots-card:hover > :is(h2, h3, h4):first-child {
+  color: var(--pots-accent);
 }
-a.pots-card:focus-visible {
-  outline: 2px solid var(--pots-accent);
-  outline-offset: 2px;
-}
-.pots-grid > *,
-.pots-cols > *,
-.pots-row > * {
-  margin: 0;
-}
-.pots-card > :first-child,
-.pots-note > :first-child,
 .pots-cols > * > :first-child,
 [data-pots-tabs] > * > :first-child {
   margin-top: 0;
 }
-.pots-card > :is(h2, h3, h4):first-child {
-  margin-top: -16px;
-}
-.pots-card > :last-child,
-.pots-note > :last-child,
 .pots-cols > * > :last-child {
   margin-bottom: 0;
 }
 
 /* Key numbers: <div class="pots-stats"><div class="pots-stat"><b>$229</b><span>a week for two</span></div>…</div>
-   A change: <small class="pots-delta pots-good" data-icon="up">12% on last week</small>. data-icon on the stat puts its
-   icon at the top right. */
+   A hairline over each, the number large, its name under it. .pots-info puts the number in the accent, a status
+   colour means that status. A change: <small class="pots-delta pots-good" data-icon="up">12% on last week</small>.
+   data-icon on the stat puts its icon at the top right. */
 .pots-stats {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 8.5rem), 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+  gap: 16px 24px;
   margin: 0 0 1.6em;
 }
 .pots-stat {
+  --pots-k: var(--pots-faint);
   position: relative;
-  border: 1px solid var(--pots-line);
-  border-radius: var(--pots-radius);
-  background: var(--pots-raised);
-  box-shadow: var(--pots-shadow-1);
-  padding: 16px 18px 15px;
+  min-width: 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--pots-line);
   line-height: 1.4;
 }
 .pots-stat > :is(b, strong) {
   display: block;
-  font-size: clamp(1.65rem, 1.35rem + 1vw, 2.2rem);
-  font-weight: 750;
+  color: var(--pots-text);
+  font-size: clamp(1.75rem, 1.45rem + 1vw, 2.25rem);
+  font-weight: 590;
   line-height: 1.1;
-  letter-spacing: -0.03em;
+  letter-spacing: -0.022em;
   font-variant-numeric: tabular-nums;
 }
 .pots-stat > span,
@@ -891,53 +717,27 @@ a.pots-card:focus-visible {
   display: block;
   margin-top: 6px;
   color: var(--pots-muted);
+  font-size: 0.875rem;
 }
-.pots-stat > span {
-  font-size: 0.875em;
-}
-.pots-stat.pots-good > :is(b, strong) {
-  color: var(--pots-good);
-}
-.pots-stat.pots-warn > :is(b, strong) {
-  color: var(--pots-warn);
-}
-.pots-stat.pots-bad > :is(b, strong) {
-  color: var(--pots-bad);
-}
-.pots-stat.pots-info > :is(b, strong) {
-  color: var(--pots-accent);
-}
-.pots-stat[data-icon] > :is(b, strong) {
-  padding-right: 34px;
-}
-.pots-stat[data-icon]::before {
-  position: absolute;
-  top: 19px;
-  right: 19px;
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  color: var(--pots-accent);
-  z-index: 1;
-}
-.pots-stat[data-icon]::after {
-  content: "";
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  width: 30px;
-  height: 30px;
-  border-radius: var(--pots-radius-s);
-  background: var(--pots-accent-soft);
-}
-.pots-stat:is(.pots-good, .pots-warn, .pots-bad)[data-icon]::before {
-  color: var(--pots-k, currentColor);
-}
+.pots-stat.pots-info > :is(b, strong) { color: var(--pots-accent); }
+.pots-stat.pots-good > :is(b, strong) { color: var(--pots-good); }
+.pots-stat.pots-warn > :is(b, strong) { color: var(--pots-warn); }
+.pots-stat.pots-bad > :is(b, strong) { color: var(--pots-bad); }
+.pots-stat.pots-info { --pots-k: var(--pots-accent); }
 .pots-stat.pots-good { --pots-k: var(--pots-good); }
 .pots-stat.pots-warn { --pots-k: var(--pots-warn); }
 .pots-stat.pots-bad { --pots-k: var(--pots-bad); }
-.pots-stat:is(.pots-good, .pots-warn, .pots-bad)[data-icon]::after {
-  background: color-mix(in srgb, var(--pots-k) 13%, transparent);
+.pots-stat[data-icon] > :is(b, strong) {
+  padding-right: 28px;
+}
+.pots-stat[data-icon]::before {
+  position: absolute;
+  top: 18px;
+  right: 0;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  background: var(--pots-k);
 }
 .pots-delta,
 .pots-stat > .pots-delta {
@@ -946,426 +746,167 @@ a.pots-card:focus-visible {
   width: fit-content;
   gap: 3px;
   margin-top: 8px;
-  padding: 2px 8px 2px 6px;
-  border-radius: 7px;
-  line-height: 1.35;
+  padding: 1px 7px 1px 5px;
+  border-radius: var(--pots-r);
   background: var(--pots-soft);
   color: var(--pots-muted);
   font-size: 0.8125rem;
-  font-weight: 650;
+  font-weight: 510;
+  line-height: 1.5;
   font-variant-numeric: tabular-nums;
 }
 .pots-delta[data-icon]::before {
   width: 0.95em;
   height: 0.95em;
   margin: 0;
+  vertical-align: 0;
+  background: currentColor;
 }
-.pots-delta.pots-good {
-  background: var(--pots-good-soft);
-  color: var(--pots-good);
-}
-.pots-delta.pots-warn {
-  background: var(--pots-warn-soft);
-  color: var(--pots-warn);
-}
-.pots-delta.pots-bad {
-  background: var(--pots-bad-soft);
-  color: var(--pots-bad);
+.pots-delta.pots-good { background: var(--pots-good-soft); color: var(--pots-good); }
+.pots-delta.pots-warn { background: var(--pots-warn-soft); color: var(--pots-warn); }
+.pots-delta.pots-bad { background: var(--pots-bad-soft); color: var(--pots-bad); }
+.pots-delta:is(.pots-good, .pots-warn, .pots-bad):not([data-icon])::before {
+  content: none;
 }
 
-/* A note (a callout). Plain is blue; .pots-good, .pots-warn and .pots-bad colour it. An icon at the start shows which
-   kind it is (data-icon picks another); a <b> or <strong> that starts it is its title, on a line of its own. */
+/* A note (a callout): a light tint, a fine border and an icon. Plain is the accent; .pots-good, .pots-warn and
+   .pots-bad colour it. data-icon picks another icon; a <b> or <strong> that starts it is its title. */
 .pots-note:not([data-icon]) {
   --pots-icon: var(--pots-i-info);
 }
 .pots-note {
   --pots-n: var(--pots-accent);
   position: relative;
-  background: color-mix(in srgb, var(--pots-n) 7%, var(--pots-bg));
-  border: 1px solid color-mix(in srgb, var(--pots-n) 24%, transparent);
-  border-radius: var(--pots-radius);
-  padding: 13px 18px 13px 48px;
-  margin: 0 0 1em;
-  /* The middle of the first line, worked out here so the icon's size does not change it. */
+  margin: 24px 0;
+  padding: 14px 20px 14px 46px;
+  border: 1px solid color-mix(in srgb, var(--pots-n) 26%, var(--pots-line));
+  border-radius: var(--pots-r-m);
+  background: color-mix(in srgb, var(--pots-n) 6%, var(--pots-bg));
+  font-size: 0.9375rem;
   --pots-mid: 0.5lh;
 }
 .pots-note::before {
   content: "";
   position: absolute;
   left: 17px;
-  top: calc(13px + var(--pots-mid) - 10px);
-  width: 20px;
-  height: 20px;
+  top: calc(14px + var(--pots-mid) - 9px);
+  width: 18px;
+  height: 18px;
   margin: 0;
   background: var(--pots-n);
   -webkit-mask: var(--pots-icon) center / contain no-repeat;
   mask: var(--pots-icon) center / contain no-repeat;
 }
-.pots-note.pots-good {
-  --pots-n: var(--pots-good);
+.pots-note > :first-child {
+  margin-top: 0;
 }
-.pots-note.pots-good:not([data-icon]) {
-  --pots-icon: var(--pots-i-check);
+.pots-note > :last-child {
+  margin-bottom: 0;
 }
-.pots-note.pots-warn {
-  --pots-n: var(--pots-warn);
-}
-.pots-note.pots-warn:not([data-icon]) {
-  --pots-icon: var(--pots-i-warn);
-}
-.pots-note.pots-bad {
-  --pots-n: var(--pots-bad);
-}
-.pots-note.pots-bad:not([data-icon]) {
-  --pots-icon: var(--pots-i-ban);
-}
+.pots-note.pots-good { --pots-n: var(--pots-good); }
+.pots-note.pots-good:not([data-icon]) { --pots-icon: var(--pots-i-check); }
+.pots-note.pots-warn { --pots-n: var(--pots-warn); }
+.pots-note.pots-warn:not([data-icon]) { --pots-icon: var(--pots-i-warn); }
+.pots-note.pots-bad { --pots-n: var(--pots-bad); }
+.pots-note.pots-bad:not([data-icon]) { --pots-icon: var(--pots-i-ban); }
 .pots-note > :is(b, strong):first-child {
   display: block;
-  margin-bottom: 3px;
-  color: color-mix(in srgb, var(--pots-n) 75%, var(--pots-text));
+  margin-bottom: 2px;
 }
 
-/* Key points: the few things to take away, in a card with a tick before each. <ul class="pots-points">.
-   <ol class="pots-points"> numbers them; data-icon on an item draws that icon instead of the tick. */
-.pots-points {
-  list-style: none;
-  padding: 6px 20px;
-  margin: 0 0 1.4em;
+/* A label: a pill with a hairline round it. A status shows as a dot, or as its icon in the status colour;
+   .pots-info is in the accent. */
+.pots-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
   border: 1px solid var(--pots-line);
-  border-radius: var(--pots-radius);
-  background: var(--pots-raised);
-  box-shadow: var(--pots-shadow-1);
-  counter-reset: pots-point;
+  border-radius: 9999px;
+  color: var(--pots-text-2);
+  font-size: 0.75rem;
+  font-weight: 510;
+  line-height: 1;
+  white-space: nowrap;
+  vertical-align: 0.1em;
 }
-.pots-points > li:not([data-icon]) {
-  --pots-icon: var(--pots-i-check);
+.pots-badge.pots-info {
+  border-color: var(--pots-accent-line);
+  background: var(--pots-accent-soft);
+  color: var(--pots-accent);
+}
+.pots-badge::before {
+  margin: 0 5px 0 0;
+  vertical-align: 0;
+}
+.pots-badge:not([data-icon])::before {
+  width: 6px;
+  height: 6px;
+}
+.pots-badge[data-icon]::before {
+  width: 12px;
+  height: 12px;
+}
+
+/* Key points: a numbered list with the numbers in the accent, hairlines between. <ul> has small dots;
+   data-icon on an item draws that icon instead. */
+ol.pots-points,
+ul.pots-points {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: pt;
 }
 .pots-points > li {
   position: relative;
   margin: 0;
-  padding: 12px 0 12px 36px;
-  counter-increment: pots-point;
-  --pots-mid: 0.5lh;
-}
-.pots-points > li + li {
+  padding: 14px 0 14px 32px;
   border-top: 1px solid var(--pots-line);
+  counter-increment: pt;
 }
-/* The icon (::before) on a round tile (::after). */
+.pots-points > li:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
 .pots-points > li::before {
-  content: "";
-  position: absolute;
-  left: 5px;
-  top: calc(12px + var(--pots-mid) - 7px);
-  width: 14px;
-  height: 14px;
-  margin: 0;
-  background: var(--pots-accent);
-  -webkit-mask: var(--pots-icon) center / contain no-repeat;
-  mask: var(--pots-icon) center / contain no-repeat;
-  z-index: 1;
-}
-.pots-points > li::after {
-  content: "";
   position: absolute;
   left: 0;
-  top: calc(12px + var(--pots-mid) - 12px);
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  background: var(--pots-accent-soft);
+  top: 14px;
+}
+.pots-points > li:first-child::before {
+  top: 0;
 }
 ol.pots-points > li:not([data-icon])::before {
-  content: counter(pots-point);
-  left: 0;
-  top: calc(12px + var(--pots-mid) - 12px);
-  width: 24px;
-  height: 24px;
-  display: grid;
-  place-items: center;
-  background: none;
-  -webkit-mask: none;
-  mask: none;
+  content: counter(pt);
   color: var(--pots-accent);
-  font-size: 0.75rem;
-  font-weight: 750;
-  line-height: 1;
+  font-weight: 590;
   font-variant-numeric: tabular-nums;
+}
+ul.pots-points > li:not([data-icon])::before {
+  content: "";
+  left: 4px;
+  top: calc(14px + 0.5lh - 3px);
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--pots-accent);
+}
+ul.pots-points > li:not([data-icon]):first-child::before {
+  top: calc(0.5lh - 3px);
+}
+.pots-points > li[data-icon]::before {
+  margin-top: calc(0.5lh - 0.55em);
+  background: var(--pots-accent);
 }
 .pots-points > li.pots-good::before { background: var(--pots-good); }
-.pots-points > li.pots-good::after { background: var(--pots-good-soft); }
 .pots-points > li.pots-warn::before { background: var(--pots-warn); }
-.pots-points > li.pots-warn::after { background: var(--pots-warn-soft); }
 .pots-points > li.pots-bad::before { background: var(--pots-bad); }
-.pots-points > li.pots-bad::after { background: var(--pots-bad-soft); }
-.pots-points > li > :is(b, strong):first-child {
-  color: var(--pots-text);
-}
 
-/* A label in a line. Grey; .pots-good, .pots-warn, .pots-bad and .pots-info colour it. */
-.pots-badge {
-  display: inline-block;
-  padding: 0.05em 0.6em;
-  border-radius: 999px;
-  background: var(--pots-soft);
-  color: var(--pots-muted);
-  font-size: 0.8em;
-  font-weight: 650;
-  line-height: 1.6;
-  vertical-align: 0.06em;
-  white-space: nowrap;
-}
-.pots-badge[data-icon]::before {
-  width: 1em;
-  height: 1em;
-  margin-right: 0.3em;
-  vertical-align: -0.15em;
-}
-.pots-badge.pots-good {
-  background: var(--pots-good-soft);
-  color: var(--pots-good);
-}
-.pots-badge.pots-warn {
-  background: var(--pots-warn-soft);
-  color: var(--pots-warn);
-}
-.pots-badge.pots-bad {
-  background: var(--pots-bad-soft);
-  color: var(--pots-bad);
-}
-.pots-badge.pots-info {
-  background: var(--pots-accent-soft);
-  color: var(--pots-accent);
-}
-
-/* Steps in order: <ol class="pots-steps">. A timeline without numbers: <ul class="pots-steps">.
-   The marker sits on the middle of the first line; a hairline joins it to the next one. data-icon on an item draws
-   that icon in its marker. */
-@property --pots-mid {
-  syntax: "<length>";
-  inherits: true;
-  initial-value: 14px;
-}
-.pots-steps {
-  list-style: none;
-  padding: 0;
-  margin: 0 0 1.2em;
-  counter-reset: pots-step;
-}
-.pots-steps > li {
-  position: relative;
-  padding: 0 0 18px 42px;
-  margin: 0;
-  counter-increment: pots-step;
-  /* The middle of the first line, worked out here so the smaller marker text does not change it. */
-  --pots-mid: 0.5lh;
-  /* The line to the next marker. */
-  background: linear-gradient(var(--pots-line), var(--pots-line)) 12.5px calc(var(--pots-mid) + 17px) / 1.5px calc(100% - var(--pots-mid) - 18px) no-repeat;
-}
-.pots-steps > li::after {
-  content: counter(pots-step);
-  position: absolute;
-  left: 0;
-  top: calc(var(--pots-mid) - 13px);
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  background: var(--pots-accent);
-  color: var(--pots-accent-text);
-  font-size: 0.75rem;
-  font-weight: 750;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-  box-shadow: 0 0 0 3px var(--pots-bg);
-}
-.pots-steps > li[data-icon]::after {
-  content: "";
-}
-.pots-steps > li[data-icon]::before {
-  position: absolute;
-  left: 6px;
-  top: calc(var(--pots-mid) - 7px);
-  width: 14px;
-  height: 14px;
-  margin: 0;
-  background: var(--pots-accent-text);
-  z-index: 1;
-}
-.pots-steps > li:last-child {
-  padding-bottom: 0;
-  background: none;
-}
-ul.pots-steps > li::after {
-  content: "";
-  width: 13px;
-  height: 13px;
-  left: 6.5px;
-  top: calc(var(--pots-mid) - 6.5px);
-  background: var(--pots-bg);
-  box-shadow: inset 0 0 0 3px var(--pots-accent);
-}
-ul.pots-steps > li {
-  background-position: 12.5px calc(var(--pots-mid) + 11px);
-  background-size: 1.5px calc(100% - var(--pots-mid) - 12px);
-}
-ul.pots-steps > li:last-child {
-  background: none;
-}
-:is(ol, ul).pots-steps > li.pots-good::after { background: var(--pots-good); box-shadow: 0 0 0 3px var(--pots-bg); }
-:is(ol, ul).pots-steps > li.pots-warn::after { background: var(--pots-warn); box-shadow: 0 0 0 3px var(--pots-bg); }
-:is(ol, ul).pots-steps > li.pots-bad::after { background: var(--pots-bad); box-shadow: 0 0 0 3px var(--pots-bg); }
-ol.pots-steps > li.pots-muted::after { background: var(--pots-soft); color: var(--pots-muted); box-shadow: inset 0 0 0 1px var(--pots-line), 0 0 0 3px var(--pots-bg); }
-.pots-steps > li > :is(b, strong):first-child {
-  display: block;
-}
-/* A date or time over a step: <li><time>18 Nov</time><b>Launch</b> …</li> */
-.pots-steps > li > time:first-child {
-  display: block;
-  color: var(--pots-accent);
-  font-size: 0.8125rem;
-  font-weight: 700;
-  letter-spacing: 0.01em;
-  font-variant-numeric: tabular-nums;
-}
-
-/* A flow: boxes joined by arrows, for how something works. A fork goes in pots-lanes, one pots-lane per way.
-   <div class="pots-flow"><div class="pots-node"><b data-icon="chat">A message</b><span>…</span></div>
-   <div class="pots-node pots-info">…</div><div class="pots-lanes"><div class="pots-lane pots-good"><h3>…</h3>…</div>…</div></div> */
-.pots-flow {
-  --pots-arrow: color-mix(in srgb, var(--pots-text) 32%, transparent);
-  --pots-head: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M0 0h12L6 8z'/%3E%3C/svg%3E");
-  margin: 0 0 1.4em;
-}
-.pots-flow > * {
-  position: relative;
-  margin: 0;
-}
-.pots-flow > * + :not(figcaption) {
-  margin-top: 38px;
-}
-.pots-flow > * + :not(figcaption)::after {
-  content: "";
-  position: absolute;
-  left: calc(50% - 6px);
-  top: -34px;
-  width: 12px;
-  height: 30px;
-  background: var(--pots-arrow);
-  -webkit-mask: var(--pots-head) bottom / 12px 8px no-repeat, linear-gradient(#000, #000) center top / 2px calc(100% - 6px) no-repeat;
-  mask: var(--pots-head) bottom / 12px 8px no-repeat, linear-gradient(#000, #000) center top / 2px calc(100% - 6px) no-repeat;
-}
-.pots-flow > .pots-node {
-  max-width: 36rem;
-  margin-left: auto;
-  margin-right: auto;
-}
-.pots-node {
-  --pots-k: var(--pots-text);
-  padding: 13px 18px;
-  border: 1px solid var(--pots-line);
-  border-radius: var(--pots-radius);
-  background: var(--pots-raised);
-  box-shadow: var(--pots-shadow-1);
-  line-height: 1.55;
-}
-.pots-node > :is(b, strong) {
-  display: block;
-  color: var(--pots-k);
-}
-.pots-node > :is(span, small) {
-  display: block;
-  margin-top: 3px;
-  color: var(--pots-muted);
-  font-size: 0.92em;
-}
-.pots-node.pots-info {
-  --pots-k: var(--pots-accent);
-  background: color-mix(in srgb, var(--pots-accent) 7%, var(--pots-raised));
-  border-color: color-mix(in srgb, var(--pots-accent) 40%, var(--pots-line));
-}
-.pots-node.pots-good { --pots-k: var(--pots-good); border-color: color-mix(in srgb, var(--pots-good) 35%, var(--pots-line)); }
-.pots-node.pots-warn { --pots-k: var(--pots-warn); border-color: color-mix(in srgb, var(--pots-warn) 35%, var(--pots-line)); }
-.pots-node.pots-bad { --pots-k: var(--pots-bad); border-color: color-mix(in srgb, var(--pots-bad) 35%, var(--pots-line)); }
-.pots-lanes {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
-  gap: 14px 20px;
-}
-.pots-lane {
-  --pots-k: var(--pots-accent);
-  position: relative;
-  min-width: 0;
-  padding: 14px;
-  border: 1px solid color-mix(in srgb, var(--pots-k) 22%, transparent);
-  border-radius: var(--pots-radius-l);
-  background: color-mix(in srgb, var(--pots-k) 7%, var(--pots-bg));
-}
-.pots-lane.pots-good { --pots-k: var(--pots-good); }
-.pots-lane.pots-warn { --pots-k: var(--pots-warn); }
-.pots-lane.pots-bad { --pots-k: var(--pots-bad); }
-.pots-lane > :is(h3, h4, b):first-child {
-  display: block;
-  margin: 2px 4px 12px;
-  color: var(--pots-k);
-  font-size: 1rem;
-  line-height: 1.4;
-}
-.pots-lane > .pots-node {
-  border-color: transparent;
-}
-.pots-lane > .pots-node + .pots-node {
-  margin-top: 8px;
-}
-.pots-flow > figcaption {
-  margin: 14px auto 0;
-  max-width: 46rem;
-  text-align: center;
-}
-/* On a computer the ways sit side by side, and the arrow splits: a stub, a bar, an arrow into each way. */
-@media (min-width: 720px) {
-  .pots-flow > .pots-lanes {
-    grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
-  }
-  .pots-flow > * + .pots-lanes::after {
-    top: -38px;
-    height: 18px;
-    -webkit-mask: linear-gradient(#000, #000) center / 2px 100% no-repeat;
-    mask: linear-gradient(#000, #000) center / 2px 100% no-repeat;
-  }
-  .pots-flow > .pots-lanes::before {
-    content: "";
-    position: absolute;
-    top: -21px;
-    left: calc(25% - 5px);
-    right: calc(25% - 5px);
-    height: 2px;
-    border-radius: 1px;
-    background: var(--pots-arrow);
-  }
-  .pots-flow > .pots-lanes:has(> :nth-child(3))::before {
-    left: calc(100% / 6 - 7px);
-    right: calc(100% / 6 - 7px);
-  }
-  .pots-flow > .pots-lanes > .pots-lane::after {
-    content: "";
-    position: absolute;
-    left: calc(50% - 6px);
-    top: -21px;
-    width: 12px;
-    height: 19px;
-    background: var(--pots-arrow);
-    -webkit-mask: var(--pots-head) bottom / 12px 8px no-repeat, linear-gradient(#000, #000) center top / 2px calc(100% - 6px) no-repeat;
-    mask: var(--pots-head) bottom / 12px 8px no-repeat, linear-gradient(#000, #000) center top / 2px calc(100% - 6px) no-repeat;
-  }
-}
-
-/* Name and value pairs: <dl class="pots-kv"><dt>Rice</dt><dd>1 bowl</dd></dl>
-   Each pair is a row on a hairline, like a glossary. In a pots-card it is a glossary card. */
+/* Name and value pairs: <dl class="pots-kv"><dt>Rice</dt><dd>1 bowl</dd></dl>, each pair a row on a hairline. */
 .pots-kv {
   display: grid;
   grid-template-columns: minmax(2.5em, max-content) 1fr;
-  column-gap: 20px;
+  column-gap: 24px;
 }
 .pots-kv > :is(dt, dd) {
   padding: 8px 0;
@@ -1384,69 +925,280 @@ ol.pots-steps > li.pots-muted::after { background: var(--pots-soft); color: var(
 .pots-kv > dd {
   margin: 0;
 }
-/* In a card, the names lead: they are the terms. */
 .pots-card > .pots-kv > dt {
   color: var(--pots-text);
-  font-weight: 600;
+  font-weight: 510;
 }
-.pots-card > .pots-kv > dd {
+
+/* A pull quote: what someone said, larger, with who said it. <blockquote class="pots-quote"><p>…</p><footer>Name</footer> */
+blockquote {
+  margin-left: 0;
+  padding: 0.1em 0 0.1em 1em;
+  border-left: 2px solid var(--pots-line-2);
   color: var(--pots-muted);
 }
-/* Terms to learn, each on a small card: <dl class="pots-terms"><div><dt>Wake</dt><dd>…</dd></div>…</dl> */
+blockquote.pots-quote {
+  margin: 1.6em 0;
+  padding: 0.1em 0 0.1em 1.2em;
+  border-left: 2px solid var(--pots-accent);
+  color: var(--pots-text);
+  font-size: 1.1875rem;
+  font-weight: 510;
+  line-height: 1.55;
+  letter-spacing: -0.012em;
+}
+blockquote.pots-quote > :is(footer, cite, small) {
+  display: block;
+  margin-top: 0.6em;
+  color: var(--pots-muted);
+  font-size: 0.8125rem;
+  font-style: normal;
+  letter-spacing: 0;
+}
+blockquote.pots-quote > :is(footer, cite, small)::before {
+  content: "— ";
+}
+blockquote.pots-quote > :last-child {
+  margin-bottom: 0;
+}
+
+/* Terms: a list of names and meanings, like Linear's docs glossary, no boxes. */
 .pots-terms {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 14rem), 1fr));
-  gap: 10px;
-  margin: 0 0 1.2em;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+  gap: 20px 32px;
+  margin: 0;
 }
 .pots-terms > div {
-  padding: 12px 15px 13px;
-  border: 1px solid var(--pots-line);
-  border-radius: var(--pots-radius);
-  background: var(--pots-raised);
-  box-shadow: var(--pots-shadow-1);
+  min-width: 0;
 }
 .pots-terms dt {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   color: var(--pots-text);
-  font-weight: 700;
-  line-height: 1.4;
-}
-.pots-terms dt:not([data-icon])::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  border-radius: 2px;
-  background: var(--pots-accent);
-}
-.pots-terms dt[data-icon]::before {
-  margin: 0;
-  color: var(--pots-accent);
+  font-weight: 590;
+  font-size: 0.9375rem;
 }
 .pots-terms dd {
-  margin: 4px 0 0;
+  margin: 2px 0 0;
   color: var(--pots-muted);
-  font-size: 0.9em;
-  line-height: 1.6;
+  font-size: 0.875rem;
+  line-height: 1.65;
 }
 
-/* ---- Tables: hairline rows; a wide one scrolls inside itself, never the page ----
-   pots-ui.js puts each table in <div class="pots-scroll">, so the table can take the full width and still scroll. */
+/* Steps in order: small numbers on a thin line. */
+ol.pots-steps,
+ul.pots-steps {
+  margin: 0 0 1.2em;
+  padding: 0;
+  list-style: none;
+  counter-reset: st;
+}
+.pots-steps > li {
+  position: relative;
+  margin: 0;
+  padding: 0 0 18px 36px;
+  counter-increment: st;
+}
+.pots-steps > li::before {
+  content: counter(st);
+  position: absolute;
+  left: 0;
+  top: calc(0.5lh - 11px);
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--pots-accent-line);
+  border-radius: 50%;
+  background: var(--pots-bg);
+  color: var(--pots-accent);
+  font-size: 0.75rem;
+  font-weight: 510;
+  line-height: 20px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+ul.pots-steps > li::before {
+  content: "";
+  width: 9px;
+  height: 9px;
+  left: 6.5px;
+  top: calc(0.5lh - 4.5px);
+}
+.pots-steps > li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 11px;
+  top: calc(0.5lh + 14px);
+  bottom: 2px;
+  width: 1px;
+  background: var(--pots-line);
+}
+.pots-steps > li:last-child {
+  padding-bottom: 0;
+}
 
+/* A date or time over a step: <li><time>18 Nov</time><b>Launch</b> …</li> */
+.pots-steps > li > time:first-child {
+  display: block;
+  color: var(--pots-accent);
+  font-size: 0.8125rem;
+  font-weight: 510;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- A flow: plain boxes with hairlines and thin arrows; a fork is two columns with a status dot over each ---- */
+.pots-flow {
+  --pots-arrow: var(--pots-line-2);
+  --pots-head: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M0 0h10L5 6z'/%3E%3C/svg%3E");
+  margin: 8px 0 1.4em;
+}
+.pots-flow > * {
+  position: relative;
+  margin: 0;
+}
+.pots-flow > * + :not(figcaption) {
+  margin-top: 32px;
+}
+.pots-flow > * + :not(figcaption)::after {
+  content: "";
+  position: absolute;
+  left: calc(50% - 5px);
+  top: -28px;
+  width: 10px;
+  height: 24px;
+  background: var(--pots-arrow);
+  -webkit-mask: var(--pots-head) bottom / 10px 6px no-repeat, linear-gradient(#000, #000) center top / 1px calc(100% - 5px) no-repeat;
+  mask: var(--pots-head) bottom / 10px 6px no-repeat, linear-gradient(#000, #000) center top / 1px calc(100% - 5px) no-repeat;
+}
+.pots-flow > .pots-node {
+  max-width: 34rem;
+  margin-left: auto;
+  margin-right: auto;
+}
+.pots-node {
+  padding: 12px 16px;
+  border: 1px solid var(--pots-line);
+  border-radius: var(--pots-r-m);
+  background: var(--pots-bg);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+.pots-node.pots-info {
+  border-color: var(--pots-accent-line);
+  background: var(--pots-accent-soft);
+}
+.pots-node.pots-good { border-color: color-mix(in srgb, var(--pots-good) 30%, var(--pots-line)); }
+.pots-node.pots-warn { border-color: color-mix(in srgb, var(--pots-warn) 30%, var(--pots-line)); }
+.pots-node.pots-bad { border-color: color-mix(in srgb, var(--pots-bad) 30%, var(--pots-line)); }
+.pots-node > :is(b, strong) {
+  display: block;
+  color: var(--pots-text);
+}
+.pots-node > :is(span, small) {
+  display: block;
+  margin-top: 2px;
+  color: var(--pots-muted);
+  font-size: 0.875rem;
+}
+.pots-lanes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
+  gap: 24px 24px;
+}
+.pots-lane {
+  --pots-k: var(--pots-faint);
+  position: relative;
+  min-width: 0;
+}
+.pots-lane.pots-good { --pots-k: var(--pots-good-dot); }
+.pots-lane.pots-warn { --pots-k: var(--pots-warn-dot); }
+.pots-lane.pots-bad { --pots-k: var(--pots-bad-dot); }
+.pots-lane > :is(h3, h4, b):first-child {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  color: var(--pots-text);
+  font-size: 0.875rem;
+  font-weight: 590;
+  line-height: 1.5;
+}
+.pots-lane > :is(h3, h4, b):first-child::before {
+  content: "";
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin: 0;
+  border-radius: 50%;
+  background: var(--pots-k);
+  -webkit-mask: none;
+  mask: none;
+}
+.pots-lane > :is(h3, h4, b)[data-icon]:first-child::before {
+  width: 16px;
+  height: 16px;
+  border-radius: 0;
+  -webkit-mask: var(--pots-icon) center / contain no-repeat;
+  mask: var(--pots-icon) center / contain no-repeat;
+}
+.pots-lane > .pots-node + .pots-node {
+  margin-top: 8px;
+}
+.pots-flow > figcaption {
+  margin: 20px auto 0;
+  max-width: 40rem;
+  color: var(--pots-muted);
+  font-size: 0.875rem;
+  text-align: center;
+}
+@media (min-width: 720px) {
+  .pots-flow > .pots-lanes {
+    grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  }
+  .pots-flow > * + .pots-lanes::after {
+    top: -32px;
+    height: 16px;
+    -webkit-mask: linear-gradient(#000, #000) center / 1px 100% no-repeat;
+    mask: linear-gradient(#000, #000) center / 1px 100% no-repeat;
+  }
+  .pots-flow > .pots-lanes::before {
+    content: "";
+    position: absolute;
+    top: -16px;
+    left: calc(25% - 6px);
+    right: calc(25% - 6px);
+    height: 1px;
+    background: var(--pots-arrow);
+  }
+  .pots-flow > .pots-lanes:has(> :nth-child(3))::before {
+    left: calc(100% / 6 - 8px);
+    right: calc(100% / 6 - 8px);
+  }
+  .pots-flow > .pots-lanes > .pots-lane::after {
+    content: "";
+    position: absolute;
+    left: calc(50% - 5px);
+    top: -16px;
+    width: 10px;
+    height: 14px;
+    background: var(--pots-arrow);
+    -webkit-mask: var(--pots-head) bottom / 10px 6px no-repeat, linear-gradient(#000, #000) center top / 1px calc(100% - 5px) no-repeat;
+    mask: var(--pots-head) bottom / 10px 6px no-repeat, linear-gradient(#000, #000) center top / 1px calc(100% - 5px) no-repeat;
+  }
+}
+
+/* ---- Tables: hairline rows, headers in text-mini weight 510, no capitals ---- */
 table {
   display: block;
   max-width: 100%;
   overflow-x: auto;
   border-collapse: collapse;
-  font-size: 0.9375em;
-  line-height: 1.5;
+  font-size: 0.9375rem;
+  line-height: 1.6;
   font-variant-numeric: tabular-nums;
 }
 .pots-scroll {
   overflow-x: auto;
-  margin: 0 0 1.2em;
+  margin: 0 0 1.4em;
 }
 .pots-scroll > table {
   display: table;
@@ -1457,7 +1209,7 @@ table {
 }
 th,
 td {
-  padding: 10px 14px;
+  padding: 10px 16px;
   border-bottom: 1px solid var(--pots-line);
   text-align: left;
   vertical-align: top;
@@ -1469,19 +1221,18 @@ td {
   padding-right: 0;
 }
 thead th {
-  padding-top: 6px;
+  padding-top: 4px;
   padding-bottom: 8px;
-  font-size: 0.75rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
   color: var(--pots-muted);
+  font-size: 0.8125rem;
+  font-weight: 510;
   white-space: nowrap;
   vertical-align: bottom;
-  border-bottom-color: color-mix(in srgb, var(--pots-text) 22%, transparent);
 }
+tbody td:first-child,
 tbody th {
-  font-weight: 600;
+  color: var(--pots-text);
+  font-weight: 510;
 }
 tr:last-child > td {
   border-bottom: 0;
@@ -1491,7 +1242,6 @@ th.pots-num {
   text-align: right;
   white-space: nowrap;
 }
-/* A table that becomes one card per row on a phone. Give each cell its column name: <td data-label="Price">. */
 @media (max-width: 640px) {
   table.pots-stack,
   .pots-scroll:has(> table.pots-stack) {
@@ -1509,27 +1259,24 @@ th.pots-num {
     display: block;
   }
   table.pots-stack tr {
-    background: var(--pots-raised);
-    box-shadow: var(--pots-shadow-1);
-    border: 1px solid var(--pots-line);
-    border-radius: var(--pots-radius);
-    padding: 12px 16px;
-    margin: 0 0 10px;
+    padding: 14px 0;
+    border-top: 1px solid var(--pots-line);
+  }
+  table.pots-stack tr:last-child {
+    padding-bottom: 0;
   }
   table.pots-stack :is(td, th) {
     display: grid;
-    grid-template-columns: 6em 1fr;
+    grid-template-columns: 5.5em 1fr;
     justify-items: start;
     align-items: baseline;
     gap: 12px;
-    padding: 3px 0;
+    padding: 2px 0;
     border: 0;
-    text-align: left;
     white-space: normal;
   }
   table.pots-stack tr > :first-child {
     display: block;
-    font-weight: 650;
     padding-bottom: 6px;
   }
   table.pots-stack td:empty {
@@ -1538,34 +1285,28 @@ th.pots-num {
   table.pots-stack td[data-label]::before {
     content: attr(data-label);
     color: var(--pots-muted);
-    font-size: 0.875em;
+    font-size: 0.8125rem;
+    font-weight: 510;
   }
 }
 
-/* ---- Folding: <details> for what only some readers need ---- */
-
+/* ---- Folding ---- */
 details:not(.pots-comment) {
-  border: 1px solid var(--pots-line);
-  border-radius: var(--pots-radius);
   margin: 0 0 8px;
-  padding: 0 16px;
-  background: var(--pots-raised);
-  box-shadow: var(--pots-shadow-1);
+  border-top: 1px solid var(--pots-line);
+  border-bottom: 1px solid var(--pots-line);
 }
-details:not(.pots-comment) > summary:hover {
-  color: var(--pots-accent);
-}
-details:not(.pots-comment) > summary:focus-visible {
-  outline: 2px solid var(--pots-accent);
-  outline-offset: 2px;
-  border-radius: 4px;
+details:not(.pots-comment) + details:not(.pots-comment) {
+  margin-top: -9px;
 }
 details:not(.pots-comment) > summary {
   position: relative;
   cursor: pointer;
   list-style: none;
-  padding: 11px 26px 11px 0;
-  font-weight: 650;
+  padding: 12px 0 12px 22px;
+  color: var(--pots-text);
+  font-size: 0.9375rem;
+  font-weight: 510;
 }
 details:not(.pots-comment) > summary::-webkit-details-marker {
   display: none;
@@ -1573,29 +1314,360 @@ details:not(.pots-comment) > summary::-webkit-details-marker {
 details:not(.pots-comment) > summary::after {
   content: "";
   position: absolute;
-  right: 4px;
-  top: 50%;
-  width: 7px;
-  height: 7px;
-  margin-top: -5px;
-  border-right: 2px solid var(--pots-muted);
-  border-bottom: 2px solid var(--pots-muted);
-  transform: rotate(45deg);
+  left: 3px;
+  top: calc(12px + 0.5lh - 4px);
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid var(--pots-muted);
+  border-bottom: 1.5px solid var(--pots-muted);
+  transform: rotate(-45deg);
+  transition: transform 0.15s;
 }
 details[open]:not(.pots-comment) > summary::after {
-  transform: translateY(3px) rotate(-135deg);
+  transform: translateY(-2px) rotate(45deg);
+}
+details:not(.pots-comment) > summary:hover {
+  color: var(--pots-text);
+}
+details:not(.pots-comment) > summary:focus-visible {
+  outline: 2px solid var(--pots-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 details[open]:not(.pots-comment) {
-  padding-bottom: 12px;
+  padding-bottom: 16px;
 }
 details:not(.pots-comment) > :last-child {
   margin-bottom: 0;
 }
-details:not(.pots-comment) > summary :is(small, .pots-muted) {
-  font-weight: 400;
+details:not(.pots-comment) li {
+  color: var(--pots-muted);
 }
 
-/* ---- Moving parts drawn by pots-ui.js ---- */
+/* ---- Forms (answer pages): a question is a box with a fine border; its legend has a question icon in the accent.
+   Its choices are bordered rows; the chosen one, which starts as the recommended one, has an accent border and tint ---- */
+form[data-pots] [data-pots-question],
+fieldset {
+  min-width: 0;
+  max-width: var(--pots-measure);
+  margin: 32px 0 0;
+  padding: 18px 22px 20px;
+  border: 1px solid var(--pots-line);
+  border-radius: var(--pots-r-l);
+  background: var(--pots-bg);
+}
+fieldset [data-pots-question],
+[data-pots-question] fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+legend {
+  float: left;
+  width: 100%;
+  margin: 0 0 14px;
+  padding: 0;
+  color: var(--pots-text);
+  font-size: 1.0625rem;
+  font-weight: 590;
+  line-height: 1.45;
+  letter-spacing: -0.012em;
+}
+legend + * {
+  clear: both;
+}
+:is(fieldset, [data-pots-question]) > legend:not([data-icon]) {
+  --pots-icon: var(--pots-i-question);
+}
+:is(fieldset, [data-pots-question]) > legend::before {
+  content: "";
+  display: inline-block;
+  width: 1.05em;
+  height: 1.05em;
+  margin-right: 0.45em;
+  vertical-align: -0.17em;
+  background: var(--pots-accent);
+  -webkit-mask: var(--pots-icon) center / contain no-repeat;
+  mask: var(--pots-icon) center / contain no-repeat;
+}
+[data-pots-question] > :is(h2, h3, h4):first-child {
+  margin-top: 0;
+}
+label {
+  display: block;
+  color: var(--pots-text);
+  font-size: 0.9375rem;
+  font-weight: 510;
+}
+label + label {
+  margin-top: 12px;
+}
+/* A choice: the whole row is the tap target; it can have a title and a line of explanation under it. */
+label:has(> input[type="radio"]),
+label:has(> input[type="checkbox"]),
+.pots-choice {
+  display: block;
+  position: relative;
+  min-height: 48px;
+  padding: 12px 16px 13px 42px;
+  border: 1px solid var(--pots-line-2);
+  border-radius: var(--pots-r-m);
+  background: var(--pots-bg);
+  color: var(--pots-text-2);
+  font-weight: 400;
+  line-height: 1.6;
+  cursor: pointer;
+  transition: border-color 0.12s, background-color 0.12s, box-shadow 0.12s;
+}
+label:has(> input[type="radio"]) + label:has(> input[type="radio"]),
+label:has(> input[type="checkbox"]) + label:has(> input[type="checkbox"]) {
+  margin-top: 8px;
+}
+label:has(> input[type="radio"]):hover,
+label:has(> input[type="checkbox"]):hover,
+.pots-choice:hover {
+  border-color: var(--pots-faint);
+}
+label:has(> input[type="radio"]) > input,
+label:has(> input[type="checkbox"]) > input,
+.pots-choice > input {
+  position: absolute;
+  left: 15px;
+  top: calc(12px + 0.8em - 8px);
+}
+label:has(> input) > b {
+  color: var(--pots-text);
+  font-weight: 590;
+}
+/* Its explanation goes on a line of its own: <label><input type="radio" …> Test <small>Nobody sees it</small></label> */
+:is(label:has(> input[type="radio"]), label:has(> input[type="checkbox"]), .pots-choice) > :is(small, .pots-muted) {
+  display: block;
+  margin-top: 4px;
+  color: var(--pots-muted);
+  font-size: 0.875rem;
+  line-height: 1.65;
+}
+label:has(> input[type="radio"]:checked),
+label:has(> input[type="checkbox"]:checked),
+label:has(> input[type="radio"]:checked):hover,
+label:has(> input[type="checkbox"]:checked):hover {
+  border-color: var(--pots-accent);
+  background: var(--pots-accent-soft);
+  box-shadow: inset 0 0 0 0.5px var(--pots-accent);
+}
+label:has(> input:focus-visible) {
+  outline: 2px solid var(--pots-accent);
+  outline-offset: 2px;
+}
+input[type="radio"],
+input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex: none;
+  accent-color: var(--pots-accent);
+}
+/* Yes or no: two choices side by side, in the good and the bad colour when chosen. */
+.pots-approve {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}
+.pots-approve label,
+.pots-approve label + label {
+  flex: 1 1 9rem;
+  margin: 0;
+  font-weight: 510;
+}
+.pots-approve > label:has(> input[type]) + label:has(> input[type]) {
+  margin-top: 0;
+}
+.pots-approve input[value="approve"] {
+  accent-color: var(--pots-good);
+}
+.pots-approve input[value="reject"] {
+  accent-color: var(--pots-bad);
+}
+.pots-approve label:has(input[value="approve"]:checked),
+.pots-approve label:has(input[value="approve"]:checked):hover {
+  border-color: var(--pots-good);
+  background: var(--pots-good-soft);
+  box-shadow: inset 0 0 0 0.5px var(--pots-good);
+  color: var(--pots-good);
+}
+.pots-approve label:has(input[value="reject"]:checked),
+.pots-approve label:has(input[value="reject"]:checked):hover {
+  border-color: var(--pots-bad);
+  background: var(--pots-bad-soft);
+  box-shadow: inset 0 0 0 0.5px var(--pots-bad);
+  color: var(--pots-bad);
+}
+input:not([type="radio"], [type="checkbox"], [type="submit"], [type="button"], [type="range"], [type="color"]),
+select,
+textarea {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px 12px;
+  /* 16px or more, so phones do not zoom in on the field. */
+  font: 400 16px/1.6 var(--pots-font);
+  color: var(--pots-text);
+  background: var(--pots-bg);
+  border: 1px solid var(--pots-line-2);
+  border-radius: var(--pots-r);
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+:is(input, select, textarea):hover {
+  border-color: var(--pots-faint);
+}
+::placeholder {
+  color: var(--pots-faint);
+}
+input[type="range"] {
+  width: 100%;
+  accent-color: var(--pots-accent);
+}
+textarea {
+  min-height: 6em;
+  resize: vertical;
+}
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--pots-accent);
+  outline-offset: 1px;
+}
+:is(input:not([type="radio"], [type="checkbox"], [type="range"]), select, textarea):focus {
+  outline: none;
+  border-color: var(--pots-accent);
+  box-shadow: 0 0 0 1px var(--pots-accent);
+}
+input[type="range"]:focus-visible {
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+details.pots-comment {
+  margin-top: 12px;
+}
+details.pots-comment > summary {
+  display: inline-block;
+  padding: 4px 0;
+  color: var(--pots-accent);
+  font-size: 0.875rem;
+  font-weight: 510;
+  cursor: pointer;
+  list-style: none;
+}
+details.pots-comment > summary:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+details.pots-comment > summary::-webkit-details-marker {
+  display: none;
+}
+details.pots-comment > summary::before {
+  content: "+ ";
+}
+details.pots-comment[open] > summary::before {
+  content: "− ";
+}
+/* The button: the accent as the fill. */
+button,
+input[type="submit"],
+input[type="button"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: var(--pots-r);
+  background: var(--pots-accent);
+  color: var(--pots-accent-text);
+  font: 510 0.9375rem/1 var(--pots-font);
+  letter-spacing: -0.011em;
+  cursor: pointer;
+  transition: background-color 0.12s;
+}
+button:hover,
+input[type="submit"]:hover,
+input[type="button"]:hover {
+  background: color-mix(in srgb, var(--pots-accent) 86%, var(--pots-text));
+}
+button:focus-visible,
+input[type="submit"]:focus-visible,
+input[type="button"]:focus-visible {
+  outline: 2px solid var(--pots-accent);
+  outline-offset: 2px;
+}
+form button[type="submit"],
+form button:not([type]),
+form input[type="submit"] {
+  width: 100%;
+  min-height: 44px;
+  margin-top: 8px;
+}
+@media (min-width: 720px) {
+  form button[type="submit"],
+  form button:not([type]),
+  form input[type="submit"] {
+    width: auto;
+    min-height: 40px;
+    padding: 0 24px;
+  }
+}
+button.pots-secondary {
+  background: var(--pots-bg);
+  color: var(--pots-text);
+  box-shadow: inset 0 0 0 1px var(--pots-line-2);
+}
+button.pots-secondary:hover {
+  background: var(--pots-soft);
+}
+form button + button {
+  margin-left: 8px;
+}
+button:disabled,
+input:disabled,
+select:disabled,
+textarea:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+button:disabled:hover:not(.pots-secondary) {
+  background: var(--pots-accent);
+}
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+[data-pots-status] {
+  margin: 12px 0 0;
+  font-weight: 510;
+}
+[data-pots-status]:empty {
+  display: none;
+}
+[data-pots-status][data-state="done"] {
+  color: var(--pots-good);
+}
+[data-pots-status][data-state="failed"] {
+  color: var(--pots-bad);
+}
+[data-pots-status][data-state="retrying"],
+[data-pots-status][data-state="sending"] {
+  color: var(--pots-muted);
+}
+form[data-pots-state="done"] [data-pots-question],
+form[data-pots-state="gone"] [data-pots-question] {
+  opacity: 0.75;
+}
+
+/* ---- Moving parts drawn by pots-ui.js, and what pots.js adds ---- */
 
 /* Tabs: <div data-pots-tabs><section data-tab="Rice">…</section>…</div>. data-pots-tabs="phone": tabs on a phone only;
    a computer shows every panel (lay them out with a class of your own, such as pots-cols). */
@@ -1607,8 +1679,9 @@ details:not(.pots-comment) > summary :is(small, .pots-muted) {
   overflow-x: auto;
   scrollbar-width: none;
   margin: 0 0 16px;
-  padding: 3px;
-  border-radius: 10px;
+  padding: 2px;
+  border: 1px solid var(--pots-line);
+  border-radius: var(--pots-r-m);
   background: var(--pots-soft);
 }
 .pots-tabbar::-webkit-scrollbar {
@@ -1616,15 +1689,15 @@ details:not(.pots-comment) > summary :is(small, .pots-muted) {
 }
 .pots-tabbar button {
   flex: none;
-  min-height: 36px;
+  min-height: 34px;
   margin: 0;
   padding: 5px 14px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--pots-r);
   background: none;
   box-shadow: none;
   color: var(--pots-muted);
-  font: 600 0.875rem/1.3 var(--pots-font);
+  font: 510 0.875rem/1.3 var(--pots-font);
   transition: color 0.15s, background-color 0.15s, box-shadow 0.15s;
 }
 .pots-tabbar button:hover {
@@ -1633,8 +1706,8 @@ details:not(.pots-comment) > summary :is(small, .pots-muted) {
 }
 .pots-tabbar button[aria-selected="true"] {
   background: var(--pots-bg);
-  color: var(--pots-text);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1), 0 0 0 1px color-mix(in srgb, var(--pots-text) 6%, transparent);
+  color: var(--pots-accent);
+  box-shadow: 0 0 0 1px var(--pots-line-2);
 }
 .pots-tabbar button:focus-visible {
   outline: 2px solid var(--pots-accent);
@@ -1642,6 +1715,9 @@ details:not(.pots-comment) > summary :is(small, .pots-muted) {
 }
 .pots-cols > .pots-tabbar {
   margin-bottom: 0;
+}
+[data-pots-tabs] > section {
+  margin-top: 0;
 }
 [data-pots-tabs]:not([data-pots-tabs="phone"]) > .pots-off {
   display: none;
@@ -1671,7 +1747,7 @@ details:not(.pots-comment) > summary :is(small, .pots-muted) {
   margin: 0 0 14px;
   color: var(--pots-text);
   font-size: 0.9375em;
-  font-weight: 650;
+  font-weight: 590;
   line-height: 1.4;
 }
 .pots-chart details.pots-data {
@@ -1687,7 +1763,7 @@ details:not(.pots-comment) > summary :is(small, .pots-muted) {
   padding: 4px 0;
   color: var(--pots-muted);
   font-size: 0.8125rem;
-  font-weight: 500;
+  font-weight: 510;
   text-decoration: underline;
   text-decoration-color: color-mix(in srgb, var(--pots-muted) 40%, transparent);
   text-underline-offset: 3px;
@@ -1715,7 +1791,7 @@ details:not(.pots-comment) > summary :is(small, .pots-muted) {
   line-height: 1.4;
 }
 .pots-hbars > li > .pots-v {
-  font-weight: 600;
+  font-weight: 590;
   font-variant-numeric: tabular-nums;
   text-align: right;
   white-space: nowrap;
@@ -1723,16 +1799,16 @@ details:not(.pots-comment) > summary :is(small, .pots-muted) {
 .pots-hbars .pots-track {
   grid-column: 1 / -1;
   position: relative;
-  height: 12px;
+  height: 10px;
   margin-top: 6px;
-  border-radius: 3px;
+  border-radius: 2px;
   background: var(--pots-track);
 }
 .pots-hbars .pots-fill {
   position: absolute;
   inset: 0 auto 0 0;
   width: var(--v, 0%);
-  border-radius: 3px;
+  border-radius: 2px;
   background: var(--pots-c1);
 }
 .pots-hbars li.pots-good .pots-fill {
@@ -1784,7 +1860,7 @@ details:not(.pots-comment) > summary :is(small, .pots-muted) {
   padding-right: max(0%, calc(100% - 2 * var(--v)));
   color: var(--pots-muted);
   font-size: 0.75rem;
-  font-weight: 600;
+  font-weight: 590;
   white-space: nowrap;
 }
 .pots-hbars > li.pots-marks .pots-track > span.pots-end {
@@ -1823,8 +1899,8 @@ details:not(.pots-comment) > summary :is(small, .pots-muted) {
 }
 .pots-stackbar {
   display: flex;
-  height: 14px;
-  border-radius: 4px;
+  height: 12px;
+  border-radius: var(--pots-r-s);
   overflow: hidden;
   gap: 2px;
   margin: 0 0 14px;
@@ -1855,7 +1931,7 @@ details:not(.pots-comment) > summary :is(small, .pots-muted) {
   align-self: center;
   width: 10px;
   height: 10px;
-  border-radius: 3px;
+  border-radius: 2px;
 }
 .pots-legend .pots-v {
   font-variant-numeric: tabular-nums;
@@ -1947,304 +2023,7 @@ th[aria-sort="descending"] > button.pots-sort::after {
 /* A highlight a page's own script can put on anything. */
 .pots-hl {
   background: var(--pots-accent-soft);
-  box-shadow: 0 0 0 2px var(--pots-accent);
-}
-
-/* ---- Forms (answer pages) ---- */
-
-form[data-pots] [data-pots-question],
-fieldset {
-  border: 1px solid var(--pots-line);
-  border-radius: var(--pots-radius);
-  background: var(--pots-raised);
-  box-shadow: var(--pots-shadow-1);
-  padding: 16px 18px 18px;
-  --pots-pad: 18px;
-  margin: 0 0 14px;
-  min-width: 0;
-  max-width: var(--pots-measure);
-}
-fieldset [data-pots-question],
-[data-pots-question] fieldset {
-  border: 0;
-  padding: 0;
-  background: none;
-  box-shadow: none;
-}
-legend {
-  float: left;
-  width: 100%;
-  padding: 0;
-  margin: 0 0 12px;
-  font-size: 1.0625rem;
-  font-weight: 700;
-  line-height: 1.4;
-  letter-spacing: -0.01em;
-}
-legend + * {
-  clear: both;
-}
-/* A question's legend is a strip across the top of its box, like a card's heading. */
-fieldset:not([data-pots-question] fieldset) > legend {
-  width: calc(100% + 2 * var(--pots-pad));
-  margin: -16px calc(-1 * var(--pots-pad)) 16px;
-  padding: 12px var(--pots-pad) 11px;
-  border-bottom: 1px solid var(--pots-line);
-  border-radius: calc(var(--pots-radius) - 1px) calc(var(--pots-radius) - 1px) 0 0;
-  background: color-mix(in srgb, var(--pots-text) 3%, var(--pots-raised));
-}
-[data-pots-question] > :is(h2, h3, h4):first-child {
-  margin-top: 0;
-}
-label {
-  display: block;
-  font-weight: 650;
-}
-label + label {
-  margin-top: 8px;
-}
-/* A choice: the whole row is the tap target; it can have a title and a line of explanation under it. */
-label:has(> input[type="radio"]),
-label:has(> input[type="checkbox"]),
-.pots-choice {
-  display: block;
-  position: relative;
-  min-height: 48px;
-  padding: 11px 14px 11px 44px;
-  border-radius: 10px;
-  background: var(--pots-soft);
-  font-weight: 400;
-  line-height: 1.55;
-  cursor: pointer;
-  transition: background-color 0.15s, box-shadow 0.15s;
-}
-label:has(> input[type="radio"]):hover,
-label:has(> input[type="checkbox"]):hover,
-.pots-choice:hover {
-  background: color-mix(in srgb, var(--pots-text) 7%, var(--pots-bg));
-}
-label:has(> input[type="radio"]) > input,
-label:has(> input[type="checkbox"]) > input,
-.pots-choice > input {
-  position: absolute;
-  left: 14px;
-  top: calc(11px + 0.775em - 10px);
-  font-size: inherit;
-}
-/* Its explanation goes on a line of its own: <label><input type="radio" …> Test <small>Nobody sees it</small></label> */
-:is(label:has(> input[type="radio"]), label:has(> input[type="checkbox"]), .pots-choice) > :is(small, .pots-muted) {
-  display: block;
-  margin-top: 2px;
-}
-label:has(> input[type="radio"]:checked),
-label:has(> input[type="checkbox"]:checked),
-label:has(> input[type="radio"]:checked):hover,
-label:has(> input[type="checkbox"]:checked):hover {
-  background: var(--pots-accent-soft);
-  box-shadow: inset 0 0 0 1.5px var(--pots-accent);
-}
-label:has(> input:focus-visible) {
-  outline: 2px solid var(--pots-accent);
-  outline-offset: 2px;
-}
-input[type="radio"],
-input[type="checkbox"] {
-  width: 20px;
-  height: 20px;
-  margin: 0;
-  flex: none;
-  accent-color: var(--pots-accent);
-}
-.pots-approve {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin: 8px 0;
-}
-.pots-approve label {
-  flex: 1 1 9rem;
-  margin: 0;
-  padding-left: 42px;
-  padding-right: 12px;
-  font-weight: 600;
-}
-.pots-approve label > input {
-  left: 14px;
-}
-.pots-approve input[value="approve"] {
-  accent-color: var(--pots-good);
-}
-.pots-approve input[value="reject"] {
-  accent-color: var(--pots-bad);
-}
-.pots-approve label:has(input[value="approve"]:checked),
-.pots-approve label:has(input[value="approve"]:checked):hover {
-  background: var(--pots-good-soft);
-  box-shadow: inset 0 0 0 1.5px var(--pots-good);
-  color: var(--pots-good);
-}
-.pots-approve label:has(input[value="reject"]:checked),
-.pots-approve label:has(input[value="reject"]:checked):hover {
-  background: var(--pots-bad-soft);
-  box-shadow: inset 0 0 0 1.5px var(--pots-bad);
-  color: var(--pots-bad);
-}
-input:not([type="radio"], [type="checkbox"], [type="submit"], [type="button"], [type="range"], [type="color"]),
-select,
-textarea {
-  display: block;
-  width: 100%;
-  margin-top: 6px;
-  padding: 10px 12px;
-  /* 16px or more, so phones do not zoom in on the field. */
-  font: 400 17px/1.45 var(--pots-font);
-  color: var(--pots-text);
-  background: var(--pots-bg);
-  border: 1px solid color-mix(in srgb, var(--pots-text) 18%, transparent);
-  border-radius: 10px;
-  transition: border-color 0.15s, box-shadow 0.15s;
-}
-:is(input, select, textarea):hover {
-  border-color: color-mix(in srgb, var(--pots-text) 32%, transparent);
-}
-::placeholder {
-  color: color-mix(in srgb, var(--pots-muted) 80%, transparent);
-}
-input[type="range"] {
-  width: 100%;
-  accent-color: var(--pots-accent);
-}
-textarea {
-  min-height: 6em;
-  resize: vertical;
-}
-input:focus-visible,
-select:focus-visible,
-textarea:focus-visible {
-  outline: 2px solid var(--pots-accent);
-  outline-offset: 1px;
-}
-:is(input:not([type="radio"], [type="checkbox"], [type="range"]), select, textarea):focus {
-  outline: none;
-  border-color: var(--pots-accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pots-accent) 22%, transparent);
-}
-input[type="range"]:focus-visible {
-  outline-offset: 4px;
-  border-radius: 4px;
-}
-details.pots-comment {
-  margin-top: 10px;
-}
-details.pots-comment > summary {
-  display: inline-block;
-  cursor: pointer;
-  color: var(--pots-accent);
-  font-weight: 650;
-  padding: 6px 0;
-  list-style: none;
-}
-details.pots-comment > summary::-webkit-details-marker {
-  display: none;
-}
-details.pots-comment > summary::before {
-  content: "+ ";
-}
-details.pots-comment[open] > summary::before {
-  content: "− ";
-}
-button,
-input[type="submit"],
-input[type="button"] {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 44px;
-  padding: 8px 20px;
-  border: 0;
-  border-radius: 10px;
-  background: var(--pots-accent);
-  color: var(--pots-accent-text);
-  font: 600 16px/1.2 var(--pots-font);
-  cursor: pointer;
-  transition: background-color 0.15s, box-shadow 0.15s;
-}
-button:hover,
-input[type="submit"]:hover,
-input[type="button"]:hover {
-  background: color-mix(in srgb, var(--pots-accent) 88%, var(--pots-text));
-}
-button:active,
-input[type="submit"]:active,
-input[type="button"]:active {
-  background: color-mix(in srgb, var(--pots-accent) 80%, var(--pots-text));
-}
-button:focus-visible,
-input[type="submit"]:focus-visible,
-input[type="button"]:focus-visible {
-  outline: 2px solid var(--pots-accent);
-  outline-offset: 2px;
-}
-form button[type="submit"],
-form button:not([type]),
-form input[type="submit"] {
-  width: 100%;
-  margin-top: 8px;
-}
-@media (min-width: 720px) {
-  form button[type="submit"],
-  form button:not([type]),
-  form input[type="submit"] {
-    width: auto;
-  }
-}
-button.pots-secondary {
-  background: var(--pots-soft);
-  color: var(--pots-text);
-  box-shadow: inset 0 0 0 1px var(--pots-line);
-}
-button.pots-secondary:hover {
-  background: color-mix(in srgb, var(--pots-text) 8%, var(--pots-bg));
-}
-form button + button {
-  margin-left: 8px;
-}
-button:disabled:hover:not(.pots-secondary) {
-  background: var(--pots-accent);
-}
-@media (prefers-reduced-motion: reduce) {
-  * {
-    transition: none !important;
-    scroll-behavior: auto !important;
-  }
-}
-button:disabled,
-input:disabled,
-select:disabled,
-textarea:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-[data-pots-status] {
-  margin: 12px 0 0;
-  font-weight: 650;
-}
-[data-pots-status]:empty {
-  display: none;
-}
-[data-pots-status][data-state="done"] {
-  color: var(--pots-good);
-}
-[data-pots-status][data-state="failed"] {
-  color: var(--pots-bad);
-}
-[data-pots-status][data-state="retrying"],
-[data-pots-status][data-state="sending"] {
-  color: var(--pots-muted);
-}
-form[data-pots-state="done"] [data-pots-question],
-form[data-pots-state="gone"] [data-pots-question] {
-  opacity: 0.75;
+  box-shadow: 0 0 0 1px var(--pots-accent);
 }
 .pots-banner {
   position: sticky;
@@ -2255,20 +2034,22 @@ form[data-pots-state="gone"] [data-pots-question] {
   justify-content: space-between;
   gap: 12px;
   margin: 0 0 24px;
-  padding: 8px 12px 8px 16px;
-  border-radius: var(--pots-radius);
-  background: var(--pots-warn-soft);
+  padding: 8px 8px 8px 16px;
+  border: 1px solid color-mix(in srgb, var(--pots-warn) 30%, var(--pots-line));
+  border-radius: var(--pots-r-m);
+  background: color-mix(in srgb, var(--pots-warn) 6%, var(--pots-bg));
+  font-size: 0.875rem;
 }
 .pots-banner button {
-  min-height: 40px;
-  padding: 6px 16px;
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: 0.8125rem;
 }
 [data-pots-error]::before {
   content: "Could not load this part of the page.";
   display: block;
   color: var(--pots-bad);
 }
-
 @media print {
   .pots-toc,
   .pots-tabbar,
@@ -2281,5 +2062,50 @@ form[data-pots-state="gone"] [data-pots-question] {
   }
   :is(main, .pots-page):has(> .pots-toc) {
     padding-left: 0;
+  }
+}
+
+/* ---- Adjustments after the first screenshots ---- */
+code {
+  border: 0;
+  background: var(--pots-soft-2);
+}
+pre code {
+  background: none;
+}
+.pots-steps > li::before {
+  top: calc(0.5lh - 10px);
+}
+:is(main, .pots-page) > header {
+  margin-bottom: 0;
+}
+:is(main, .pots-page) > .pots-toc + section {
+  margin-top: 64px;
+}
+@media (max-width: 719px) {
+  body {
+    font-size: 1rem;
+  }
+  form[data-pots] [data-pots-question],
+  fieldset {
+    padding: 16px 16px 18px;
+  }
+  h1 {
+    font-size: 2rem;                /* title-4 */
+  }
+  h2 {
+    font-size: 1.25rem;             /* title-2 */
+  }
+  header > h1 + p {
+    font-size: 1.0625rem;
+  }
+  :is(main, .pots-page) section {
+    margin-top: 64px;
+  }
+  .pots-toc {
+    margin-top: 32px;
+  }
+  :is(main, .pots-page) > .pots-toc + section {
+    margin-top: 40px;
   }
 }

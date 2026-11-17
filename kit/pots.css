@@ -23,7 +23,7 @@
 :root {
   color-scheme: light dark;
   /* The accent, light and dark, in one place: a muted teal. A page can change it with one line of its own:
-     :root { --pots-accent: light-dark(#3d5a80, #8fa8c8); }   (a muted slate) */
+     :root { --pots-accent: light-dark(#305a88, #8bb0db); }   (a muted slate blue) */
   --pots-accent: light-dark(#0d7466, #5fbfae);
   --pots-bg: #ffffff;
   --pots-soft: #f7f7f8;

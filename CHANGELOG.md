@@ -8,7 +8,6 @@ Pages get information across better: the bot picks the best form for each piece 
 
 ### Added
 - **`pots-ui.js` in the page kit**, optional and offline. A table with `data-pots-chart="bar"`, `"stack"` or `"line"` becomes a bar chart (with reference lines from `data-marks`), one bar in parts with percentages, or a line chart, and the table stays one tap away. `data-pots-tabs` shows one panel at a time (`"phone"`: only on a phone), `data-pots-sort` sorts a table by a click on a column header, `data-pots-filter` hides rows that do not match a search box, and `<nav class="pots-toc">` marks the section on screen. It sets only text, never HTML, and works under the private-page CSP.
-
 - **A light and dark switch on pages.** `pots-ui.js` and `pots.js` put a small sun or moon button at the page's top corner. The page follows the system until the reader chooses; the choice is kept for every page of the host, and choosing the system's own mode again forgets it. Every colour of `pots.css` is now a `light-dark()` pair, so the switch changes all of them, and the form fields too.
 
 ### Changed

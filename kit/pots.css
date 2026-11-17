@@ -22,9 +22,9 @@
 
 :root {
   color-scheme: light dark;
-  /* The accent, light and dark, in one place. A page can change it with one line of its own:
-     :root { --pots-accent: light-dark(#0d7466, #5fbfae); }   (teal-green) */
-  --pots-accent: light-dark(#1f5fcc, #7ea6e8);
+  /* The accent, light and dark, in one place: a muted teal. A page can change it with one line of its own:
+     :root { --pots-accent: light-dark(#3d5a80, #8fa8c8); }   (a muted slate) */
+  --pots-accent: light-dark(#0d7466, #5fbfae);
   --pots-bg: #ffffff;
   --pots-soft: #f7f7f8;
   --pots-soft-2: #f0f1f3;
@@ -34,20 +34,20 @@
   --pots-faint: #6a6f78;           /* section numbers, placeholders, separators: 5:1 on white */
   --pots-line: #e4e5e8;
   --pots-line-2: #d3d5da;
-  --pots-good: #1a7f3c;
+  --pots-good: #3a7d16;            /* a yellow-green, so it is not the teal accent */
   --pots-warn: #a95006;
   --pots-bad: #c2352f;
   --pots-info: var(--pots-accent);
-  --pots-good-dot: #27a644;
+  --pots-good-dot: #5aa52a;
   --pots-warn-dot: #f2792f;
   --pots-bad-dot: #e5534b;
-  /* chart colours, in order: the accent first, no violet */
+  /* chart colours, in order: the accent first, no violet, no green next to the teal */
   --pots-c1: var(--pots-accent);
   --pots-c2: #d9772b;
-  --pots-c3: #3b9a5c;
+  --pots-c3: #4f7fa8;
   --pots-c4: #c49a1a;
   --pots-c5: #cc5470;
-  --pots-c6: #5d8aa8;
+  --pots-c6: #7f9a3a;
   --pots-c7: #9298a1;
   --pots-r-s: 4px;
   --pots-r: 6px;
@@ -94,17 +94,17 @@
     --pots-faint: #868c96;
     --pots-line: #24262b;
     --pots-line-2: #33363c;
-    --pots-good: #5cbf7c;
+    --pots-good: #8cc265;
     --pots-warn: #e09a5c;
     --pots-bad: #e8817a;
-    --pots-good-dot: #3fae5f;
+    --pots-good-dot: #6fb23f;
     --pots-warn-dot: #e0874a;
     --pots-bad-dot: #e0645c;
     --pots-c2: #d99062;
-    --pots-c3: #5fb07c;
+    --pots-c3: #7ea6c8;
     --pots-c4: #cdb04e;
     --pots-c5: #d6809a;
-    --pots-c6: #84a8c2;
+    --pots-c6: #a3b85e;
     --pots-c7: #8e949d;
     --pots-accent-soft: color-mix(in srgb, var(--pots-accent) 9%, var(--pots-bg));
     --pots-accent-line: color-mix(in srgb, var(--pots-accent) 34%, var(--pots-line));

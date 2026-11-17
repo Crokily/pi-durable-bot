@@ -76,7 +76,7 @@ All that follows serves this goal: plain words make the text fast to read, the r
 
 | Information | A good form | With the kit |
 |---|---|---|
-| The answer, the conclusion | One sentence under the title, then 2 to 4 key numbers | `<header>`, `pots-stats` |
+| The answer, the conclusion | One sentence under the title, and key numbers if they help | `<header>`, `pots-stats` |
 | How much each of a few things is | A sorted bar chart, with a line for the limit or the target | `<table data-pots-chart="bar" data-marks="10000 Budget">` |
 | Parts of a whole | One bar in parts, with percentages | `data-pots-chart="stack"` |
 | Change over time | A line chart | `data-pots-chart="line"` |

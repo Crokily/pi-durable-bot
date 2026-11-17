@@ -82,7 +82,7 @@ All that follows serves this goal: plain words make the text fast to read, the r
 | Change over time | A line chart | `data-pots-chart="line"` |
 | Many records to look up | A table; past a dozen rows, sorting and a search box | `data-pots-sort`, `data-pots-filter` |
 | Many items × many properties, on a phone | One property at a time, or one card per row | `data-pots-tabs`, `table.pots-stack` |
-| A plan by day or week | A calendar: side by side on a computer, one day at a time on a phone | `pots-cols` with `data-pots-tabs="phone"` |
+| A plan by day or week | A calendar: side by side on a computer, one day at a time on a phone | `pots-grid` or `pots-cols` with `data-pots-tabs="phone"` |
 | Steps in order | Numbered steps; a timeline for things at the same time | `ol.pots-steps`, `ul.pots-steps` |
 | A list to work through | A checklist that counts what is left | Your own script |
 | "What if…" | A slider or a field, and the result changes at once | Your own script |
@@ -92,13 +92,25 @@ All that follows serves this goal: plain words make the text fast to read, the r
 
 **The layout.** Use the device. On a computer, put text next to its chart, cards in columns and calendars side by side; on a phone, one column. Text keeps a comfortable line length; `pots-wide` lets a block, also a table or a bar chart, use the full width. The page itself never scrolls sideways; a wide table scrolls inside itself.
 
-**The look.** The kit draws the look; you give it the structure it draws. A page of only headings and paragraphs looks like a plain file, and the reader sees no order on the first screen. These parts make a page look designed, and each one also tells the reader something:
+**The look.** A page should look designed, with confidence, and still read calmly. The kit draws the look; you give it the structure it draws. A page of only headings and paragraphs looks like a plain file, and the reader sees no order on the first screen. Each part below also tells the reader something:
 
-- **The opening.** Start `<main>` with a `<header>`; the kit shows it as a tinted panel. In it, in this order: `<p class="pots-eyebrow">` with the kind of page (Proposal, Weekly report, Decision), the `<h1>`, one sentence with the answer, and `<p class="pots-meta">` with a `<span>` for each fact about the page (the date, who it is for, a status). A status span takes `pots-good`, `pots-warn` or `pots-bad` and gets a coloured dot. Right under the header, or inside it as its last part: two to four key numbers (`pots-stats`) or two to five key points (`<ul class="pots-points">`, a card with a tick before each point).
-- **Sections.** Each `<h2>` in `<main>` or in a `<section>` starts on a line with an accent, so the reader sees where a part starts. When the order of the sections matters (decisions to make, steps of a plan), number them: `<h2><span class="pots-no">2</span>Costs</h2>`.
-- **Cards.** Use `pots-card` for things of the same kind that the reader compares: options, places, people. Put them in `pots-grid` and start each with an `<h3>`. `pots-card pots-info` is the one to read first or the one you recommend; `pots-good`, `pots-warn` and `pots-bad` put a coloured edge on a card. A `pots-kv` list in a card is a glossary: terms and what they mean.
-- **Callouts.** Use `pots-note` for what the reader must not miss: a risk, a deadline, what changed. A `<b>` at its start is its title. One or two on a page; when everything is a callout, nothing stands out.
-- **Lists.** `<ol>` numbers show in the accent colour; `pots-steps` is for steps in order, `pots-points` for what to take away.
+- **The header.** Start `<main>` with a `<header>`; the kit shows it as the one designed surface of the page: an accent bar, a soft glow, a display-size title. In it, in this order: `<p class="pots-eyebrow" data-icon="…">` with the kind of page (Proposal, Weekly report, Decision), the `<h1>`, one sentence with the answer, `<p class="pots-meta">` with a `<span>` for each fact about the page (date, who it is for, status; a status span takes `pots-good`, `pots-warn` or `pots-bad`), and last two to four key numbers (`pots-stats`) or key points (`pots-points`). `<header class="pots-ink">` is a dark band: use it for a page that should look bold, such as a proposal or a launch.
+- **Sections.** Each `<h2>` starts on a line with an accent. Give it an icon, `<h2 data-icon="lock">Access</h2>`, or a number when the order matters (decisions to make, steps of a plan): `<h2><span class="pots-no">2</span>Costs</h2>`.
+- **Icons.** `data-icon="name"` on any element puts a small line icon before its text: on the eyebrow, section headings, meta chips, card headings, badges, a stat, a step, `<summary>`, a note (it replaces the note's sign). Use an icon where it names the kind of thing faster than a word (a date, a person, a risk, a code reference), not on every line. The names: check, x, info, warn, question, ban, arrow, up, down, clock, calendar, user, users, bot, chat, mail, link, lock, key, shield, eye, search, chart, file, code, terminal, settings, money, place, globe, star, bolt, flag, bell, list.
+- **Colour.** One accent for structure, and the meaning colours `pots-good`, `pots-warn`, `pots-bad` for good, risky and bad. Body text stays on the plain background.
+
+Which part for which content:
+
+| Content | Part |
+|---|---|
+| Options, places, people to compare; before and after | `pots-card` in `pots-grid` or `pots-cols`. Its first `<h3>` is a strip across its top; `pots-good`, `pots-warn`, `pots-bad` colour it; `pots-info` marks the one you recommend. |
+| Key numbers, with a change | `pots-stats`; in a `pots-stat`: `<small class="pots-delta pots-good" data-icon="up">12% on May</small>`; `data-icon` on the stat |
+| What to take away | `ul.pots-points` (ticks; `data-icon` on an item), `ol.pots-points` (numbers) |
+| What the reader must not miss: a risk, a deadline, what changed | `pots-note`, one or two on a page; a `<b>` at its start is its title |
+| How something works, a decision path | `pots-flow`: `pots-node` boxes joined by arrows; a fork in `pots-lanes`, one `pots-lane` per way |
+| Steps, a timeline | `ol.pots-steps` (numbers), `ul.pots-steps` (dots); `<time>` first in an item shows a date over it |
+| Words the reader must learn | `dl.pots-terms`, each `<div><dt>…</dt><dd>…</dd></div>` a small card |
+| What someone said | `blockquote.pots-quote` with a `<footer>` for who said it |
 
 Boxes work by contrast. Most of the page stays text on the plain background, with a few boxes where they help; a page where every paragraph is in a card looks as flat as a page with no cards. In your own CSS, use the kit's surfaces so your parts match: `--pots-raised` (a card's background), `--pots-line`, `--pots-radius`, `--pots-shadow-1`.
 
@@ -106,10 +118,11 @@ Boxes work by contrast. Most of the page stays text on the plain background, wit
 
 - Plain HTML already looks right: headings, lists, tables, code, quotes, images, `<details>`.
 - Layout: `pots-cols` (side by side on a computer, one under the other on a phone), `pots-grid` (cards in as many columns as fit), `pots-row` (boxes that wrap), `pots-wide`. `<nav class="pots-toc">` after the header: links to the sections, at the side on a computer and a row at the top on a phone.
-- The opening: `<header>` first in `<main>`, with `pots-eyebrow`, `<h1>`, one sentence, and `pots-meta` (a row of chips).
-- Blocks: `pots-stats` with `pots-stat` (`<div class="pots-stat"><b>€8,400</b><span>total</span></div>`), `pots-points` (key points), `pots-card`, `pots-note`, `pots-steps`, `pots-kv` (a `<dl>` of names and values), `pots-badge`, `pots-no` (a section number in a heading).
+- The opening: `<header>` first in `<main>` (`class="pots-ink"` for the dark band), with `pots-eyebrow`, `<h1>`, one sentence, and `pots-meta` (a row of chips).
+- Blocks: `pots-stats` with `pots-stat` (`<div class="pots-stat"><b>€8,400</b><span>total</span></div>`) and `pots-delta`, `pots-points` (key points), `pots-card`, `pots-note`, `pots-steps`, `pots-flow` with `pots-node`, `pots-lanes` and `pots-lane`, `pots-terms`, `pots-kv` (a `<dl>` of names and values), `blockquote.pots-quote`, `pots-badge`, `pots-no` (a section number in a heading).
+- Icons: `data-icon="name"` on any element; `<i data-icon="name"></i>` is the icon alone. They are CSS masks from `data:` URLs, so a page's CSP must allow `img-src data:`, as the one under Content-Security-Policy does. In your own CSS, `var(--pots-i-lock)` is the lock as a mask image.
 - Colours with a meaning: `pots-good`, `pots-warn`, `pots-bad` on a note, a badge, a stat or a chart row; `pots-info` on a badge. Text: `pots-muted`, `pots-num` (a right-aligned number cell). `pots-hl` highlights anything your script points at.
-- In your own CSS, use the kit's colours so dark mode works: `--pots-bg`, `--pots-soft`, `--pots-raised`, `--pots-tint`, `--pots-text`, `--pots-muted`, `--pots-line`, `--pots-accent`, `--pots-accent-soft`, `--pots-good`, `--pots-warn`, `--pots-bad` (each also `-soft`), and the chart colours `--pots-c1` to `--pots-c7`; and its shapes: `--pots-radius-s`, `--pots-radius`, `--pots-radius-l`, `--pots-shadow-1`, `--pots-shadow-2`.
+- In your own CSS, use the kit's colours so dark mode works: `--pots-bg`, `--pots-soft`, `--pots-raised`, `--pots-tint`, `--pots-text`, `--pots-muted`, `--pots-line`, `--pots-accent`, `--pots-accent-soft`, `--pots-good`, `--pots-warn`, `--pots-bad` (each also `-soft`), and the chart colours `--pots-c1` to `--pots-c7`; and its shapes: `--pots-radius-s`, `--pots-radius`, `--pots-radius-l`, `--pots-radius-xl`, `--pots-shadow-1`, `--pots-shadow-2`.
 - With `pots-ui.js`:
   - `<table data-pots-chart="bar|stack|line">` becomes a chart. Bar and stack: the first column names the rows, the second gives the values. Line: each row is a point on the x axis, each number column a line. `data-marks="380 You; 300 Her"` draws reference lines on bars, `data-max` or `data-min` fixes the scale (a line chart starts at zero unless its values sit far from zero; `data-min="0"` keeps zero), a `<caption>` becomes the title, and `data-pots-show="…"` names the button that shows the numbers. The table stays on the page, folded, so the numbers are one tap away.
   - `<div data-pots-tabs>` with `<section data-tab="Name">` children shows one at a time; `data-pots-tabs="phone"` does so only on a phone and shows all of them on a computer. `data-current` on a section opens it first; `box.potsSelect(i)` opens one from your script, and the box sends a `pots-tab` event.
@@ -145,19 +158,19 @@ A page that compares three cities for a team trip, in `pages/offsite/`:
 <body>
 <main>
   <header>
-    <p class="pots-eyebrow">Team offsite · Proposal</p>
+    <p class="pots-eyebrow" data-icon="place">Team offsite · Proposal</p>
     <h1>Team offsite: where and what it costs</h1>
     <p>Lisbon is the best choice. It costs €8,400 for 12 people, €1,600 under the budget.</p>
-    <p class="pots-meta"><span>Prices from 16 November</span><span>For the team leads</span><span class="pots-warn">Flight prices change each day</span></p>
+    <p class="pots-meta"><span data-icon="calendar">Prices from 16 November</span><span data-icon="users">For the team leads</span><span class="pots-warn" data-icon="warn">Flight prices change each day</span></p>
     <div class="pots-stats">
-      <div class="pots-stat"><b>€8,400</b><span>total</span></div>
-      <div class="pots-stat pots-good"><b>€1,600</b><span>under the budget</span></div>
-      <div class="pots-stat"><b>12</b><span>people</span></div>
+      <div class="pots-stat" data-icon="money"><b>€8,400</b><span>total</span><small class="pots-delta pots-good" data-icon="down">€900 on 2025</small></div>
+      <div class="pots-stat pots-good" data-icon="check"><b>€1,600</b><span>under the budget</span></div>
+      <div class="pots-stat" data-icon="users"><b>12</b><span>people</span></div>
     </div>
   </header>
   <nav class="pots-toc"><a href="#cities">Cities</a> <a href="#days">The three days</a> <a href="#size">Group size</a></nav>
 
-  <h2 id="cities">Three cities compared</h2>
+  <h2 id="cities" data-icon="place">Three cities compared</h2>
   <div class="pots-cols pots-wide">
     <table data-pots-chart="bar" data-marks="10000 Budget">
       <caption>Total cost for 12 people</caption>
@@ -175,17 +188,18 @@ A page that compares three cities for a team trip, in `pages/offsite/`:
     </ul>
   </div>
 
-  <h2 id="days">The three days</h2>
-  <div class="pots-cols pots-wide" data-pots-tabs="phone">
-    <section data-tab="Thursday"><h3>Thursday</h3>
-      <ol class="pots-steps"><li>Flights arrive before 14:00</li><li>Dinner together at 19:30</li></ol></section>
-    <section data-tab="Friday"><h3>Friday</h3>
-      <ol class="pots-steps"><li>Planning for next year, 9:00 to 12:30</li><li>Free afternoon</li></ol></section>
-    <section data-tab="Saturday"><h3>Saturday</h3>
-      <ol class="pots-steps"><li>Check out by 11:00</li><li>Flights leave from 13:00</li></ol></section>
+  <h2 id="days" data-icon="calendar">The three days</h2>
+  <div class="pots-grid pots-wide" data-pots-tabs="phone">
+    <section class="pots-card" data-tab="Thursday"><h3 data-icon="calendar">Thursday</h3>
+      <ul class="pots-steps"><li><time>by 14:00</time>Flights arrive</li><li><time>19:30</time>Dinner together</li></ul></section>
+    <section class="pots-card pots-info" data-tab="Friday"><h3 data-icon="star">Friday</h3>
+      <ul class="pots-steps"><li><time>9:00–12:30</time>Planning for next year</li><li><time>afternoon</time>Free</li></ul></section>
+    <section class="pots-card" data-tab="Saturday"><h3 data-icon="calendar">Saturday</h3>
+      <ul class="pots-steps"><li><time>by 11:00</time>Check out</li><li><time>from 13:00</time>Flights leave</li></ul></section>
   </div>
+  <p class="pots-note pots-warn"><b>Book by 30 November</b> The hotel holds the 12 rooms until then.</p>
 
-  <h2 id="size">If more people come</h2>
+  <h2 id="size" data-icon="users">If more people come</h2>
   <p id="cost-text">Each extra person adds about €700. With 14 people, the total is €9,800. This is still under the budget.</p>
   <div id="cost" hidden>
     <label>People <input type="range" id="people" min="8" max="16" value="12"></label>

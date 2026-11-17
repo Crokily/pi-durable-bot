@@ -225,7 +225,9 @@ describe("the page kit", () => {
 
   it("styles light and dark, and loads nothing from elsewhere", () => {
     expect(css).toMatch(/@media \(prefers-color-scheme: dark\)/);
-    expect(css).not.toMatch(/@import|url\(/);
+    expect(css).not.toMatch(/@import/);
+    // Icons and the flow's arrowheads are data: URLs, drawn from the stylesheet itself.
+    expect(css).not.toMatch(/url\((?!"data:image\/svg\+xml,)/);
   });
 
   it("keeps every class and colour of the first stylesheet, so pages written for it look right", () => {

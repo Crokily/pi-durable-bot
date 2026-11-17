@@ -8,36 +8,39 @@
 :root {
   color-scheme: light dark;
   --pots-bg: #ffffff;
-  --pots-soft: #f4f5f7;
-  --pots-text: #1a2230;
-  --pots-muted: #5b6576;
-  --pots-line: #e2e5ea;
-  --pots-accent: #2f5bd8;
-  --pots-accent-soft: #eaf0ff;
+  --pots-soft: #f3f4f7;
+  --pots-text: #111827;
+  --pots-muted: #586174;
+  --pots-line: #e3e6ec;
+  /* One strong accent, for structure: section marks, numbers, chips, links. A second hue only in the header's glow. */
+  --pots-accent: #3b4fe0;
+  --pots-accent-2: #8b5cf6;
+  --pots-accent-soft: #eef0ff;
   --pots-accent-text: #ffffff;
-  --pots-good: #18794e;
-  --pots-good-soft: #e6f4ec;
-  --pots-warn: #8a5300;
-  --pots-warn-soft: #fff3e0;
-  --pots-bad: #c2362b;
-  --pots-bad-soft: #fdecea;
+  --pots-good: #137a52;
+  --pots-good-soft: #e5f5ed;
+  --pots-warn: #965700;
+  --pots-warn-soft: #fff3df;
+  --pots-bad: #c7352a;
+  --pots-bad-soft: #fdeceb;
   /* chart colours, in order */
-  --pots-c1: #2f5bd8;
+  --pots-c1: #3b4fe0;
   --pots-c2: #d4692c;
   --pots-c3: #2a9d8f;
   --pots-c4: #a259c4;
   --pots-c5: #b08900;
   --pots-c6: #d4508a;
   --pots-c7: #8a94a6;
-  /* Surfaces: a card sits a little above the page; the header is tinted with the accent. */
+  /* Surfaces: a card sits a little above the page; only the header is tinted. */
   --pots-raised: #ffffff;
-  --pots-tint: color-mix(in srgb, var(--pots-accent) 5%, var(--pots-bg));
-  --pots-tint-line: color-mix(in srgb, var(--pots-accent) 16%, var(--pots-line));
-  --pots-shadow-1: 0 1px 2px rgba(16, 24, 40, 0.05);
-  --pots-shadow-2: 0 1px 2px rgba(16, 24, 40, 0.04), 0 4px 12px -2px rgba(16, 24, 40, 0.08);
+  --pots-tint: color-mix(in srgb, var(--pots-accent) 6%, var(--pots-bg));
+  --pots-tint-line: color-mix(in srgb, var(--pots-accent) 18%, var(--pots-line));
+  --pots-shadow-1: 0 1px 2px rgba(17, 24, 39, 0.05), 0 1px 1px rgba(17, 24, 39, 0.03);
+  --pots-shadow-2: 0 1px 2px rgba(17, 24, 39, 0.05), 0 8px 24px -6px rgba(17, 24, 39, 0.12);
   --pots-radius-s: 8px;
   --pots-radius: 12px;
   --pots-radius-l: 18px;
+  --pots-radius-xl: 24px;
   --pots-measure: 42rem;
   --pots-width: 64rem;
   --pots-toc: 12rem;
@@ -52,25 +55,26 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --pots-bg: #15171b;
-    --pots-soft: #1f2228;
-    --pots-text: #e6e8ec;
-    --pots-muted: #a0a7b4;
-    --pots-line: #2e323a;
-    --pots-accent: #8fb0ff;
-    --pots-accent-soft: #1e2a4a;
-    --pots-accent-text: #0f1420;
-    --pots-good: #6fd3a0;
-    --pots-good-soft: #15291e;
-    --pots-warn: #ffc37a;
-    --pots-warn-soft: #33270f;
-    --pots-bad: #ff8f84;
-    --pots-bad-soft: #3a1c1c;
-    --pots-raised: #1b1e24;
-    --pots-tint: color-mix(in srgb, var(--pots-accent) 7%, var(--pots-bg));
-    --pots-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3);
-    --pots-shadow-2: 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 16px -4px rgba(0, 0, 0, 0.4);
-    --pots-c1: #8fb0ff;
+    --pots-bg: #0d0f14;
+    --pots-soft: #191c23;
+    --pots-text: #e9ebf1;
+    --pots-muted: #9ba3b4;
+    --pots-line: #262a33;
+    --pots-accent: #8c9cff;
+    --pots-accent-2: #b48cff;
+    --pots-accent-soft: #1b2042;
+    --pots-accent-text: #0d0f1c;
+    --pots-good: #62d39b;
+    --pots-good-soft: #10281d;
+    --pots-warn: #ffc06b;
+    --pots-warn-soft: #2e2310;
+    --pots-bad: #ff8b80;
+    --pots-bad-soft: #351819;
+    --pots-raised: #14171e;
+    --pots-tint: color-mix(in srgb, var(--pots-accent) 9%, var(--pots-bg));
+    --pots-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --pots-shadow-2: 0 1px 2px rgba(0, 0, 0, 0.4), 0 10px 28px -8px rgba(0, 0, 0, 0.6);
+    --pots-c1: #8c9cff;
     --pots-c2: #f5a26b;
     --pots-c3: #5cc8b8;
     --pots-c4: #c79be0;
@@ -141,7 +145,7 @@ main,
   scroll-margin-top: 64px;
 }
 
-/* ---- Text ---- */
+/* ---- Text: a display title, a clear second level, calm body text ---- */
 
 h1,
 h2,
@@ -153,71 +157,71 @@ h4 {
   text-wrap: balance;
 }
 h1 {
-  font-size: clamp(1.65rem, 1.3rem + 1.5vw, 2.15rem);
-  font-weight: 700;
-  line-height: 1.2;
-  letter-spacing: -0.015em;
+  font-size: clamp(2rem, 1.45rem + 2.3vw, 3.1rem);
+  font-weight: 750;
+  line-height: 1.1;
+  letter-spacing: -0.032em;
   margin-top: 0;
 }
 h2 {
-  font-size: 1.35rem;
-  letter-spacing: -0.01em;
+  font-size: clamp(1.4rem, 1.25rem + 0.6vw, 1.7rem);
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -0.022em;
   margin-top: 2em;
-  margin-bottom: 0.6em;
+  margin-bottom: 0.65em;
 }
-/* A section of the page starts on a hairline with a short accent at its start. Inside a box, a heading is plain. */
+/* A section of the page starts on a hairline with a short, thick accent at its start. Inside a box, a heading is plain. */
 :is(main, .pots-page) h2 {
   position: relative;
   max-width: none;
-  margin-top: 2.2em;
-  padding-top: 0.85em;
-  border-top: 1px solid var(--pots-line);
-}
-:is(main, .pots-page) h2::before {
-  content: "";
-  position: absolute;
-  top: -1px;
-  left: 0;
-  width: 28px;
-  height: 2px;
-  border-radius: 1px;
-  background: var(--pots-accent);
+  margin-top: 2.3em;
+  padding-top: 0.9em;
+  background:
+    linear-gradient(var(--pots-accent), var(--pots-accent)) 0 0 / 40px 3px no-repeat,
+    linear-gradient(var(--pots-line), var(--pots-line)) 0 1px / 100% 1px no-repeat;
 }
 :is(.pots-card, .pots-note, .pots-cols, .pots-grid, fieldset, details, [data-pots-question], [data-pots-tabs]) h2 {
   margin-top: 1.4em;
   padding-top: 0;
-  border-top: 0;
-}
-:is(.pots-card, .pots-note, .pots-cols, .pots-grid, fieldset, details, [data-pots-question], [data-pots-tabs]) h2::before {
-  display: none;
+  background: none;
 }
 /* A section number before a heading's text: <h2><span class="pots-no">2</span>Costs</h2> */
 .pots-no {
   display: inline-grid;
   place-items: center;
-  min-width: 1.7em;
-  height: 1.7em;
-  margin-right: 0.55em;
-  padding: 0 0.4em;
+  min-width: 1.45em;
+  height: 1.45em;
+  margin-right: 0.5em;
+  padding: 0 0.35em;
   border-radius: var(--pots-radius-s);
-  background: var(--pots-accent-soft);
-  color: var(--pots-accent);
-  font-size: 0.72em;
-  font-weight: 700;
+  background: var(--pots-accent);
+  color: var(--pots-accent-text);
+  font-size: 0.8em;
+  font-weight: 750;
+  letter-spacing: 0;
   line-height: 1;
   font-variant-numeric: tabular-nums;
-  vertical-align: 0.12em;
+  vertical-align: 0.1em;
+  box-shadow: 0 2px 6px -1px color-mix(in srgb, var(--pots-accent) 45%, transparent);
 }
 h3 {
-  font-size: 1.06rem;
+  font-size: 1.125rem;
+  letter-spacing: -0.01em;
 }
 h4 {
   font-size: 1rem;
 }
-:lang(zh) :is(h1, h2),
-:lang(ja) :is(h1, h2),
-:lang(ko) :is(h1, h2) {
+:lang(zh) :is(h1, h2, h3),
+:lang(ja) :is(h1, h2, h3),
+:lang(ko) :is(h1, h2, h3) {
   letter-spacing: 0;
+}
+:lang(zh) h1,
+:lang(ja) h1,
+:lang(ko) h1 {
+  letter-spacing: -0.01em;
+  line-height: 1.2;
 }
 :is(h1, h2, h3, h4) small {
   font-weight: 400;
@@ -248,7 +252,7 @@ li::marker {
 }
 ol > li::marker {
   color: var(--pots-accent);
-  font-weight: 650;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
 ul > li::marker {
@@ -257,7 +261,15 @@ ul > li::marker {
 a {
   color: var(--pots-accent);
   text-decoration-thickness: 1px;
+  text-decoration-color: color-mix(in srgb, var(--pots-accent) 45%, transparent);
   text-underline-offset: 3px;
+  transition: text-decoration-color 0.15s;
+}
+a:hover {
+  text-decoration-color: currentColor;
+}
+::selection {
+  background: color-mix(in srgb, var(--pots-accent) 24%, transparent);
 }
 b,
 strong {
@@ -289,6 +301,33 @@ blockquote {
   border-left: 3px solid var(--pots-line);
   color: var(--pots-muted);
 }
+/* A pull quote: what someone said, large, with who said it. <blockquote class="pots-quote"><p>…</p><footer>Name</footer> */
+blockquote.pots-quote {
+  position: relative;
+  margin: 1.6em 0;
+  padding: 0.2em 0 0.2em 1.4em;
+  border-left: 3px solid var(--pots-accent);
+  color: var(--pots-text);
+  font-size: 1.18em;
+  font-weight: 500;
+  line-height: 1.5;
+  letter-spacing: -0.01em;
+}
+blockquote.pots-quote > :is(footer, cite, small) {
+  display: block;
+  margin-top: 0.6em;
+  color: var(--pots-muted);
+  font-size: 0.8em;
+  font-style: normal;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+blockquote.pots-quote > :is(footer, cite, small)::before {
+  content: "— ";
+}
+blockquote.pots-quote > :last-child {
+  margin-bottom: 0;
+}
 code,
 kbd,
 pre {
@@ -319,35 +358,191 @@ small {
   font-size: 0.87em;
 }
 
+/* ---- Icons: data-icon="name" on any element puts a small line drawing before its text, in the text's colour.
+   An empty <i data-icon="lock"></i> is the icon alone. CSS only (data: URLs), so it works offline and under the CSP. ---- */
+
+[data-icon]::before {
+  content: "";
+  display: inline-block;
+  flex: none;
+  width: 1.1em;
+  height: 1.1em;
+  margin-right: 0.42em;
+  vertical-align: -0.17em;
+  background: currentColor;
+  -webkit-mask: var(--pots-icon) center / contain no-repeat;
+  mask: var(--pots-icon) center / contain no-repeat;
+}
+[data-icon]:empty::before {
+  margin-right: 0;
+}
+/* In a section heading the icon sits on an accent tile: <h2 data-icon="lock">Access</h2> */
+:is(main, .pots-page) h2[data-icon]:not(:is(.pots-card, .pots-note, .pots-cols, .pots-grid, fieldset, details, [data-pots-question], [data-pots-tabs]) h2) {
+  padding-left: 1.85em;
+}
+:is(main, .pots-page) h2[data-icon]:not(:is(.pots-card, .pots-note, .pots-cols, .pots-grid, fieldset, details, [data-pots-question], [data-pots-tabs]) h2)::before {
+  position: absolute;
+  left: 0.32em;
+  top: calc(0.9em + 0.5lh - 0.4em);
+  width: 0.8em;
+  height: 0.8em;
+  margin: 0;
+  color: var(--pots-accent);
+  z-index: 1;
+}
+:is(main, .pots-page) h2[data-icon]:not(:is(.pots-card, .pots-note, .pots-cols, .pots-grid, fieldset, details, [data-pots-question], [data-pots-tabs]) h2)::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: calc(0.9em + 0.5lh - 0.72em);
+  width: 1.44em;
+  height: 1.44em;
+  border-radius: var(--pots-radius-s);
+  background: var(--pots-accent-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pots-accent) 18%, transparent);
+}
+
+:root {
+  --pots-i-check: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E");
+  --pots-i-x: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M18 6 6 18M6 6l12 12'/%3E%3C/svg%3E");
+  --pots-i-info: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M12 16v-4M12 8h.01'/%3E%3C/svg%3E");
+  --pots-i-warn: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01'/%3E%3C/svg%3E");
+  --pots-i-question: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3M12 17h.01'/%3E%3C/svg%3E");
+  --pots-i-ban: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='m4.9 4.9 14.2 14.2'/%3E%3C/svg%3E");
+  --pots-i-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12h14M12 5l7 7-7 7'/%3E%3C/svg%3E");
+  --pots-i-up: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 19V5M5 12l7-7 7 7'/%3E%3C/svg%3E");
+  --pots-i-down: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 5v14M19 12l-7 7-7-7'/%3E%3C/svg%3E");
+  --pots-i-clock: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M12 6v6l4 2'/%3E%3C/svg%3E");
+  --pots-i-calendar: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='18' rx='2'/%3E%3Cpath d='M16 2v4M8 2v4M3 10h18'/%3E%3C/svg%3E");
+  --pots-i-user: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='8' r='4'/%3E%3Cpath d='M4 21a8 8 0 0 1 16 0'/%3E%3C/svg%3E");
+  --pots-i-users: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='9' cy='8' r='4'/%3E%3Cpath d='M2 21a7 7 0 0 1 14 0M16 3.1a4 4 0 0 1 0 7.8M22 21a7 7 0 0 0-4-6.3'/%3E%3C/svg%3E");
+  --pots-i-bot: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='4' y='8' width='16' height='12' rx='3'/%3E%3Cpath d='M12 8V4M9 13v2M15 13v2M2 14h2M20 14h2'/%3E%3C/svg%3E");
+  --pots-i-chat: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'/%3E%3C/svg%3E");
+  --pots-i-mail: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='2' y='4' width='20' height='16' rx='2'/%3E%3Cpath d='m22 7-10 6L2 7'/%3E%3C/svg%3E");
+  --pots-i-link: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7'/%3E%3C/svg%3E");
+  --pots-i-lock: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='4' y='11' width='16' height='10' rx='2'/%3E%3Cpath d='M8 11V7a4 4 0 0 1 8 0v4'/%3E%3C/svg%3E");
+  --pots-i-key: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='7.5' cy='15.5' r='5.5'/%3E%3Cpath d='m21 2-9.6 9.6M15.5 7.5l3 3L22 7l-3-3'/%3E%3C/svg%3E");
+  --pots-i-shield: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z'/%3E%3C/svg%3E");
+  --pots-i-eye: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z'/%3E%3Ccircle cx='12' cy='12' r='3'/%3E%3C/svg%3E");
+  --pots-i-search: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m21 21-4.3-4.3'/%3E%3C/svg%3E");
+  --pots-i-chart: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 3v18h18M8 17v-6M13 17V7M18 17v-4'/%3E%3C/svg%3E");
+  --pots-i-file: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M8 13h8M8 17h5'/%3E%3C/svg%3E");
+  --pots-i-code: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m16 18 6-6-6-6M8 6l-6 6 6 6'/%3E%3C/svg%3E");
+  --pots-i-terminal: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m4 17 6-6-6-6M12 19h8'/%3E%3C/svg%3E");
+  --pots-i-settings: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6'/%3E%3C/svg%3E");
+  --pots-i-money: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M16 8h-6a2 2 0 0 0 0 4h4a2 2 0 0 1 0 4H8M12 6v2M12 16v2'/%3E%3C/svg%3E");
+  --pots-i-place: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0z'/%3E%3Ccircle cx='12' cy='10' r='3'/%3E%3C/svg%3E");
+  --pots-i-globe: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20'/%3E%3C/svg%3E");
+  --pots-i-star: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m12 2 3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z'/%3E%3C/svg%3E");
+  --pots-i-bolt: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M13 2 3 14h9l-1 8 10-12h-9z'/%3E%3C/svg%3E");
+  --pots-i-flag: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 22V4M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1'/%3E%3C/svg%3E");
+  --pots-i-bell: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0'/%3E%3C/svg%3E");
+  --pots-i-list: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01'/%3E%3C/svg%3E");
+}
+[data-icon="check"] { --pots-icon: var(--pots-i-check); }
+[data-icon="x"] { --pots-icon: var(--pots-i-x); }
+[data-icon="info"] { --pots-icon: var(--pots-i-info); }
+[data-icon="warn"] { --pots-icon: var(--pots-i-warn); }
+[data-icon="question"] { --pots-icon: var(--pots-i-question); }
+[data-icon="ban"] { --pots-icon: var(--pots-i-ban); }
+[data-icon="arrow"] { --pots-icon: var(--pots-i-arrow); }
+[data-icon="up"] { --pots-icon: var(--pots-i-up); }
+[data-icon="down"] { --pots-icon: var(--pots-i-down); }
+[data-icon="clock"] { --pots-icon: var(--pots-i-clock); }
+[data-icon="calendar"] { --pots-icon: var(--pots-i-calendar); }
+[data-icon="user"] { --pots-icon: var(--pots-i-user); }
+[data-icon="users"] { --pots-icon: var(--pots-i-users); }
+[data-icon="bot"] { --pots-icon: var(--pots-i-bot); }
+[data-icon="chat"] { --pots-icon: var(--pots-i-chat); }
+[data-icon="mail"] { --pots-icon: var(--pots-i-mail); }
+[data-icon="link"] { --pots-icon: var(--pots-i-link); }
+[data-icon="lock"] { --pots-icon: var(--pots-i-lock); }
+[data-icon="key"] { --pots-icon: var(--pots-i-key); }
+[data-icon="shield"] { --pots-icon: var(--pots-i-shield); }
+[data-icon="eye"] { --pots-icon: var(--pots-i-eye); }
+[data-icon="search"] { --pots-icon: var(--pots-i-search); }
+[data-icon="chart"] { --pots-icon: var(--pots-i-chart); }
+[data-icon="file"] { --pots-icon: var(--pots-i-file); }
+[data-icon="code"] { --pots-icon: var(--pots-i-code); }
+[data-icon="terminal"] { --pots-icon: var(--pots-i-terminal); }
+[data-icon="settings"] { --pots-icon: var(--pots-i-settings); }
+[data-icon="money"] { --pots-icon: var(--pots-i-money); }
+[data-icon="place"] { --pots-icon: var(--pots-i-place); }
+[data-icon="globe"] { --pots-icon: var(--pots-i-globe); }
+[data-icon="star"] { --pots-icon: var(--pots-i-star); }
+[data-icon="bolt"] { --pots-icon: var(--pots-i-bolt); }
+[data-icon="flag"] { --pots-icon: var(--pots-i-flag); }
+[data-icon="bell"] { --pots-icon: var(--pots-i-bell); }
+[data-icon="list"] { --pots-icon: var(--pots-i-list); }
+
 /* The opening: <header> with <h1>, one sentence with the answer, and a quiet line of who and when.
-   It is a tinted panel across the page, so the first screen starts with the answer, not with plain text.
-   Optional: <p class="pots-eyebrow"> over the title (the kind of page, the project), and <p class="pots-meta">
-   with <span>s (date, status, who) that show as chips. */
+   It is the one designed surface of the page: a panel with an accent bar, a soft glow and a display-size title, so the
+   first screen starts with the answer. The body text after it stays on the plain background.
+   Optional: <p class="pots-eyebrow"> over the title (the kind of page, the project), <p class="pots-meta"> with <span>s
+   (date, status, who) that show as chips, and key numbers or points as its last part.
+   <header class="pots-ink"> is a dark band instead, for a page that should look bold. */
 :is(main, .pots-page) > header:first-child {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
   max-width: none;
-  margin: 0 0 32px;
-  padding: 22px 20px 20px;
+  margin: 0 0 36px;
+  padding: 30px 20px 24px;
   border: 1px solid var(--pots-tint-line);
-  border-radius: var(--pots-radius-l);
-  background: linear-gradient(180deg, var(--pots-tint), color-mix(in srgb, var(--pots-tint) 40%, var(--pots-bg)));
+  border-radius: var(--pots-radius-xl);
+  background:
+    radial-gradient(110% 130% at 100% 0%, color-mix(in srgb, var(--pots-accent-2) 13%, transparent), transparent 58%),
+    radial-gradient(90% 120% at 0% 0%, color-mix(in srgb, var(--pots-accent) 12%, transparent), transparent 62%),
+    var(--pots-tint);
+  box-shadow: var(--pots-shadow-1);
+}
+/* The accent bar along its top edge. */
+:is(main, .pots-page) > header:first-child::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 4px;
+  background: linear-gradient(90deg, var(--pots-accent), var(--pots-accent-2) 60%, var(--pots-c3));
+}
+/* A faint dot grid that fades out towards the text. */
+:is(main, .pots-page) > header:first-child::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: radial-gradient(color-mix(in srgb, var(--pots-text) 16%, transparent) 1px, transparent 1.4px) 0 0 / 18px 18px;
+  -webkit-mask: linear-gradient(250deg, #000, transparent 45%);
+  mask: linear-gradient(250deg, #000, transparent 45%);
 }
 @media (min-width: 720px) {
   :is(main, .pots-page) > header:first-child {
-    padding: 34px 36px 30px;
+    margin-bottom: 44px;
+    padding: 44px 44px 36px;
   }
 }
 /* On a page of reading width only, such as a form, the panel keeps that width too. */
 :is(main, .pots-page):not(:has(.pots-wide, .pots-toc, .pots-cols, .pots-grid, .pots-stats, .pots-scroll, table)) > header:first-child {
   max-width: calc(var(--pots-measure) + 2px);
 }
+@media (min-width: 720px) {
+  :is(main, .pots-page):not(:has(.pots-wide, .pots-toc, .pots-cols, .pots-grid, .pots-stats, .pots-scroll, table)) > header:first-child {
+    padding: 36px 32px 30px;
+  }
+}
 :is(main, .pots-page) > header:first-child > h1 {
-  margin-bottom: 0.4em;
+  margin-bottom: 0.42em;
 }
 :is(main, .pots-page) > header:first-child > p:not(.pots-muted, .pots-meta, .pots-eyebrow) {
-  font-size: 1.1875em;
+  font-size: 1.125em;
   line-height: 1.6;
-  margin-bottom: 0.7em;
-  color: color-mix(in srgb, var(--pots-text) 86%, var(--pots-muted));
+  margin-bottom: 0.8em;
+  color: color-mix(in srgb, var(--pots-text) 82%, var(--pots-muted));
+}
+@media (min-width: 720px) {
+  :is(main, .pots-page) > header:first-child > p:not(.pots-muted, .pots-meta, .pots-eyebrow) {
+    font-size: 1.25em;
+    line-height: 1.55;
+  }
 }
 :is(main, .pots-page) > header:first-child > p.pots-muted {
   font-size: 0.875em;
@@ -357,14 +552,57 @@ small {
 }
 :is(main, .pots-page) > header:first-child > :is(.pots-stats, .pots-points, .pots-cols, .pots-grid) {
   max-width: none;
-  margin-top: 22px;
+  margin-top: 26px;
+}
+/* The bold version: a dark band, light text, a brighter glow. It sets the colours inside it, so its parts follow. */
+:is(main, .pots-page) > header.pots-ink:first-child {
+  --pots-text: #f2f4fa;
+  --pots-muted: #a9b2c7;
+  --pots-line: rgba(255, 255, 255, 0.13);
+  --pots-raised: rgba(255, 255, 255, 0.06);
+  --pots-soft: rgba(255, 255, 255, 0.08);
+  --pots-accent: #a3b1ff;
+  --pots-accent-soft: rgba(163, 177, 255, 0.16);
+  --pots-accent-text: #0b0f24;
+  --pots-good: #6ee0a8;
+  --pots-good-soft: rgba(110, 224, 168, 0.14);
+  --pots-warn: #ffc875;
+  --pots-warn-soft: rgba(255, 200, 117, 0.14);
+  --pots-bad: #ff958b;
+  --pots-bad-soft: rgba(255, 149, 139, 0.14);
+  --pots-shadow-1: none;
+  color: var(--pots-text);
+  border-color: rgba(255, 255, 255, 0.08);
+  background:
+    radial-gradient(80% 120% at 100% 0%, rgba(139, 92, 246, 0.45), transparent 60%),
+    radial-gradient(70% 110% at 0% 100%, rgba(59, 79, 224, 0.5), transparent 65%),
+    radial-gradient(50% 80% at 60% 120%, rgba(42, 157, 143, 0.28), transparent 70%),
+    #0b1024;
+  box-shadow: var(--pots-shadow-2);
 }
 .pots-eyebrow {
-  margin: 0 0 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin: 0 0 14px;
   color: var(--pots-accent);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.pots-eyebrow:lang(zh),
+.pots-eyebrow:lang(ja),
+.pots-eyebrow:lang(ko) {
   font-size: 0.8125rem;
-  font-weight: 650;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.04em;
+}
+.pots-eyebrow[data-icon]::before {
+  width: 1.35em;
+  height: 1.35em;
+  margin: 0;
 }
 .pots-eyebrow + h1 {
   margin-top: 0;
@@ -372,7 +610,7 @@ small {
 .pots-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   padding: 0;
   list-style: none;
   font-size: 0.8125rem;
@@ -383,18 +621,19 @@ small {
   align-items: center;
   gap: 6px;
   margin: 0;
-  padding: 4px 10px;
+  padding: 5px 11px;
   border: 1px solid var(--pots-line);
   border-radius: 999px;
   background: var(--pots-raised);
   color: var(--pots-muted);
-  font-weight: 500;
+  font-weight: 550;
+  box-shadow: var(--pots-shadow-1);
 }
 .pots-meta > :is(b, strong) {
   color: var(--pots-text);
   font-weight: 600;
 }
-/* A coloured dot for a status: <span class="pots-good">Approved</span> */
+/* A coloured dot for a status: <span class="pots-good">Approved</span>; with data-icon, the icon takes the colour. */
 .pots-meta > :is(.pots-good, .pots-warn, .pots-bad, .pots-info)::before {
   content: "";
   width: 7px;
@@ -410,6 +649,15 @@ small {
 }
 .pots-meta > .pots-bad::before {
   background: var(--pots-bad);
+}
+.pots-meta > [data-icon]::before {
+  width: 1.15em;
+  height: 1.15em;
+  margin: 0;
+  border-radius: 0;
+}
+.pots-meta > :is(.pots-good, .pots-warn, .pots-bad, .pots-info) {
+  color: var(--pots-text);
 }
 
 /* ---- Contents: <nav class="pots-toc"> in <main>, after the header ----
@@ -480,10 +728,12 @@ small {
   .pots-toc::before {
     content: "On this page";
     display: block;
-    padding: 0 0 10px 14px;
-    color: var(--pots-text);
-    font-size: 0.8125rem;
-    font-weight: 650;
+    padding: 0 0 12px 14px;
+    color: var(--pots-muted);
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
   }
   .pots-toc:lang(zh)::before {
     content: "本页内容";
@@ -494,9 +744,13 @@ small {
     border-left: 2px solid var(--pots-line);
     white-space: normal;
   }
+  .pots-toc a:hover {
+    border-left-color: color-mix(in srgb, var(--pots-text) 30%, var(--pots-line));
+  }
   .pots-toc a[aria-current="true"] {
     background: none;
     color: var(--pots-accent);
+    font-weight: 650;
     border-left-color: var(--pots-accent);
   }
 }
@@ -518,7 +772,7 @@ small {
 .pots-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 16rem), 1fr));
-  gap: 12px;
+  gap: 14px;
   margin: 0 0 1.2em;
 }
 .pots-row {
@@ -529,7 +783,10 @@ small {
 .pots-row > * {
   flex: 1 1 12rem;
 }
+/* A card. Its first heading is a strip across its top, so cards side by side read as columns:
+   <div class="pots-card pots-good"><h3 data-icon="check">After</h3>…</div> */
 .pots-card {
+  --pots-k: var(--pots-text);
   border: 1px solid var(--pots-line);
   border-radius: var(--pots-radius);
   padding: 16px 18px;
@@ -538,26 +795,60 @@ small {
   box-shadow: var(--pots-shadow-1);
 }
 .pots-card > :is(h2, h3, h4):first-child {
-  margin: 0 0 6px;
-  font-size: 1rem;
+  margin: -16px -18px 14px;
+  padding: 11px 18px 10px;
+  border-bottom: 1px solid var(--pots-line);
+  border-radius: calc(var(--pots-radius) - 1px) calc(var(--pots-radius) - 1px) 0 0;
+  background: color-mix(in srgb, var(--pots-k) 4%, var(--pots-raised));
+  color: var(--pots-k);
+  font-size: 0.9375rem;
+  font-weight: 700;
   line-height: 1.4;
+  letter-spacing: 0;
+}
+.pots-card > :is(h2, h3, h4):first-child small {
+  font-weight: 500;
 }
 /* A card that leads: the one to read first, or the choice you recommend. */
 .pots-card.pots-info {
-  border-color: var(--pots-tint-line);
-  background: var(--pots-tint);
+  --pots-k: var(--pots-accent);
+  border-color: color-mix(in srgb, var(--pots-accent) 55%, var(--pots-line));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--pots-accent) 55%, var(--pots-line)), var(--pots-shadow-2);
 }
 .pots-card.pots-good {
-  border-color: color-mix(in srgb, var(--pots-good) 35%, var(--pots-line));
-  box-shadow: inset 3px 0 0 var(--pots-good), var(--pots-shadow-1);
+  --pots-k: var(--pots-good);
+  border-color: color-mix(in srgb, var(--pots-good) 32%, var(--pots-line));
 }
 .pots-card.pots-warn {
-  border-color: color-mix(in srgb, var(--pots-warn) 35%, var(--pots-line));
-  box-shadow: inset 3px 0 0 var(--pots-warn), var(--pots-shadow-1);
+  --pots-k: var(--pots-warn);
+  border-color: color-mix(in srgb, var(--pots-warn) 32%, var(--pots-line));
 }
 .pots-card.pots-bad {
-  border-color: color-mix(in srgb, var(--pots-bad) 35%, var(--pots-line));
-  box-shadow: inset 3px 0 0 var(--pots-bad), var(--pots-shadow-1);
+  --pots-k: var(--pots-bad);
+  border-color: color-mix(in srgb, var(--pots-bad) 32%, var(--pots-line));
+}
+.pots-card:is(.pots-info, .pots-good, .pots-warn, .pots-bad) > :is(h2, h3, h4):first-child {
+  background: color-mix(in srgb, var(--pots-k) 10%, var(--pots-raised));
+  border-bottom-color: color-mix(in srgb, var(--pots-k) 20%, var(--pots-line));
+}
+/* A card without a heading keeps a coloured edge, so its kind still shows. */
+.pots-card:is(.pots-good, .pots-warn, .pots-bad):not(:has(> :is(h2, h3, h4):first-child)) {
+  box-shadow: inset 3px 0 0 var(--pots-k), var(--pots-shadow-1);
+}
+a.pots-card {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+}
+a.pots-card:hover {
+  border-color: color-mix(in srgb, var(--pots-accent) 40%, var(--pots-line));
+  box-shadow: var(--pots-shadow-2);
+  transform: translateY(-1px);
+}
+a.pots-card:focus-visible {
+  outline: 2px solid var(--pots-accent);
+  outline-offset: 2px;
 }
 .pots-grid > *,
 .pots-cols > *,
@@ -570,20 +861,26 @@ small {
 [data-pots-tabs] > * > :first-child {
   margin-top: 0;
 }
+.pots-card > :is(h2, h3, h4):first-child {
+  margin-top: -16px;
+}
 .pots-card > :last-child,
 .pots-note > :last-child,
 .pots-cols > * > :last-child {
   margin-bottom: 0;
 }
 
-/* Key numbers: <div class="pots-stats"><div class="pots-stat"><b>$229</b><span>a week for two</span></div>…</div> */
+/* Key numbers: <div class="pots-stats"><div class="pots-stat"><b>$229</b><span>a week for two</span></div>…</div>
+   A change: <small class="pots-delta pots-good" data-icon="up">12% on last week</small>. data-icon on the stat puts its
+   icon at the top right. */
 .pots-stats {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 9.5rem), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 8.5rem), 1fr));
   gap: 12px;
   margin: 0 0 1.6em;
 }
 .pots-stat {
+  position: relative;
   border: 1px solid var(--pots-line);
   border-radius: var(--pots-radius);
   background: var(--pots-raised);
@@ -593,16 +890,16 @@ small {
 }
 .pots-stat > :is(b, strong) {
   display: block;
-  font-size: clamp(1.5rem, 1.25rem + 0.8vw, 1.9rem);
-  font-weight: 700;
-  line-height: 1.15;
-  letter-spacing: -0.02em;
+  font-size: clamp(1.65rem, 1.35rem + 1vw, 2.2rem);
+  font-weight: 750;
+  line-height: 1.1;
+  letter-spacing: -0.03em;
   font-variant-numeric: tabular-nums;
 }
 .pots-stat > span,
 .pots-stat > small {
   display: block;
-  margin-top: 5px;
+  margin-top: 6px;
   color: var(--pots-muted);
 }
 .pots-stat > span {
@@ -617,66 +914,132 @@ small {
 .pots-stat.pots-bad > :is(b, strong) {
   color: var(--pots-bad);
 }
+.pots-stat.pots-info > :is(b, strong) {
+  color: var(--pots-accent);
+}
+.pots-stat[data-icon] > :is(b, strong) {
+  padding-right: 34px;
+}
+.pots-stat[data-icon]::before {
+  position: absolute;
+  top: 19px;
+  right: 19px;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  color: var(--pots-accent);
+  z-index: 1;
+}
+.pots-stat[data-icon]::after {
+  content: "";
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--pots-radius-s);
+  background: var(--pots-accent-soft);
+}
+.pots-stat:is(.pots-good, .pots-warn, .pots-bad)[data-icon]::before {
+  color: var(--pots-k, currentColor);
+}
+.pots-stat.pots-good { --pots-k: var(--pots-good); }
+.pots-stat.pots-warn { --pots-k: var(--pots-warn); }
+.pots-stat.pots-bad { --pots-k: var(--pots-bad); }
+.pots-stat:is(.pots-good, .pots-warn, .pots-bad)[data-icon]::after {
+  background: color-mix(in srgb, var(--pots-k) 13%, transparent);
+}
+.pots-delta,
+.pots-stat > .pots-delta {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  gap: 3px;
+  margin-top: 8px;
+  padding: 2px 8px 2px 6px;
+  border-radius: 7px;
+  line-height: 1.35;
+  background: var(--pots-soft);
+  color: var(--pots-muted);
+  font-size: 0.8125rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.pots-delta[data-icon]::before {
+  width: 0.95em;
+  height: 0.95em;
+  margin: 0;
+}
+.pots-delta.pots-good {
+  background: var(--pots-good-soft);
+  color: var(--pots-good);
+}
+.pots-delta.pots-warn {
+  background: var(--pots-warn-soft);
+  color: var(--pots-warn);
+}
+.pots-delta.pots-bad {
+  background: var(--pots-bad-soft);
+  color: var(--pots-bad);
+}
 
-/* A note (a callout). Plain is blue; .pots-good, .pots-warn and .pots-bad colour it. A sign at the start shows which
-   kind it is; a <b> or <strong> that starts it is its title, on a line of its own. */
+/* A note (a callout). Plain is blue; .pots-good, .pots-warn and .pots-bad colour it. An icon at the start shows which
+   kind it is (data-icon picks another); a <b> or <strong> that starts it is its title, on a line of its own. */
+.pots-note:not([data-icon]) {
+  --pots-icon: var(--pots-i-info);
+}
 .pots-note {
   --pots-n: var(--pots-accent);
   position: relative;
-  background: var(--pots-accent-soft);
-  border: 1px solid color-mix(in srgb, var(--pots-n) 18%, transparent);
+  background: color-mix(in srgb, var(--pots-n) 7%, var(--pots-bg));
+  border: 1px solid color-mix(in srgb, var(--pots-n) 24%, transparent);
   border-radius: var(--pots-radius);
-  padding: 12px 16px 12px 46px;
+  padding: 13px 18px 13px 48px;
   margin: 0 0 1em;
-  /* The middle of the first line, worked out here so the sign's own small text does not change it. */
+  /* The middle of the first line, worked out here so the icon's size does not change it. */
   --pots-mid: 0.5lh;
 }
 .pots-note::before {
-  content: "i";
+  content: "";
   position: absolute;
-  left: 15px;
-  top: calc(12px + var(--pots-mid) - 9px);
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
+  left: 17px;
+  top: calc(13px + var(--pots-mid) - 10px);
+  width: 20px;
+  height: 20px;
+  margin: 0;
   background: var(--pots-n);
-  color: var(--pots-bg);
-  font: 700 12px/1 var(--pots-font);
+  -webkit-mask: var(--pots-icon) center / contain no-repeat;
+  mask: var(--pots-icon) center / contain no-repeat;
 }
 .pots-note.pots-good {
   --pots-n: var(--pots-good);
-  background: var(--pots-good-soft);
 }
-.pots-note.pots-good::before {
-  content: "✓";
+.pots-note.pots-good:not([data-icon]) {
+  --pots-icon: var(--pots-i-check);
 }
 .pots-note.pots-warn {
   --pots-n: var(--pots-warn);
-  background: var(--pots-warn-soft);
 }
-.pots-note.pots-warn::before {
-  content: "!";
+.pots-note.pots-warn:not([data-icon]) {
+  --pots-icon: var(--pots-i-warn);
 }
 .pots-note.pots-bad {
   --pots-n: var(--pots-bad);
-  background: var(--pots-bad-soft);
 }
-.pots-note.pots-bad::before {
-  content: "×";
-  font-size: 15px;
+.pots-note.pots-bad:not([data-icon]) {
+  --pots-icon: var(--pots-i-ban);
 }
 .pots-note > :is(b, strong):first-child {
   display: block;
-  margin-bottom: 2px;
+  margin-bottom: 3px;
+  color: color-mix(in srgb, var(--pots-n) 75%, var(--pots-text));
 }
 
 /* Key points: the few things to take away, in a card with a tick before each. <ul class="pots-points">.
-   <ol class="pots-points"> numbers them. */
+   <ol class="pots-points"> numbers them; data-icon on an item draws that icon instead of the tick. */
 .pots-points {
   list-style: none;
-  padding: 14px 18px;
+  padding: 6px 20px;
   margin: 0 0 1.4em;
   border: 1px solid var(--pots-line);
   border-radius: var(--pots-radius);
@@ -684,58 +1047,66 @@ small {
   box-shadow: var(--pots-shadow-1);
   counter-reset: pots-point;
 }
+.pots-points > li:not([data-icon]) {
+  --pots-icon: var(--pots-i-check);
+}
 .pots-points > li {
   position: relative;
-  padding: 0 0 0 32px;
+  margin: 0;
+  padding: 12px 0 12px 36px;
   counter-increment: pots-point;
   --pots-mid: 0.5lh;
 }
 .pots-points > li + li {
-  padding-top: 10px;
-  margin-top: 10px;
   border-top: 1px solid var(--pots-line);
 }
+/* The icon (::before) on a round tile (::after). */
 .pots-points > li::before {
   content: "";
   position: absolute;
-  left: 0;
-  top: calc(var(--pots-mid) - 10px);
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: var(--pots-accent-soft);
+  left: 5px;
+  top: calc(12px + var(--pots-mid) - 7px);
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  background: var(--pots-accent);
+  -webkit-mask: var(--pots-icon) center / contain no-repeat;
+  mask: var(--pots-icon) center / contain no-repeat;
+  z-index: 1;
 }
-.pots-points > li + li::before {
-  top: calc(10px + var(--pots-mid) - 10px);
-}
-/* The tick, drawn with two borders. */
 .pots-points > li::after {
   content: "";
   position: absolute;
-  left: 7px;
-  top: calc(var(--pots-mid) - 5.5px);
-  width: 5px;
-  height: 9px;
-  border: solid var(--pots-accent);
-  border-width: 0 2px 2px 0;
-  transform: rotate(45deg);
+  left: 0;
+  top: calc(12px + var(--pots-mid) - 12px);
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--pots-accent-soft);
 }
-.pots-points > li + li::after {
-  top: calc(10px + var(--pots-mid) - 5.5px);
-}
-ol.pots-points > li::before {
+ol.pots-points > li:not([data-icon])::before {
   content: counter(pots-point);
+  left: 0;
+  top: calc(12px + var(--pots-mid) - 12px);
+  width: 24px;
+  height: 24px;
   display: grid;
   place-items: center;
+  background: none;
+  -webkit-mask: none;
+  mask: none;
   color: var(--pots-accent);
   font-size: 0.75rem;
-  font-weight: 700;
+  font-weight: 750;
   line-height: 1;
   font-variant-numeric: tabular-nums;
 }
-ol.pots-points > li::after {
-  display: none;
-}
+.pots-points > li.pots-good::before { background: var(--pots-good); }
+.pots-points > li.pots-good::after { background: var(--pots-good-soft); }
+.pots-points > li.pots-warn::before { background: var(--pots-warn); }
+.pots-points > li.pots-warn::after { background: var(--pots-warn-soft); }
+.pots-points > li.pots-bad::before { background: var(--pots-bad); }
+.pots-points > li.pots-bad::after { background: var(--pots-bad-soft); }
 .pots-points > li > :is(b, strong):first-child {
   color: var(--pots-text);
 }
@@ -743,15 +1114,21 @@ ol.pots-points > li::after {
 /* A label in a line. Grey; .pots-good, .pots-warn, .pots-bad and .pots-info colour it. */
 .pots-badge {
   display: inline-block;
-  padding: 0.05em 0.55em;
+  padding: 0.05em 0.6em;
   border-radius: 999px;
   background: var(--pots-soft);
   color: var(--pots-muted);
   font-size: 0.8em;
-  font-weight: 600;
+  font-weight: 650;
   line-height: 1.6;
   vertical-align: 0.06em;
   white-space: nowrap;
+}
+.pots-badge[data-icon]::before {
+  width: 1em;
+  height: 1em;
+  margin-right: 0.3em;
+  vertical-align: -0.15em;
 }
 .pots-badge.pots-good {
   background: var(--pots-good-soft);
@@ -771,7 +1148,8 @@ ol.pots-points > li::after {
 }
 
 /* Steps in order: <ol class="pots-steps">. A timeline without numbers: <ul class="pots-steps">.
-   The marker sits on the middle of the first line; a hairline joins it to the next one. */
+   The marker sits on the middle of the first line; a hairline joins it to the next one. data-icon on an item draws
+   that icon in its marker. */
 @property --pots-mid {
   syntax: "<length>";
   inherits: true;
@@ -785,60 +1163,211 @@ ol.pots-points > li::after {
 }
 .pots-steps > li {
   position: relative;
-  padding: 0 0 16px 40px;
+  padding: 0 0 18px 42px;
   margin: 0;
   counter-increment: pots-step;
   /* The middle of the first line, worked out here so the smaller marker text does not change it. */
   --pots-mid: 0.5lh;
+  /* The line to the next marker. */
+  background: linear-gradient(var(--pots-line), var(--pots-line)) 12.5px calc(var(--pots-mid) + 17px) / 1.5px calc(100% - var(--pots-mid) - 18px) no-repeat;
 }
-.pots-steps > li::before {
+.pots-steps > li::after {
   content: counter(pots-step);
   position: absolute;
   left: 0;
-  top: calc(var(--pots-mid) - 12px);
-  width: 24px;
-  height: 24px;
+  top: calc(var(--pots-mid) - 13px);
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
   display: grid;
   place-items: center;
-  background: var(--pots-accent-soft);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pots-accent) 25%, transparent);
-  color: var(--pots-accent);
+  background: var(--pots-accent);
+  color: var(--pots-accent-text);
   font-size: 0.75rem;
-  font-weight: 650;
+  font-weight: 750;
   line-height: 1;
   font-variant-numeric: tabular-nums;
+  box-shadow: 0 0 0 3px var(--pots-bg);
 }
-.pots-steps > li::after {
+.pots-steps > li[data-icon]::after {
   content: "";
+}
+.pots-steps > li[data-icon]::before {
   position: absolute;
-  left: 11.5px;
-  top: calc(var(--pots-mid) + 16px);
-  bottom: calc(16px - var(--pots-mid));
-  width: 1px;
-  background: var(--pots-line);
+  left: 6px;
+  top: calc(var(--pots-mid) - 7px);
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  background: var(--pots-accent-text);
+  z-index: 1;
 }
 .pots-steps > li:last-child {
   padding-bottom: 0;
-}
-.pots-steps > li:last-child::after {
-  display: none;
-}
-ul.pots-steps > li::before {
-  content: "";
-  width: 11px;
-  height: 11px;
-  left: 6.5px;
-  top: calc(var(--pots-mid) - 5.5px);
-  background: var(--pots-bg);
-  box-shadow: inset 0 0 0 2px var(--pots-accent);
+  background: none;
 }
 ul.pots-steps > li::after {
-  top: calc(var(--pots-mid) + 10px);
-  bottom: calc(10px - var(--pots-mid));
+  content: "";
+  width: 13px;
+  height: 13px;
+  left: 6.5px;
+  top: calc(var(--pots-mid) - 6.5px);
+  background: var(--pots-bg);
+  box-shadow: inset 0 0 0 3px var(--pots-accent);
 }
+ul.pots-steps > li {
+  background-position: 12.5px calc(var(--pots-mid) + 11px);
+  background-size: 1.5px calc(100% - var(--pots-mid) - 12px);
+}
+ul.pots-steps > li:last-child {
+  background: none;
+}
+:is(ol, ul).pots-steps > li.pots-good::after { background: var(--pots-good); box-shadow: 0 0 0 3px var(--pots-bg); }
+:is(ol, ul).pots-steps > li.pots-warn::after { background: var(--pots-warn); box-shadow: 0 0 0 3px var(--pots-bg); }
+:is(ol, ul).pots-steps > li.pots-bad::after { background: var(--pots-bad); box-shadow: 0 0 0 3px var(--pots-bg); }
+ol.pots-steps > li.pots-muted::after { background: var(--pots-soft); color: var(--pots-muted); box-shadow: inset 0 0 0 1px var(--pots-line), 0 0 0 3px var(--pots-bg); }
 .pots-steps > li > :is(b, strong):first-child {
   display: block;
+}
+/* A date or time over a step: <li><time>18 Nov</time><b>Launch</b> …</li> */
+.pots-steps > li > time:first-child {
+  display: block;
+  color: var(--pots-accent);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A flow: boxes joined by arrows, for how something works. A fork goes in pots-lanes, one pots-lane per way.
+   <div class="pots-flow"><div class="pots-node"><b data-icon="chat">A message</b><span>…</span></div>
+   <div class="pots-node pots-info">…</div><div class="pots-lanes"><div class="pots-lane pots-good"><h3>…</h3>…</div>…</div></div> */
+.pots-flow {
+  --pots-arrow: color-mix(in srgb, var(--pots-text) 32%, transparent);
+  --pots-head: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M0 0h12L6 8z'/%3E%3C/svg%3E");
+  margin: 0 0 1.4em;
+}
+.pots-flow > * {
+  position: relative;
+  margin: 0;
+}
+.pots-flow > * + :not(figcaption) {
+  margin-top: 38px;
+}
+.pots-flow > * + :not(figcaption)::after {
+  content: "";
+  position: absolute;
+  left: calc(50% - 6px);
+  top: -34px;
+  width: 12px;
+  height: 30px;
+  background: var(--pots-arrow);
+  -webkit-mask: var(--pots-head) bottom / 12px 8px no-repeat, linear-gradient(#000, #000) center top / 2px calc(100% - 6px) no-repeat;
+  mask: var(--pots-head) bottom / 12px 8px no-repeat, linear-gradient(#000, #000) center top / 2px calc(100% - 6px) no-repeat;
+}
+.pots-flow > .pots-node {
+  max-width: 36rem;
+  margin-left: auto;
+  margin-right: auto;
+}
+.pots-node {
+  --pots-k: var(--pots-text);
+  padding: 13px 18px;
+  border: 1px solid var(--pots-line);
+  border-radius: var(--pots-radius);
+  background: var(--pots-raised);
+  box-shadow: var(--pots-shadow-1);
+  line-height: 1.55;
+}
+.pots-node > :is(b, strong) {
+  display: block;
+  color: var(--pots-k);
+}
+.pots-node > :is(span, small) {
+  display: block;
+  margin-top: 3px;
+  color: var(--pots-muted);
+  font-size: 0.92em;
+}
+.pots-node.pots-info {
+  --pots-k: var(--pots-accent);
+  background: color-mix(in srgb, var(--pots-accent) 7%, var(--pots-raised));
+  border-color: color-mix(in srgb, var(--pots-accent) 40%, var(--pots-line));
+}
+.pots-node.pots-good { --pots-k: var(--pots-good); border-color: color-mix(in srgb, var(--pots-good) 35%, var(--pots-line)); }
+.pots-node.pots-warn { --pots-k: var(--pots-warn); border-color: color-mix(in srgb, var(--pots-warn) 35%, var(--pots-line)); }
+.pots-node.pots-bad { --pots-k: var(--pots-bad); border-color: color-mix(in srgb, var(--pots-bad) 35%, var(--pots-line)); }
+.pots-lanes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
+  gap: 14px 20px;
+}
+.pots-lane {
+  --pots-k: var(--pots-accent);
+  position: relative;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--pots-k) 22%, transparent);
+  border-radius: var(--pots-radius-l);
+  background: color-mix(in srgb, var(--pots-k) 7%, var(--pots-bg));
+}
+.pots-lane.pots-good { --pots-k: var(--pots-good); }
+.pots-lane.pots-warn { --pots-k: var(--pots-warn); }
+.pots-lane.pots-bad { --pots-k: var(--pots-bad); }
+.pots-lane > :is(h3, h4, b):first-child {
+  display: block;
+  margin: 2px 4px 12px;
+  color: var(--pots-k);
+  font-size: 1rem;
+  line-height: 1.4;
+}
+.pots-lane > .pots-node {
+  border-color: transparent;
+}
+.pots-lane > .pots-node + .pots-node {
+  margin-top: 8px;
+}
+.pots-flow > figcaption {
+  margin: 14px auto 0;
+  max-width: 46rem;
+  text-align: center;
+}
+/* On a computer the ways sit side by side, and the arrow splits: a stub, a bar, an arrow into each way. */
+@media (min-width: 720px) {
+  .pots-flow > .pots-lanes {
+    grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  }
+  .pots-flow > * + .pots-lanes::after {
+    top: -38px;
+    height: 18px;
+    -webkit-mask: linear-gradient(#000, #000) center / 2px 100% no-repeat;
+    mask: linear-gradient(#000, #000) center / 2px 100% no-repeat;
+  }
+  .pots-flow > .pots-lanes::before {
+    content: "";
+    position: absolute;
+    top: -21px;
+    left: calc(25% - 5px);
+    right: calc(25% - 5px);
+    height: 2px;
+    border-radius: 1px;
+    background: var(--pots-arrow);
+  }
+  .pots-flow > .pots-lanes:has(> :nth-child(3))::before {
+    left: calc(100% / 6 - 7px);
+    right: calc(100% / 6 - 7px);
+  }
+  .pots-flow > .pots-lanes > .pots-lane::after {
+    content: "";
+    position: absolute;
+    left: calc(50% - 6px);
+    top: -21px;
+    width: 12px;
+    height: 19px;
+    background: var(--pots-arrow);
+    -webkit-mask: var(--pots-head) bottom / 12px 8px no-repeat, linear-gradient(#000, #000) center top / 2px calc(100% - 6px) no-repeat;
+    mask: var(--pots-head) bottom / 12px 8px no-repeat, linear-gradient(#000, #000) center top / 2px calc(100% - 6px) no-repeat;
+  }
 }
 
 /* Name and value pairs: <dl class="pots-kv"><dt>Rice</dt><dd>1 bowl</dd></dl>
@@ -872,6 +1401,45 @@ ul.pots-steps > li::after {
 }
 .pots-card > .pots-kv > dd {
   color: var(--pots-muted);
+}
+/* Terms to learn, each on a small card: <dl class="pots-terms"><div><dt>Wake</dt><dd>…</dd></div>…</dl> */
+.pots-terms {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 14rem), 1fr));
+  gap: 10px;
+  margin: 0 0 1.2em;
+}
+.pots-terms > div {
+  padding: 12px 15px 13px;
+  border: 1px solid var(--pots-line);
+  border-radius: var(--pots-radius);
+  background: var(--pots-raised);
+  box-shadow: var(--pots-shadow-1);
+}
+.pots-terms dt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--pots-text);
+  font-weight: 700;
+  line-height: 1.4;
+}
+.pots-terms dt:not([data-icon])::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 2px;
+  background: var(--pots-accent);
+}
+.pots-terms dt[data-icon]::before {
+  margin: 0;
+  color: var(--pots-accent);
+}
+.pots-terms dd {
+  margin: 4px 0 0;
+  color: var(--pots-muted);
+  font-size: 0.9em;
+  line-height: 1.6;
 }
 
 /* ---- Tables: hairline rows; a wide one scrolls inside itself, never the page ----
@@ -913,8 +1481,10 @@ td {
 thead th {
   padding-top: 6px;
   padding-bottom: 8px;
-  font-size: 0.8125rem;
-  font-weight: 600;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   color: var(--pots-muted);
   white-space: nowrap;
   vertical-align: bottom;
@@ -1091,7 +1661,7 @@ details:not(.pots-comment) > summary :is(small, .pots-muted) {
     display: none;
   }
   /* While the tabs show, the bar and its panel go one under the other, though two columns would fit. */
-  .pots-cols[data-pots-tabs="phone"]:has(> .pots-tabbar) {
+  :is(.pots-cols, .pots-grid)[data-pots-tabs="phone"]:has(> .pots-tabbar) {
     grid-template-columns: minmax(0, 1fr);
   }
 }
@@ -1399,6 +1969,7 @@ fieldset {
   background: var(--pots-raised);
   box-shadow: var(--pots-shadow-1);
   padding: 16px 18px 18px;
+  --pots-pad: 18px;
   margin: 0 0 14px;
   min-width: 0;
   max-width: var(--pots-measure);
@@ -1414,11 +1985,23 @@ legend {
   float: left;
   width: 100%;
   padding: 0;
-  margin: 0 0 10px;
+  margin: 0 0 12px;
+  font-size: 1.0625rem;
   font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
 }
 legend + * {
   clear: both;
+}
+/* A question's legend is a strip across the top of its box, like a card's heading. */
+fieldset:not([data-pots-question] fieldset) > legend {
+  width: calc(100% + 2 * var(--pots-pad));
+  margin: -16px calc(-1 * var(--pots-pad)) 16px;
+  padding: 12px var(--pots-pad) 11px;
+  border-bottom: 1px solid var(--pots-line);
+  border-radius: calc(var(--pots-radius) - 1px) calc(var(--pots-radius) - 1px) 0 0;
+  background: color-mix(in srgb, var(--pots-text) 3%, var(--pots-raised));
 }
 [data-pots-question] > :is(h2, h3, h4):first-child {
   margin-top: 0;

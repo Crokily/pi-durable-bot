@@ -242,7 +242,7 @@ node <this skill's folder>/shot.mjs "$url" 1440 /tmp/page-computer.png
 node <this skill's folder>/shot.mjs "$url" 390 /tmp/page-dark.png dark
 ```
 
-It sets the page's width as a phone does (`--window-size` can not make a window narrower than about 500 pixels, so it would crop a wider layout), takes the whole page, and prints what it measured: `innerWidth`, `scrollsSideways`, and the script errors. It fails when `innerWidth` is not the width you asked for, for example when the page has no viewport tag. Then read the images. If the page is long, look at it in parts.
+It sets the page's width as a phone does (`--window-size` can not make a window narrower than about 500 pixels, so it would crop a wider layout), takes the whole page, and prints what it measured: `innerWidth`, `scrollsSideways`, and the script errors. It fails when `innerWidth` is not the width you asked for, for example when the page has no viewport tag. A page taller than 16000 pixels goes in several files that join up, `/tmp/page-phone.png`, `/tmp/page-phone-2.png` and so on, and the output names them all in `files`. Then read every image. If the page is long, look at it in parts.
 
 ## Answer pages
 

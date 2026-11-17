@@ -300,4 +300,20 @@ describe.skipIf(!path)("the pages skill's screenshot script", () => {
     // The PNG's width, from its header.
     expect(readFileSync(png).readUInt32BE(16)).toBe(390);
   }, 40_000);
+
+  it("takes a page taller than 16000px in parts that cover all of it", async () => {
+    const url = chrome.serve(kitPage(`<div style="height: 26600px"></div>`));
+    const png = join(out, "long.png");
+    const stdout = await new Promise<string>((resolve, reject) =>
+      execFile(process.execPath, [fileURLToPath(new URL("../skills/pages/shot.mjs", import.meta.url)), url, "390", png], { env: { ...process.env, CHROME: path }, timeout: 30_000 }, (error, out, err) =>
+        error ? reject(new Error(`${error.message}\n${err}`)) : resolve(out),
+      ),
+    );
+    const report = JSON.parse(stdout);
+    expect(report.files).toEqual([png, join(out, "long-2.png")]);
+    // The heights, from the PNG headers, add up to the page's.
+    const heights = report.files.map((f: string) => readFileSync(f).readUInt32BE(20));
+    expect(heights[0]).toBe(16000);
+    expect(heights[0] + heights[1]).toBe(report.height);
+  }, 40_000);
 });

@@ -3,7 +3,7 @@
 //   node shot.mjs <url> <width> <out.png> [dark]
 // It emulates the width (a window can not be made narrower than about 500px, so --window-size crops a wider layout),
 // takes the whole page, and prints what it measured: the page's innerWidth, whether it scrolls sideways, and script
-// errors. It fails when innerWidth is not the width asked for. $CHROME names the browser when it is not on PATH.
+// errors. A page taller than 16000px goes in several files, out.png, out-2.png, ..., each up to 16000px, named in "files". It fails when innerWidth is not the width asked for. $CHROME names the browser when it is not on PATH.
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -67,10 +67,18 @@ try {
     returnByValue: true,
   });
   const seen = JSON.parse(result.value);
-  const height = Math.min(seen.height, 16000);
-  const shot = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: true, clip: { x: 0, y: 0, width, height, scale: 1 } });
-  writeFileSync(out, Buffer.from(shot.data, "base64"));
+  // Chrome can not take one image much taller than 16000px, so a longer page is taken in parts that join up.
+  const limit = 16000;
+  const files = [];
+  for (let y = 0; y === 0 || y < seen.height; y += limit) {
+    const file = y === 0 ? out : out.replace(/(\.png)?$/i, (ext) => `-${y / limit + 1}${ext}`);
+    const clip = { x: 0, y, width, height: Math.max(1, Math.min(limit, seen.height - y)), scale: 1 };
+    const shot = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: true, clip });
+    writeFileSync(file, Buffer.from(shot.data, "base64"));
+    files.push(file);
+  }
   const report = { file: out, width, innerWidth: seen.innerWidth, height: seen.height, scrollsSideways: seen.scrollWidth > seen.innerWidth, errors };
+  if (files.length > 1) report.files = files;
   console.log(JSON.stringify(report));
   if (seen.innerWidth !== width) console.error(`innerWidth is ${seen.innerWidth}, not ${width}`);
   else status = 0;

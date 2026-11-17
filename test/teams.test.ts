@@ -218,6 +218,24 @@ describe("Teams: receiving", () => {
     expect(events).toHaveLength(1);
   });
 
+  it("keeps replies with the same ID in two threads of a channel apart, and their edits", async () => {
+    // Graph keeps a message ID unique only in its chat, channel or thread.
+    const { sockets, events } = await connect();
+    await sockets.send(inChannel({ id: "1731800000001" }, "1731800000001"));
+    await sockets.send(inChannel({ id: "1731800000050", text: "in A" }, "1731800000010"));
+    await sockets.send(inChannel({ id: "1731800000050", text: "in B" }, "1731800000020"));
+    const edit = { type: "messageUpdate", id: "1731800000050", timestamp: "2024-11-17T00:00:01.000Z", channelData: { tenant: { id: TENANT }, team: TEAM, channel: { id: CHANNEL }, eventType: "editMessage" } };
+    await sockets.send(inChannel(edit, "1731800000010"));
+    await sockets.send(inChannel(edit, "1731800000020"));
+    expect(events.map((event) => event.id)).toEqual([
+      `message:${CHANNEL}/1731800000001`,
+      `message:${CHANNEL}/1731800000010/1731800000050`,
+      `message:${CHANNEL}/1731800000020/1731800000050`,
+      `editMessage:${CHANNEL}/1731800000010/1731800000050:2024-11-17T00:00:01.000Z`,
+      `editMessage:${CHANNEL}/1731800000020/1731800000050:2024-11-17T00:00:01.000Z`,
+    ]);
+  });
+
   it("answers a click on a card (an invoke) after it is stored, and skips typing", async () => {
     const { sockets, events } = await connect();
     const click = activity({ type: "invoke", name: "adaptiveCard/action", id: "f:click-1", replyToId: "1731800000005", value: { action: { type: "Action.Execute", verb: "deploy", title: "Production", data: { release: "4.2" } } } });
@@ -590,6 +608,26 @@ describe("Teams: backfill", () => {
     expect(happenings.map((h) => [h.kind, h.message, h.thread])).toEqual([
       ["message", `teams:#${CHANNEL}/${since - 3000}/${since + 10}`, `teams:#${CHANNEL}/${since - 3000}`],
       ["message", `teams:#${CHANNEL}/${since - 2000}/${since + 20}`, `teams:#${CHANNEL}/${since - 2000}`],
+    ]);
+  });
+
+  it("keeps replies with the same ID and change time in two threads apart", async () => {
+    const since = 1731800000000;
+    const { channel, fake, events, sink } = await connect({ state, lastAlive: since, places: [`teams:#${CHANNEL}`] });
+    // Graph keeps a message ID unique only in its chat, channel or thread: two threads can each have a reply with this one.
+    const reply = (root: number) => graphMessage(since + 50, { replyToId: String(root), body: { contentType: "html", content: `<p>in ${root}</p>` } });
+    fake.route("GET", "/graph/v1.0/teams/team-aad-1/channels/[^/]+/messages", () => ({
+      value: [graphMessage(since - 1000, { replies: [reply(since - 1000)] }), graphMessage(since - 2000, { replies: [reply(since - 2000)] })],
+    }));
+    await channel.backfill(sink);
+    expect(events.map((event) => event.id).sort()).toEqual([
+      `history:${CHANNEL}/${since - 2000}/${since + 50}:${at(since + 50)}`,
+      `history:${CHANNEL}/${since - 1000}/${since + 50}:${at(since + 50)}`,
+    ]);
+    const happenings = await translated(channel, events);
+    expect(happenings.map((h) => [h.message, h.text]).sort()).toEqual([
+      [`teams:#${CHANNEL}/${since - 2000}/${since + 50}`, `in ${since - 2000}`],
+      [`teams:#${CHANNEL}/${since - 1000}/${since + 50}`, `in ${since - 1000}`],
     ]);
   });
 

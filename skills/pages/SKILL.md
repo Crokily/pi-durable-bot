@@ -70,7 +70,7 @@ Link them relative to the page's link, not its folder on disk: from a page's `in
 
 All that follows serves this goal: plain words make the text fast to read, the right form makes the shape of the information visible, and the layout puts more of it in view at once.
 
-**The text.** Always write in ASD-STE100 Simplified Technical <the reader's language>, and use the reader's ubiquitous language. Put the answer first: the title, one sentence with the conclusion, then two to four key numbers.
+**The text.** Always write in ASD-STE100 Simplified Technical <the reader's language>, and use the reader's ubiquitous language. Put the answer first.
 
 **The form.** A guide, not a rule. Use a row only when the information has that shape:
 
@@ -94,7 +94,7 @@ All that follows serves this goal: plain words make the text fast to read, the r
 
 **The look.** A page is an information page that the reader reads and answers, not a landing page. The kit draws it clean and calm: near-black text on a plain background, hairlines instead of boxes, and one accent colour for what the reader acts on or looks for: links, numbers, the chosen and the recommended choice, focus. You give it the structure it draws:
 
-- **The header.** Start `<main>` with a `<header>`: `<p class="pots-eyebrow" data-icon="…">` with the kind of page (Proposal, Weekly report, Decision), the `<h1>`, one sentence with the answer, `<p class="pots-meta">` with a `<span>` for each fact about the page (date, who it is for, status; a status span takes `pots-good`, `pots-warn` or `pots-bad`), and last, if they help, two to four key numbers (`pots-stats`) or key points (`pots-points`).
+- **The header.** Start `<main>` with a `<header>`: `<p class="pots-eyebrow" data-icon="…">` with the kind of page (Proposal, Weekly report, Decision), the `<h1>`, one sentence with the answer, `<p class="pots-meta">` with a `<span>` for each fact about the page (date, who it is for, status; a status span takes `pots-good`, `pots-warn` or `pots-bad`), and last, if they help, key numbers (`pots-stats`) or key points (`pots-points`).
 - **Sections.** Plain `<h2>` headings, with a number when the order matters (decisions to make, steps of a plan): `<h2><span class="pots-no">2</span>Costs</h2>`.
 - **Icons.** `data-icon="name"` puts a small line icon before an element's text. Use it where the reader scans: the eyebrow, the meta facts, card headings, badges, a stat, a note. Headings and `<summary>` stay plain. Notes and questions get their icon from the kit. The names: check, x, info, warn, question, ban, arrow, up, down, clock, calendar, user, users, bot, chat, mail, link, lock, key, shield, eye, search, chart, file, code, terminal, settings, money, place, globe, star, bolt, flag, bell, list.
 - **Colour.** Choose an accent for each page that fits its content, with one line in its CSS: `:root { --pots-accent: light-dark(#305a88, #8bb0db); }` (the light and the dark colour; this one is a muted slate blue). The kit's muted teal is only the fallback for a page that sets none. Choose a muted, darker, low-saturation colour; bright, common colours (bright blue, purple, violet) look cheap. `pots-good`, `pots-warn` and `pots-bad` mark a status.

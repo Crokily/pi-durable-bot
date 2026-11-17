@@ -29,7 +29,15 @@
   --pots-c5: #b08900;
   --pots-c6: #d4508a;
   --pots-c7: #8a94a6;
+  /* Surfaces: a card sits a little above the page; the header is tinted with the accent. */
+  --pots-raised: #ffffff;
+  --pots-tint: color-mix(in srgb, var(--pots-accent) 5%, var(--pots-bg));
+  --pots-tint-line: color-mix(in srgb, var(--pots-accent) 16%, var(--pots-line));
+  --pots-shadow-1: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --pots-shadow-2: 0 1px 2px rgba(16, 24, 40, 0.04), 0 4px 12px -2px rgba(16, 24, 40, 0.08);
+  --pots-radius-s: 8px;
   --pots-radius: 12px;
+  --pots-radius-l: 18px;
   --pots-measure: 42rem;
   --pots-width: 64rem;
   --pots-toc: 12rem;
@@ -58,6 +66,10 @@
     --pots-warn-soft: #33270f;
     --pots-bad: #ff8f84;
     --pots-bad-soft: #3a1c1c;
+    --pots-raised: #1b1e24;
+    --pots-tint: color-mix(in srgb, var(--pots-accent) 7%, var(--pots-bg));
+    --pots-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --pots-shadow-2: 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 16px -4px rgba(0, 0, 0, 0.4);
     --pots-c1: #8fb0ff;
     --pots-c2: #f5a26b;
     --pots-c3: #5cc8b8;
@@ -153,6 +165,49 @@ h2 {
   margin-top: 2em;
   margin-bottom: 0.6em;
 }
+/* A section of the page starts on a hairline with a short accent at its start. Inside a box, a heading is plain. */
+:is(main, .pots-page) h2 {
+  position: relative;
+  max-width: none;
+  margin-top: 2.2em;
+  padding-top: 0.85em;
+  border-top: 1px solid var(--pots-line);
+}
+:is(main, .pots-page) h2::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 0;
+  width: 28px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--pots-accent);
+}
+:is(.pots-card, .pots-note, .pots-cols, .pots-grid, fieldset, details, [data-pots-question], [data-pots-tabs]) h2 {
+  margin-top: 1.4em;
+  padding-top: 0;
+  border-top: 0;
+}
+:is(.pots-card, .pots-note, .pots-cols, .pots-grid, fieldset, details, [data-pots-question], [data-pots-tabs]) h2::before {
+  display: none;
+}
+/* A section number before a heading's text: <h2><span class="pots-no">2</span>Costs</h2> */
+.pots-no {
+  display: inline-grid;
+  place-items: center;
+  min-width: 1.7em;
+  height: 1.7em;
+  margin-right: 0.55em;
+  padding: 0 0.4em;
+  border-radius: var(--pots-radius-s);
+  background: var(--pots-accent-soft);
+  color: var(--pots-accent);
+  font-size: 0.72em;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  vertical-align: 0.12em;
+}
 h3 {
   font-size: 1.06rem;
 }
@@ -190,6 +245,14 @@ li + li {
 }
 li::marker {
   color: var(--pots-muted);
+}
+ol > li::marker {
+  color: var(--pots-accent);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+ul > li::marker {
+  color: color-mix(in srgb, var(--pots-accent) 70%, var(--pots-muted));
 }
 a {
   color: var(--pots-accent);
@@ -256,20 +319,97 @@ small {
   font-size: 0.87em;
 }
 
-/* The opening: <header> with <h1>, one sentence with the answer, and a quiet line of who and when. */
+/* The opening: <header> with <h1>, one sentence with the answer, and a quiet line of who and when.
+   It is a tinted panel across the page, so the first screen starts with the answer, not with plain text.
+   Optional: <p class="pots-eyebrow"> over the title (the kind of page, the project), and <p class="pots-meta">
+   with <span>s (date, status, who) that show as chips. */
 :is(main, .pots-page) > header:first-child {
-  margin-bottom: 24px;
+  max-width: none;
+  margin: 0 0 32px;
+  padding: 22px 20px 20px;
+  border: 1px solid var(--pots-tint-line);
+  border-radius: var(--pots-radius-l);
+  background: linear-gradient(180deg, var(--pots-tint), color-mix(in srgb, var(--pots-tint) 40%, var(--pots-bg)));
+}
+@media (min-width: 720px) {
+  :is(main, .pots-page) > header:first-child {
+    padding: 34px 36px 30px;
+  }
+}
+/* On a page of reading width only, such as a form, the panel keeps that width too. */
+:is(main, .pots-page):not(:has(.pots-wide, .pots-toc, .pots-cols, .pots-grid, .pots-stats, .pots-scroll, table)) > header:first-child {
+  max-width: calc(var(--pots-measure) + 2px);
 }
 :is(main, .pots-page) > header:first-child > h1 {
-  margin-bottom: 0.45em;
+  margin-bottom: 0.4em;
 }
-:is(main, .pots-page) > header:first-child > p:not(.pots-muted) {
-  font-size: 1.125em;
+:is(main, .pots-page) > header:first-child > p:not(.pots-muted, .pots-meta, .pots-eyebrow) {
+  font-size: 1.1875em;
   line-height: 1.6;
-  margin-bottom: 0.6em;
+  margin-bottom: 0.7em;
+  color: color-mix(in srgb, var(--pots-text) 86%, var(--pots-muted));
 }
 :is(main, .pots-page) > header:first-child > p.pots-muted {
   font-size: 0.875em;
+}
+:is(main, .pots-page) > header:first-child > :last-child {
+  margin-bottom: 0;
+}
+:is(main, .pots-page) > header:first-child > :is(.pots-stats, .pots-points, .pots-cols, .pots-grid) {
+  max-width: none;
+  margin-top: 22px;
+}
+.pots-eyebrow {
+  margin: 0 0 10px;
+  color: var(--pots-accent);
+  font-size: 0.8125rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+.pots-eyebrow + h1 {
+  margin-top: 0;
+}
+.pots-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0;
+  list-style: none;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+.pots-meta > * {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 4px 10px;
+  border: 1px solid var(--pots-line);
+  border-radius: 999px;
+  background: var(--pots-raised);
+  color: var(--pots-muted);
+  font-weight: 500;
+}
+.pots-meta > :is(b, strong) {
+  color: var(--pots-text);
+  font-weight: 600;
+}
+/* A coloured dot for a status: <span class="pots-good">Approved</span> */
+.pots-meta > :is(.pots-good, .pots-warn, .pots-bad, .pots-info)::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--pots-accent);
+}
+.pots-meta > .pots-good::before {
+  background: var(--pots-good);
+}
+.pots-meta > .pots-warn::before {
+  background: var(--pots-warn);
+}
+.pots-meta > .pots-bad::before {
+  background: var(--pots-bad);
 }
 
 /* ---- Contents: <nav class="pots-toc"> in <main>, after the header ----
@@ -392,8 +532,32 @@ small {
 .pots-card {
   border: 1px solid var(--pots-line);
   border-radius: var(--pots-radius);
-  padding: 14px 16px;
+  padding: 16px 18px;
   margin: 0 0 12px;
+  background: var(--pots-raised);
+  box-shadow: var(--pots-shadow-1);
+}
+.pots-card > :is(h2, h3, h4):first-child {
+  margin: 0 0 6px;
+  font-size: 1rem;
+  line-height: 1.4;
+}
+/* A card that leads: the one to read first, or the choice you recommend. */
+.pots-card.pots-info {
+  border-color: var(--pots-tint-line);
+  background: var(--pots-tint);
+}
+.pots-card.pots-good {
+  border-color: color-mix(in srgb, var(--pots-good) 35%, var(--pots-line));
+  box-shadow: inset 3px 0 0 var(--pots-good), var(--pots-shadow-1);
+}
+.pots-card.pots-warn {
+  border-color: color-mix(in srgb, var(--pots-warn) 35%, var(--pots-line));
+  box-shadow: inset 3px 0 0 var(--pots-warn), var(--pots-shadow-1);
+}
+.pots-card.pots-bad {
+  border-color: color-mix(in srgb, var(--pots-bad) 35%, var(--pots-line));
+  box-shadow: inset 3px 0 0 var(--pots-bad), var(--pots-shadow-1);
 }
 .pots-grid > *,
 .pots-cols > *,
@@ -420,17 +584,19 @@ small {
   margin: 0 0 1.6em;
 }
 .pots-stat {
-  background: var(--pots-soft);
+  border: 1px solid var(--pots-line);
   border-radius: var(--pots-radius);
-  padding: 14px 16px 13px;
+  background: var(--pots-raised);
+  box-shadow: var(--pots-shadow-1);
+  padding: 16px 18px 15px;
   line-height: 1.4;
 }
 .pots-stat > :is(b, strong) {
   display: block;
-  font-size: clamp(1.4rem, 1.2rem + 0.7vw, 1.7rem);
-  font-weight: 650;
+  font-size: clamp(1.5rem, 1.25rem + 0.8vw, 1.9rem);
+  font-weight: 700;
   line-height: 1.15;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
 }
 .pots-stat > span,
@@ -452,21 +618,126 @@ small {
   color: var(--pots-bad);
 }
 
-/* A note. Plain is blue; .pots-good, .pots-warn and .pots-bad colour it. */
+/* A note (a callout). Plain is blue; .pots-good, .pots-warn and .pots-bad colour it. A sign at the start shows which
+   kind it is; a <b> or <strong> that starts it is its title, on a line of its own. */
 .pots-note {
+  --pots-n: var(--pots-accent);
+  position: relative;
   background: var(--pots-accent-soft);
+  border: 1px solid color-mix(in srgb, var(--pots-n) 18%, transparent);
   border-radius: var(--pots-radius);
-  padding: 12px 16px;
+  padding: 12px 16px 12px 46px;
   margin: 0 0 1em;
+  /* The middle of the first line, worked out here so the sign's own small text does not change it. */
+  --pots-mid: 0.5lh;
+}
+.pots-note::before {
+  content: "i";
+  position: absolute;
+  left: 15px;
+  top: calc(12px + var(--pots-mid) - 9px);
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--pots-n);
+  color: var(--pots-bg);
+  font: 700 12px/1 var(--pots-font);
 }
 .pots-note.pots-good {
+  --pots-n: var(--pots-good);
   background: var(--pots-good-soft);
 }
+.pots-note.pots-good::before {
+  content: "✓";
+}
 .pots-note.pots-warn {
+  --pots-n: var(--pots-warn);
   background: var(--pots-warn-soft);
 }
+.pots-note.pots-warn::before {
+  content: "!";
+}
 .pots-note.pots-bad {
+  --pots-n: var(--pots-bad);
   background: var(--pots-bad-soft);
+}
+.pots-note.pots-bad::before {
+  content: "×";
+  font-size: 15px;
+}
+.pots-note > :is(b, strong):first-child {
+  display: block;
+  margin-bottom: 2px;
+}
+
+/* Key points: the few things to take away, in a card with a tick before each. <ul class="pots-points">.
+   <ol class="pots-points"> numbers them. */
+.pots-points {
+  list-style: none;
+  padding: 14px 18px;
+  margin: 0 0 1.4em;
+  border: 1px solid var(--pots-line);
+  border-radius: var(--pots-radius);
+  background: var(--pots-raised);
+  box-shadow: var(--pots-shadow-1);
+  counter-reset: pots-point;
+}
+.pots-points > li {
+  position: relative;
+  padding: 0 0 0 32px;
+  counter-increment: pots-point;
+  --pots-mid: 0.5lh;
+}
+.pots-points > li + li {
+  padding-top: 10px;
+  margin-top: 10px;
+  border-top: 1px solid var(--pots-line);
+}
+.pots-points > li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: calc(var(--pots-mid) - 10px);
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--pots-accent-soft);
+}
+.pots-points > li + li::before {
+  top: calc(10px + var(--pots-mid) - 10px);
+}
+/* The tick, drawn with two borders. */
+.pots-points > li::after {
+  content: "";
+  position: absolute;
+  left: 7px;
+  top: calc(var(--pots-mid) - 5.5px);
+  width: 5px;
+  height: 9px;
+  border: solid var(--pots-accent);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+.pots-points > li + li::after {
+  top: calc(10px + var(--pots-mid) - 5.5px);
+}
+ol.pots-points > li::before {
+  content: counter(pots-point);
+  display: grid;
+  place-items: center;
+  color: var(--pots-accent);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+ol.pots-points > li::after {
+  display: none;
+}
+.pots-points > li > :is(b, strong):first-child {
+  color: var(--pots-text);
 }
 
 /* A label in a line. Grey; .pots-good, .pots-warn, .pots-bad and .pots-info colour it. */
@@ -530,9 +801,9 @@ small {
   border-radius: 50%;
   display: grid;
   place-items: center;
-  background: var(--pots-bg);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pots-text) 22%, transparent);
-  color: var(--pots-text);
+  background: var(--pots-accent-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pots-accent) 25%, transparent);
+  color: var(--pots-accent);
   font-size: 0.75rem;
   font-weight: 650;
   line-height: 1;
@@ -559,6 +830,7 @@ ul.pots-steps > li::before {
   height: 11px;
   left: 6.5px;
   top: calc(var(--pots-mid) - 5.5px);
+  background: var(--pots-bg);
   box-shadow: inset 0 0 0 2px var(--pots-accent);
 }
 ul.pots-steps > li::after {
@@ -569,17 +841,37 @@ ul.pots-steps > li::after {
   display: block;
 }
 
-/* Name and value pairs: <dl class="pots-kv"><dt>Rice</dt><dd>1 bowl</dd></dl> */
+/* Name and value pairs: <dl class="pots-kv"><dt>Rice</dt><dd>1 bowl</dd></dl>
+   Each pair is a row on a hairline, like a glossary. In a pots-card it is a glossary card. */
 .pots-kv {
   display: grid;
   grid-template-columns: minmax(2.5em, max-content) 1fr;
-  gap: 4px 16px;
+  column-gap: 20px;
+}
+.pots-kv > :is(dt, dd) {
+  padding: 8px 0;
+  border-top: 1px solid var(--pots-line);
+}
+.pots-kv > :is(dt, dd):nth-child(-n + 2) {
+  border-top: 0;
+  padding-top: 0;
+}
+.pots-kv > :is(dt, dd):nth-last-child(-n + 2) {
+  padding-bottom: 0;
 }
 .pots-kv > dt {
   color: var(--pots-muted);
 }
 .pots-kv > dd {
   margin: 0;
+}
+/* In a card, the names lead: they are the terms. */
+.pots-card > .pots-kv > dt {
+  color: var(--pots-text);
+  font-weight: 600;
+}
+.pots-card > .pots-kv > dd {
+  color: var(--pots-muted);
 }
 
 /* ---- Tables: hairline rows; a wide one scrolls inside itself, never the page ----
@@ -657,6 +949,8 @@ th.pots-num {
     display: block;
   }
   table.pots-stack tr {
+    background: var(--pots-raised);
+    box-shadow: var(--pots-shadow-1);
     border: 1px solid var(--pots-line);
     border-radius: var(--pots-radius);
     padding: 12px 16px;
@@ -695,6 +989,16 @@ details:not(.pots-comment) {
   border-radius: var(--pots-radius);
   margin: 0 0 8px;
   padding: 0 16px;
+  background: var(--pots-raised);
+  box-shadow: var(--pots-shadow-1);
+}
+details:not(.pots-comment) > summary:hover {
+  color: var(--pots-accent);
+}
+details:not(.pots-comment) > summary:focus-visible {
+  outline: 2px solid var(--pots-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 details:not(.pots-comment) > summary {
   position: relative;
@@ -815,6 +1119,8 @@ details:not(.pots-comment) > summary :is(small, .pots-muted) {
   border: 0;
   border-radius: 0;
   padding: 0;
+  background: none;
+  box-shadow: none;
 }
 .pots-chart details.pots-data > summary {
   display: inline-block;
@@ -1090,7 +1396,9 @@ form[data-pots] [data-pots-question],
 fieldset {
   border: 1px solid var(--pots-line);
   border-radius: var(--pots-radius);
-  padding: 14px 16px 16px;
+  background: var(--pots-raised);
+  box-shadow: var(--pots-shadow-1);
+  padding: 16px 18px 18px;
   margin: 0 0 14px;
   min-width: 0;
   max-width: var(--pots-measure);
@@ -1099,6 +1407,8 @@ fieldset [data-pots-question],
 [data-pots-question] fieldset {
   border: 0;
   padding: 0;
+  background: none;
+  box-shadow: none;
 }
 legend {
   float: left;

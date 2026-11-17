@@ -92,13 +92,24 @@ All that follows serves this goal: plain words make the text fast to read, the r
 
 **The layout.** Use the device. On a computer, put text next to its chart, cards in columns and calendars side by side; on a phone, one column. Text keeps a comfortable line length; `pots-wide` lets a block, also a table or a bar chart, use the full width. The page itself never scrolls sideways; a wide table scrolls inside itself.
 
+**The look.** The kit draws the look; you give it the structure it draws. A page of only headings and paragraphs looks like a plain file, and the reader sees no order on the first screen. These parts make a page look designed, and each one also tells the reader something:
+
+- **The opening.** Start `<main>` with a `<header>`; the kit shows it as a tinted panel. In it, in this order: `<p class="pots-eyebrow">` with the kind of page (Proposal, Weekly report, Decision), the `<h1>`, one sentence with the answer, and `<p class="pots-meta">` with a `<span>` for each fact about the page (the date, who it is for, a status). A status span takes `pots-good`, `pots-warn` or `pots-bad` and gets a coloured dot. Right under the header, or inside it as its last part: two to four key numbers (`pots-stats`) or two to five key points (`<ul class="pots-points">`, a card with a tick before each point).
+- **Sections.** Each `<h2>` in `<main>` or in a `<section>` starts on a line with an accent, so the reader sees where a part starts. When the order of the sections matters (decisions to make, steps of a plan), number them: `<h2><span class="pots-no">2</span>Costs</h2>`.
+- **Cards.** Use `pots-card` for things of the same kind that the reader compares: options, places, people. Put them in `pots-grid` and start each with an `<h3>`. `pots-card pots-info` is the one to read first or the one you recommend; `pots-good`, `pots-warn` and `pots-bad` put a coloured edge on a card. A `pots-kv` list in a card is a glossary: terms and what they mean.
+- **Callouts.** Use `pots-note` for what the reader must not miss: a risk, a deadline, what changed. A `<b>` at its start is its title. One or two on a page; when everything is a callout, nothing stands out.
+- **Lists.** `<ol>` numbers show in the accent colour; `pots-steps` is for steps in order, `pots-points` for what to take away.
+
+Boxes work by contrast. Most of the page stays text on the plain background, with a few boxes where they help; a page where every paragraph is in a card looks as flat as a page with no cards. In your own CSS, use the kit's surfaces so your parts match: `--pots-raised` (a card's background), `--pots-line`, `--pots-radius`, `--pots-shadow-1`.
+
 ### What the kit gives
 
 - Plain HTML already looks right: headings, lists, tables, code, quotes, images, `<details>`.
 - Layout: `pots-cols` (side by side on a computer, one under the other on a phone), `pots-grid` (cards in as many columns as fit), `pots-row` (boxes that wrap), `pots-wide`. `<nav class="pots-toc">` after the header: links to the sections, at the side on a computer and a row at the top on a phone.
-- Blocks: `pots-stats` with `pots-stat` (`<div class="pots-stat"><b>€8,400</b><span>total</span></div>`), `pots-card`, `pots-note`, `pots-steps`, `pots-kv` (a `<dl>` of names and values), `pots-badge`.
+- The opening: `<header>` first in `<main>`, with `pots-eyebrow`, `<h1>`, one sentence, and `pots-meta` (a row of chips).
+- Blocks: `pots-stats` with `pots-stat` (`<div class="pots-stat"><b>€8,400</b><span>total</span></div>`), `pots-points` (key points), `pots-card`, `pots-note`, `pots-steps`, `pots-kv` (a `<dl>` of names and values), `pots-badge`, `pots-no` (a section number in a heading).
 - Colours with a meaning: `pots-good`, `pots-warn`, `pots-bad` on a note, a badge, a stat or a chart row; `pots-info` on a badge. Text: `pots-muted`, `pots-num` (a right-aligned number cell). `pots-hl` highlights anything your script points at.
-- In your own CSS, use the kit's colours so dark mode works: `--pots-bg`, `--pots-soft`, `--pots-text`, `--pots-muted`, `--pots-line`, `--pots-accent`, `--pots-accent-soft`, `--pots-good`, `--pots-warn`, `--pots-bad` (each also `-soft`), and the chart colours `--pots-c1` to `--pots-c7`.
+- In your own CSS, use the kit's colours so dark mode works: `--pots-bg`, `--pots-soft`, `--pots-raised`, `--pots-tint`, `--pots-text`, `--pots-muted`, `--pots-line`, `--pots-accent`, `--pots-accent-soft`, `--pots-good`, `--pots-warn`, `--pots-bad` (each also `-soft`), and the chart colours `--pots-c1` to `--pots-c7`; and its shapes: `--pots-radius-s`, `--pots-radius`, `--pots-radius-l`, `--pots-shadow-1`, `--pots-shadow-2`.
 - With `pots-ui.js`:
   - `<table data-pots-chart="bar|stack|line">` becomes a chart. Bar and stack: the first column names the rows, the second gives the values. Line: each row is a point on the x axis, each number column a line. `data-marks="380 You; 300 Her"` draws reference lines on bars, `data-max` or `data-min` fixes the scale (a line chart starts at zero unless its values sit far from zero; `data-min="0"` keeps zero), a `<caption>` becomes the title, and `data-pots-show="…"` names the button that shows the numbers. The table stays on the page, folded, so the numbers are one tap away.
   - `<div data-pots-tabs>` with `<section data-tab="Name">` children shows one at a time; `data-pots-tabs="phone"` does so only on a phone and shows all of them on a computer. `data-current` on a section opens it first; `box.potsSelect(i)` opens one from your script, and the box sends a `pots-tab` event.
@@ -134,17 +145,17 @@ A page that compares three cities for a team trip, in `pages/offsite/`:
 <body>
 <main>
   <header>
+    <p class="pots-eyebrow">Team offsite · Proposal</p>
     <h1>Team offsite: where and what it costs</h1>
     <p>Lisbon is the best choice. It costs €8,400 for 12 people, €1,600 under the budget.</p>
-    <p class="pots-muted">Prices from 16 November. Flight prices change each day.</p>
+    <p class="pots-meta"><span>Prices from 16 November</span><span>For the team leads</span><span class="pots-warn">Flight prices change each day</span></p>
+    <div class="pots-stats">
+      <div class="pots-stat"><b>€8,400</b><span>total</span></div>
+      <div class="pots-stat pots-good"><b>€1,600</b><span>under the budget</span></div>
+      <div class="pots-stat"><b>12</b><span>people</span></div>
+    </div>
   </header>
   <nav class="pots-toc"><a href="#cities">Cities</a> <a href="#days">The three days</a> <a href="#size">Group size</a></nav>
-
-  <div class="pots-stats pots-wide">
-    <div class="pots-stat"><b>€8,400</b><span>total</span></div>
-    <div class="pots-stat pots-good"><b>€1,600</b><span>under the budget</span></div>
-    <div class="pots-stat"><b>12</b><span>people</span></div>
-  </div>
 
   <h2 id="cities">Three cities compared</h2>
   <div class="pots-cols pots-wide">
@@ -157,10 +168,11 @@ A page that compares three cities for a team trip, in `pages/offsite/`:
         <tr class="pots-bad"><td>Berlin</td><td class="pots-num">€11,200</td></tr>
       </tbody>
     </table>
-    <div>
-      <p>Porto costs less. But two of our offices have no direct flights to Porto.</p>
-      <p>Berlin is over the budget. Hotels in Berlin cost more in March.</p>
-    </div>
+    <ul class="pots-points">
+      <li><b>Lisbon:</b> direct flights from all three offices.</li>
+      <li><b>Porto</b> costs less. But two of our offices have no direct flights to Porto.</li>
+      <li><b>Berlin</b> is over the budget. Hotels in Berlin cost more in March.</li>
+    </ul>
   </div>
 
   <h2 id="days">The three days</h2>
@@ -233,8 +245,12 @@ The kit's components make an answer page quickly. A complete one:
 </head>
 <body>
 <main>
-  <h1>Deploy plan 4.2</h1>
-  <p class="pots-muted">Please answer by Friday.</p>
+  <header>
+    <p class="pots-eyebrow">Needs your answer</p>
+    <h1>Deploy plan 4.2</h1>
+    <p>Five questions. I start the deploy when I have your answers.</p>
+    <p class="pots-meta"><span class="pots-warn">Answer by Friday</span><span>About 2 minutes</span></p>
+  </header>
   <form data-pots data-pots-done="Thanks, I have your answers.">
     <fieldset data-pots-question="target">
       <legend>Where should I deploy first?</legend>

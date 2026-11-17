@@ -955,9 +955,6 @@ blockquote.pots-quote > :is(footer, cite, small) {
   font-style: normal;
   letter-spacing: 0;
 }
-blockquote.pots-quote > :is(footer, cite, small)::before {
-  content: "— ";
-}
 blockquote.pots-quote > :last-child {
   margin-bottom: 0;
 }
@@ -1044,7 +1041,7 @@ ul.pots-steps > li::before {
   font-variant-numeric: tabular-nums;
 }
 
-/* ---- A flow: plain boxes with hairlines and thin arrows; a fork is two columns with a status dot over each ---- */
+/* ---- A flow: plain boxes with hairlines and thin arrows; a fork is a column per way, with a status dot over each ---- */
 .pots-flow {
   --pots-arrow: var(--pots-line-2);
   --pots-head: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M0 0h10L5 6z'/%3E%3C/svg%3E");
@@ -1099,9 +1096,10 @@ ul.pots-steps > li::before {
   font-size: 0.875rem;
 }
 .pots-lanes {
+  --pots-lane-gap: 24px;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
-  gap: 24px 24px;
+  gap: var(--pots-lane-gap);
 }
 .pots-lane {
   --pots-k: var(--pots-faint);
@@ -1160,18 +1158,24 @@ ul.pots-steps > li::before {
     -webkit-mask: linear-gradient(#000, #000) center / 1px 100% no-repeat;
     mask: linear-gradient(#000, #000) center / 1px 100% no-repeat;
   }
-  .pots-flow > .pots-lanes::before {
+  /* The fork's line, drawn by each lane over its own width and half the gaps beside it, from the first lane's middle
+     to the last one's: right for any number of lanes. */
+  .pots-flow > .pots-lanes > .pots-lane::before {
     content: "";
     position: absolute;
     top: -16px;
-    left: calc(25% - 6px);
-    right: calc(25% - 6px);
+    inset-inline: calc(var(--pots-lane-gap) / -2);
     height: 1px;
     background: var(--pots-arrow);
   }
-  .pots-flow > .pots-lanes:has(> :nth-child(3))::before {
-    left: calc(100% / 6 - 8px);
-    right: calc(100% / 6 - 8px);
+  .pots-flow > .pots-lanes > .pots-lane:first-child::before {
+    inset-inline-start: 50%;
+  }
+  .pots-flow > .pots-lanes > .pots-lane:last-child::before {
+    inset-inline-end: 50%;
+  }
+  .pots-flow > .pots-lanes > .pots-lane:only-child::before {
+    content: none;
   }
   .pots-flow > .pots-lanes > .pots-lane::after {
     content: "";
@@ -1716,7 +1720,9 @@ form[data-pots-state="gone"] [data-pots-question] {
 .pots-cols > .pots-tabbar {
   margin-bottom: 0;
 }
-[data-pots-tabs] > section {
+/* Also inside main: the phone rule that spaces sections out must not push a panel down from its tabs. */
+[data-pots-tabs] > section,
+:is(main, .pots-page) [data-pots-tabs] > section {
   margin-top: 0;
 }
 [data-pots-tabs]:not([data-pots-tabs="phone"]) > .pots-off {

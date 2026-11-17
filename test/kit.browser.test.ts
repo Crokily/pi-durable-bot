@@ -273,6 +273,40 @@ describe.skipIf(!path)("the page helper in a browser", () => {
       await page.close();
     }
   });
+  it("puts no gap between the tabs and their panel on a phone", async () => {
+    const page = await chrome.open(
+      kitPage(`<section><h2>Plan</h2><div data-pots-tabs><section data-tab="One">first</section><section data-tab="Two">second</section></div></section>`),
+      { width: 390 },
+    );
+    try {
+      const top = await page.eval<string>(`getComputedStyle(document.querySelector("[role=tabpanel]:not(.pots-off)")).marginTop`);
+      expect(top).toBe("0px");
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("draws a fork's line from the first lane's middle to the last one's, for 2 to 5 lanes, either way round", async () => {
+    for (const dir of ["ltr", "rtl"]) {
+      for (let n = 2; n <= 5; n++) {
+        const lanes = Array.from({ length: n }, (_, i) => `<div class="pots-lane"><h4>Way ${i + 1}</h4><div class="pots-node">Step</div></div>`).join("");
+        const page = await chrome.open(kitPage(`<div class="pots-flow"><div class="pots-node">Start</div><div class="pots-lanes">${lanes}</div></div>`, { dir }), { width: 1200 });
+        try {
+          const seen = await page.eval<{ line: [number, number]; middles: number[] }>(
+            `const lanes = [...document.querySelectorAll(".pots-lane")];
+             const middles = lanes.map((l) => { const r = l.getBoundingClientRect(); return (r.left + r.right) / 2; });
+             // The line is the union of each lane's ::before.
+             const parts = lanes.map((l) => { const r = l.getBoundingClientRect(), s = getComputedStyle(l, "::before"); return s.content === "none" ? null : [r.left + parseFloat(s.left), r.right - parseFloat(s.right)]; }).filter(Boolean);
+             ({ line: [Math.min(...parts.map((p) => p[0])), Math.max(...parts.map((p) => p[1]))], middles })`,
+          );
+          expect(Math.abs(seen.line[0] - Math.min(...seen.middles))).toBeLessThan(1);
+          expect(Math.abs(seen.line[1] - Math.max(...seen.middles))).toBeLessThan(1);
+        } finally {
+          await page.close();
+        }
+      }
+    }
+  });
 });
 
 describe.skipIf(!path)("the pages skill's screenshot script", () => {

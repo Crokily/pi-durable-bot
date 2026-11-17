@@ -2,10 +2,15 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
-## Unreleased
+## 0.8.5 (2026-11-17)
+
+Teams channel replies could be dropped: two replies in different threads of a channel with the same message ID were taken as one, and the second was lost. This affects bots that use the Teams preview from 0.8.4; other channels are not changed.
 
 ### Fixed
 - **Teams: a reply could be lost when a reply in another thread of the channel had the same ID.** Microsoft Graph keeps a message ID unique only in its chat, channel or thread ([chatMessage](https://learn.microsoft.com/graph/api/resources/chatmessage)), but the inbox's event ID of a Teams message had only the conversation and the message ID, so the second reply (live, or from backfill with the same change time) was taken as a repeat and dropped. A reply's event ID now has its thread's root too, as its address does, live, from backfill and when posted with `call`. A root message, or one outside a thread, keeps the event ID it had; a reply that Teams sends again across the upgrade is stored again, and the log keeps it once, as one message.
+
+### Changed
+- **The README says Pots has no coin.** Any token or coin under the Pots name, such as one promoted by @potsdotsh, is not ours; GitHub Sponsors is the only official way to support Pots.
 
 ## 0.8.4 (2026-11-16)
 

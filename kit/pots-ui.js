@@ -15,6 +15,7 @@
  *   <input data-pots-filter="#list">           hides rows, or [data-pots-item] elements, that do not contain the text.
  *   <nav class="pots-toc">                     marks the section on screen.
  *   every <table>                              goes in a <div class="pots-scroll">, so a wide one scrolls inside it.
+ *   the page                                   gets a light / dark switch at its top corner; window.PotsTheme.set("light").
  * It sets only textContent and CSS custom properties, never HTML from text, so it works under the private-page CSP.
  * Loaded twice, or a part called twice on one element, it does the work once. A part that fails leaves its plain HTML.
  */
@@ -455,6 +456,60 @@
     box.append(table);
   }
 
+  /* ---- Light or dark: the reader's choice, from a switch at the page's top corner ---- */
+  // It is kept in the browser for every page of this host, as it is not private. A choice that is the system's own
+  // is forgotten, so the page follows the system again. pots.js has the same switch; the first of the two makes it.
+  function themeSwitch() {
+    if (window.PotsTheme) return;
+    const root = document.documentElement, KEY = "pots-theme";
+    const system = window.matchMedia ? matchMedia("(prefers-color-scheme: dark)") : { matches: false };
+    const read = () => {
+      try {
+        const v = localStorage.getItem(KEY);
+        return v === "light" || v === "dark" ? v : null;
+      } catch {
+        return null;
+      }
+    };
+    const shown = () => read() || (system.matches ? "dark" : "light");
+    let button = null;
+    function apply() {
+      const v = read();
+      if (v) root.setAttribute("data-pots-theme", v);
+      else root.removeAttribute("data-pots-theme");
+      if (!button) return;
+      const dark = shown() === "dark";
+      button.setAttribute("data-icon", dark ? "sun" : "moon");
+      button.setAttribute("aria-pressed", String(dark));
+    }
+    function set(v) {
+      try {
+        if (v === (system.matches ? "dark" : "light")) localStorage.removeItem(KEY);
+        else localStorage.setItem(KEY, v);
+      } catch {}
+      apply();
+    }
+    apply();
+    window.PotsTheme = {
+      get: shown,
+      set,
+      // The button, once the body is there, and only on a page that uses pots.css.
+      button() {
+        if (button || !document.body || !getComputedStyle(root).getPropertyValue("--pots-bg")) return;
+        const zh = /^zh/i.test(lang || "");
+        button = el("button", "pots-theme");
+        button.type = "button";
+        button.setAttribute("aria-label", zh ? "深色模式" : "Dark mode");
+        button.title = zh ? "切换浅色或深色" : "Switch light or dark";
+        button.addEventListener("click", () => set(shown() === "dark" ? "light" : "dark"));
+        document.body.prepend(button);
+        apply();
+      },
+    };
+    if (system.addEventListener) system.addEventListener("change", apply);
+    addEventListener("storage", (e) => e.key === KEY && apply());
+  }
+
   // Each part on its own: one that fails keeps its plain HTML, and the others still start.
   function each(selector, part) {
     document.querySelectorAll(selector).forEach((e) => {
@@ -472,8 +527,19 @@
     each("[data-pots-tabs]", tabs);
     each("input[data-pots-filter]", filter);
     each("nav.pots-toc", toc);
+    try {
+      window.PotsTheme.button();
+    } catch (err) {
+      console.error("pots-ui:", err);
+    }
   }
   document.addEventListener("invalid", opener, true);
+  // At once, before the page is shown when the script is not deferred, so the reader's choice does not flash.
+  try {
+    themeSwitch();
+  } catch (err) {
+    console.error("pots-ui:", err);
+  }
   window.PotsUI = { num, tabs, chart, sortable, filter };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start);
   else start();

@@ -9,6 +9,8 @@ import { describe, expect, it } from "vitest";
 const source = readFileSync(new URL("../kit/pots.js", import.meta.url), "utf8");
 const css = readFileSync(new URL("../kit/pots.css", import.meta.url), "utf8");
 const ui = readFileSync(new URL("../kit/pots-ui.js", import.meta.url), "utf8");
+// The one thing the kit keeps in the browser: the reader's light or dark choice, under its one key.
+const withoutTheme = (js: string) => js.replace(/localStorage\.(getItem|removeItem)\(KEY\)|localStorage\.setItem\(KEY, v\)/g, "");
 
 /** The kit is plain JavaScript, with no types. */
 type Kit = any;
@@ -217,14 +219,20 @@ describe("the page kit", () => {
     expect(calls).toEqual([]);
   });
 
-  it("keeps nothing in the browser and writes no HTML from text", () => {
+  it("keeps nothing in the browser but the light or dark choice, and writes no HTML from text", () => {
+    expect(source).toContain('KEY = "pots-theme"');
     for (const word of ["localStorage", "sessionStorage", "indexedDB", "document.cookie", "innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function"])
-      expect(source).not.toContain(word);
+      expect(withoutTheme(source), word).not.toContain(word);
     expect(source).toContain("textContent");
   });
 
   it("styles light and dark, and loads nothing from elsewhere", () => {
-    expect(css).toMatch(/@media \(prefers-color-scheme: dark\)/);
+    // Every colour is a light-dark() pair, so the reader's switch (color-scheme) changes all of them.
+    expect(css).toMatch(/color-scheme: light dark;/);
+    expect(css).toMatch(/:root\[data-pots-theme="light"\] \{\s*color-scheme: light;/);
+    expect(css).toMatch(/:root\[data-pots-theme="dark"\] \{\s*color-scheme: dark;/);
+    expect(css).not.toMatch(/prefers-color-scheme/);
+    expect(css).toMatch(/--pots-bg: light-dark\(/);
     expect(css).not.toMatch(/@import/);
     // Icons and the flow's arrowheads are data: URLs, drawn from the stylesheet itself; the one font is in the kit, with its licence.
     expect(css).not.toMatch(/url\((?!"data:image\/svg\+xml,|"fonts\/InterVariable-latin\.woff2")/);
@@ -294,9 +302,10 @@ describe("the page helper", () => {
     expect(loadUi("not a language!").num("12")).toBe(12);
   });
 
-  it("keeps nothing in the browser, writes no HTML from text, and loads nothing", () => {
+  it("keeps nothing in the browser but the light or dark choice, writes no HTML from text, and loads nothing", () => {
+    expect(ui).toContain('KEY = "pots-theme"');
     for (const word of ["localStorage", "sessionStorage", "indexedDB", "document.cookie", "innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function", "fetch(", "XMLHttpRequest", "import(", "http://", "https://"])
-      expect(ui.replace('"http://www.w3.org/2000/svg"', ""), word).not.toContain(word);
+      expect(withoutTheme(ui).replace('"http://www.w3.org/2000/svg"', ""), word).not.toContain(word);
     expect(ui).toContain("textContent");
   });
 });

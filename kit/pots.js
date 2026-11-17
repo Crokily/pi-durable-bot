@@ -1,7 +1,8 @@
 /*
- * Pots page kit: sends the answers of a page's forms to Pots, shows data from JSON files as text, and reloads a page
- * that opts in when it changes. No build step, no dependencies, and nothing kept in the browser: every page of a Pots
- * host shares one browser origin, so storage would be shared with every other page.
+ * Pots page kit: sends the answers of a page's forms to Pots, shows data from JSON files as text, reloads a page
+ * that opts in when it changes, and gives the page a light / dark switch. No build step, no dependencies, and nothing
+ * kept in the browser but the reader's light or dark choice: every page of a Pots host shares one browser origin, so
+ * storage would be shared with every other page.
  *
  *   <link rel="stylesheet" href="../../__pots/kit/pots.css">
  *   <script src="../../__pots/kit/pots.js" defer></script>
@@ -607,7 +608,64 @@
     document.addEventListener("visibilitychange", tick);
   }
 
+  // Light or dark: the reader's choice, from a switch at the page's top corner. It is kept in the browser for every
+  // page of this host, as it is not private; a choice that is the system's own is forgotten, so the page follows the
+  // system again. pots-ui.js has the same switch; the first of the two makes it.
+  function themeSwitch() {
+    if (root.PotsTheme) return;
+    var html = document.documentElement, KEY = "pots-theme", button = null;
+    var system = window.matchMedia ? matchMedia("(prefers-color-scheme: dark)") : { matches: false };
+    var read = function () {
+      try {
+        var v = localStorage.getItem(KEY);
+        return v === "light" || v === "dark" ? v : null;
+      } catch (e) {
+        return null;
+      }
+    };
+    var shown = function () { return read() || (system.matches ? "dark" : "light"); };
+    var apply = function () {
+      var v = read();
+      if (v) html.setAttribute("data-pots-theme", v);
+      else html.removeAttribute("data-pots-theme");
+      if (!button) return;
+      var dark = shown() === "dark";
+      button.setAttribute("data-icon", dark ? "sun" : "moon");
+      button.setAttribute("aria-pressed", String(dark));
+    };
+    var set = function (v) {
+      try {
+        if (v === (system.matches ? "dark" : "light")) localStorage.removeItem(KEY);
+        else localStorage.setItem(KEY, v);
+      } catch (e) {}
+      apply();
+    };
+    apply();
+    root.PotsTheme = {
+      get: shown,
+      set: set,
+      // The button, once the body is there, and only on a page that uses pots.css.
+      button: function () {
+        if (button || !document.body || !getComputedStyle(html).getPropertyValue("--pots-bg")) return;
+        var zh = /^zh/i.test(html.lang || "");
+        button = document.createElement("button");
+        button.className = "pots-theme";
+        button.type = "button";
+        button.setAttribute("aria-label", zh ? "深色模式" : "Dark mode");
+        button.title = zh ? "切换浅色或深色" : "Switch light or dark";
+        button.addEventListener("click", function () { set(shown() === "dark" ? "light" : "dark"); });
+        document.body.insertBefore(button, document.body.firstChild);
+        apply();
+      },
+    };
+    if (system.addEventListener) system.addEventListener("change", apply);
+    window.addEventListener("storage", function (event) { if (event.key === KEY) apply(); });
+  }
+
   function start() {
+    try {
+      root.PotsTheme.button();
+    } catch (e) {}
     document.addEventListener("submit", onSubmit);
     document.addEventListener("input", function (event) {
       if (event.target && event.target.closest && event.target.closest("form")) dirty = true;
@@ -620,6 +678,10 @@
     if (refresh !== null) watch(Number(refresh) || 5);
   }
 
+  // At once, before the page is shown when the script is not deferred, so the reader's choice does not flash.
+  try {
+    themeSwitch();
+  } catch (e) {}
   // The version of the page on screen, for answers sent later: now, not when the document is ready, which can be later.
   loadVersion();
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start);

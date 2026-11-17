@@ -59,8 +59,8 @@ pots page list                                    # your pages, their links, whe
 Pots serves a kit for pages, all optional:
 
 - `pots.css`: a calm look for reading, light and dark, with Inter for Latin text (in `fonts/`). One column on a phone; on a computer, the contents at the side and blocks that use the width.
-- `pots-ui.js`: charts from tables, tabs, sorting, filtering, and contents that follow the reader. Offline, and it works under the private-page CSP (see Content-Security-Policy).
-- `pots.js`: sends a form's answers to Pots.
+- `pots-ui.js`: charts from tables, tabs, sorting, filtering, contents that follow the reader, and a light and dark switch. Offline, and it works under the private-page CSP (see Content-Security-Policy).
+- `pots.js`: sends a form's answers to Pots, and gives the same light and dark switch.
 
 Link them relative to the page's link, not its folder on disk: from a page's `index.html`, also in `keep/`, use `../../__pots/kit/`, and add one `../` for each subfolder of the page. The source is in [../../kit/](../../kit/pots.css).
 
@@ -116,6 +116,7 @@ In your own CSS, use the kit's parts so yours match: `--pots-line`, `--pots-soft
   - `pots-kv` (a `<dl>` of names and values), `pots-badge`, `pots-no` (a section number in a heading: `<h2><span class="pots-no">2</span>Costs</h2>`).
 - Icons: `data-icon="name"` on any element; `<i data-icon="name"></i>` is the icon alone. They are CSS masks from `data:` URLs, so a page's CSP must allow `img-src data:`, as the one under Content-Security-Policy does. In your own CSS, `var(--pots-i-lock)` is the lock as a mask image.
 - Colours with a meaning: `pots-good`, `pots-warn`, `pots-bad` on a note, a card, a badge, a stat, a chart row or a `<span>` in `pots-meta`; `pots-info` on a badge, and on a card to mark the one you recommend (a fine accent border and tint). Text: `pots-muted`, `pots-num` (a right-aligned number cell). `pots-hl` highlights anything your script points at.
+- Light and dark: the page follows the system, and a small switch at its top corner (from `pots-ui.js` or `pots.js`) lets the reader choose; the choice is kept for all pages. A colour of your own must follow it: write `light-dark(<light>, <dark>)`, never `@media (prefers-color-scheme: dark)`, which does not follow the switch.
 - In your own CSS, use the kit's colours so dark mode works: `--pots-bg`, `--pots-soft`, `--pots-text`, `--pots-muted`, `--pots-faint`, `--pots-line`, `--pots-accent`, `--pots-accent-soft`, `--pots-accent-line`, `--pots-good`, `--pots-warn`, `--pots-bad` (each also `-soft`), and the chart colours `--pots-c1` (the accent) to `--pots-c7`; and its shapes: `--pots-radius-s`, `--pots-radius`, `--pots-radius-l`.
 - With `pots-ui.js`:
   - `<table data-pots-chart="bar|stack|line">` becomes a chart. Bar and stack: the first column names the rows, the second gives the values. Line: each row is a point on the x axis, each number column a line. `data-marks="380 You; 300 Her"` draws reference lines on bars, `data-max` or `data-min` fixes the scale (a line chart starts at zero unless its values sit far from zero; `data-min="0"` keeps zero), a `<caption>` becomes the title, and `data-pots-show="…"` names the button that shows the numbers. The table stays on the page, folded, so the numbers are one tap away.
@@ -448,7 +449,7 @@ Pots puts no browser restrictions on your pages, so they can use any outside scr
 
 ## One browser origin
 
-All pages of this computer, of every bot, are under one address, so the browser treats them as one site. A script on one page can read what another page keeps in the browser. So never keep private data in `localStorage`, `sessionStorage`, IndexedDB or cookies; the kit keeps nothing there.
+All pages of this computer, of every bot, are under one address, so the browser treats them as one site. A script on one page can read what another page keeps in the browser. So never keep private data in `localStorage`, `sessionStorage`, IndexedDB or cookies; the kit keeps only the reader's light or dark choice there.
 
 ## Website projects
 

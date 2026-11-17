@@ -25,30 +25,30 @@
   /* The accent, light and dark, in one place: a muted teal. A page can change it with one line of its own:
      :root { --pots-accent: light-dark(#305a88, #8bb0db); }   (a muted slate blue) */
   --pots-accent: light-dark(#0d7466, #5fbfae);
-  --pots-bg: #ffffff;
-  --pots-soft: #f7f7f8;
-  --pots-soft-2: #f0f1f3;
-  --pots-text: #1b1d22;            /* headings, names, numbers */
-  --pots-text-2: #2e3238;          /* body text */
-  --pots-muted: #4f545d;           /* lead text, explanations, labels: 7.6:1 on white */
-  --pots-faint: #6a6f78;           /* section numbers, placeholders, separators: 5:1 on white */
-  --pots-line: #e4e5e8;
-  --pots-line-2: #d3d5da;
-  --pots-good: #3a7d16;            /* a yellow-green, so it is not the teal accent */
-  --pots-warn: #a95006;
-  --pots-bad: #c2352f;
+  --pots-bg: light-dark(#ffffff, #0c0d0f);
+  --pots-soft: light-dark(#f7f7f8, #141518);
+  --pots-soft-2: light-dark(#f0f1f3, #1a1c1f);
+  --pots-text: light-dark(#1b1d22, #eceef1);            /* headings, names, numbers */
+  --pots-text-2: light-dark(#2e3238, #d3d7de);          /* body text */
+  --pots-muted: light-dark(#4f545d, #a2a8b2);           /* lead text, explanations, labels: 7.6:1 on white */
+  --pots-faint: light-dark(#6a6f78, #868c96);           /* section numbers, placeholders, separators: 5:1 on white */
+  --pots-line: light-dark(#e4e5e8, #24262b);
+  --pots-line-2: light-dark(#d3d5da, #33363c);
+  --pots-good: light-dark(#3a7d16, #8cc265);            /* a yellow-green, so it is not the teal accent */
+  --pots-warn: light-dark(#a95006, #e09a5c);
+  --pots-bad: light-dark(#c2352f, #e8817a);
   --pots-info: var(--pots-accent);
-  --pots-good-dot: #5aa52a;
-  --pots-warn-dot: #f2792f;
-  --pots-bad-dot: #e5534b;
+  --pots-good-dot: light-dark(#5aa52a, #6fb23f);
+  --pots-warn-dot: light-dark(#f2792f, #e0874a);
+  --pots-bad-dot: light-dark(#e5534b, #e0645c);
   /* chart colours, in order: the accent first, no violet, no green next to the teal */
   --pots-c1: var(--pots-accent);
-  --pots-c2: #d9772b;
-  --pots-c3: #4f7fa8;
-  --pots-c4: #c49a1a;
-  --pots-c5: #cc5470;
-  --pots-c6: #7f9a3a;
-  --pots-c7: #9298a1;
+  --pots-c2: light-dark(#d9772b, #d99062);
+  --pots-c3: light-dark(#4f7fa8, #7ea6c8);
+  --pots-c4: light-dark(#c49a1a, #cdb04e);
+  --pots-c5: light-dark(#cc5470, #d6809a);
+  --pots-c6: light-dark(#7f9a3a, #a3b85e);
+  --pots-c7: light-dark(#9298a1, #8e949d);
   --pots-r-s: 4px;
   --pots-r: 6px;
   --pots-r-m: 8px;
@@ -61,12 +61,12 @@
   --pots-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Noto Sans Mono CJK SC", "DejaVu Sans Mono", monospace;
   /* Made from the colours above, so they follow the accent and dark mode. */
   --pots-accent-text: var(--pots-bg);
-  --pots-accent-soft: color-mix(in srgb, var(--pots-accent) 7%, var(--pots-bg));
-  --pots-accent-line: color-mix(in srgb, var(--pots-accent) 32%, var(--pots-line));
-  --pots-good-soft: color-mix(in srgb, var(--pots-good) 7%, var(--pots-bg));
-  --pots-warn-soft: color-mix(in srgb, var(--pots-warn) 7%, var(--pots-bg));
-  --pots-bad-soft: color-mix(in srgb, var(--pots-bad) 7%, var(--pots-bg));
-  --pots-raised: var(--pots-bg);
+  --pots-accent-soft: light-dark(color-mix(in srgb, var(--pots-accent) 7%, var(--pots-bg)), color-mix(in srgb, var(--pots-accent) 9%, var(--pots-bg)));
+  --pots-accent-line: light-dark(color-mix(in srgb, var(--pots-accent) 32%, var(--pots-line)), color-mix(in srgb, var(--pots-accent) 34%, var(--pots-line)));
+  --pots-good-soft: light-dark(color-mix(in srgb, var(--pots-good) 7%, var(--pots-bg)), color-mix(in srgb, var(--pots-good) 8%, var(--pots-bg)));
+  --pots-warn-soft: light-dark(color-mix(in srgb, var(--pots-warn) 7%, var(--pots-bg)), color-mix(in srgb, var(--pots-warn) 8%, var(--pots-bg)));
+  --pots-bad-soft: light-dark(color-mix(in srgb, var(--pots-bad) 7%, var(--pots-bg)), color-mix(in srgb, var(--pots-bad) 8%, var(--pots-bg)));
+  --pots-raised: light-dark(var(--pots-bg), var(--pots-soft));
   /* old names, kept for pages written for earlier kits */
   --pots-surface: var(--pots-bg);
   --pots-border: var(--pots-line);
@@ -81,38 +81,12 @@
   --pots-shadow-2: none;
   --pots-accent-2: var(--pots-accent);
 }
-
-@media (prefers-color-scheme: dark) {
-  /* Dark is as calm: soft greys on near-black, and colours a little muted. */
-  :root {
-    --pots-bg: #0c0d0f;
-    --pots-soft: #141518;
-    --pots-soft-2: #1a1c1f;
-    --pots-text: #eceef1;
-    --pots-text-2: #d3d7de;
-    --pots-muted: #a2a8b2;
-    --pots-faint: #868c96;
-    --pots-line: #24262b;
-    --pots-line-2: #33363c;
-    --pots-good: #8cc265;
-    --pots-warn: #e09a5c;
-    --pots-bad: #e8817a;
-    --pots-good-dot: #6fb23f;
-    --pots-warn-dot: #e0874a;
-    --pots-bad-dot: #e0645c;
-    --pots-c2: #d99062;
-    --pots-c3: #7ea6c8;
-    --pots-c4: #cdb04e;
-    --pots-c5: #d6809a;
-    --pots-c6: #a3b85e;
-    --pots-c7: #8e949d;
-    --pots-accent-soft: color-mix(in srgb, var(--pots-accent) 9%, var(--pots-bg));
-    --pots-accent-line: color-mix(in srgb, var(--pots-accent) 34%, var(--pots-line));
-    --pots-good-soft: color-mix(in srgb, var(--pots-good) 8%, var(--pots-bg));
-    --pots-warn-soft: color-mix(in srgb, var(--pots-warn) 8%, var(--pots-bg));
-    --pots-bad-soft: color-mix(in srgb, var(--pots-bad) 8%, var(--pots-bg));
-    --pots-raised: var(--pots-soft);
-  }
+/* The reader's choice from the switch (pots-ui.js or pots.js) wins over the system's; every colour above follows it. */
+:root[data-pots-theme="light"] {
+  color-scheme: light;
+}
+:root[data-pots-theme="dark"] {
+  color-scheme: dark;
 }
 
 *,
@@ -458,6 +432,8 @@ header > .pots-muted:last-child {
   --pots-i-flag: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 22V4M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1'/%3E%3C/svg%3E");
   --pots-i-bell: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0'/%3E%3C/svg%3E");
   --pots-i-list: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01'/%3E%3C/svg%3E");
+  --pots-i-sun: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='4'/%3E%3Cpath d='M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4'/%3E%3C/svg%3E");
+  --pots-i-moon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z'/%3E%3C/svg%3E");
 }
 [data-icon="check"] { --pots-icon: var(--pots-i-check); }
 [data-icon="x"] { --pots-icon: var(--pots-i-x); }
@@ -494,6 +470,8 @@ header > .pots-muted:last-child {
 [data-icon="flag"] { --pots-icon: var(--pots-i-flag); }
 [data-icon="bell"] { --pots-icon: var(--pots-i-bell); }
 [data-icon="list"] { --pots-icon: var(--pots-i-list); }
+[data-icon="sun"] { --pots-icon: var(--pots-i-sun); }
+[data-icon="moon"] { --pots-icon: var(--pots-i-moon); }
 
 /* ---- Contents. Phone: a row that scrolls sideways. Computer: Linear's sidebar list at the left ---- */
 .pots-toc {
@@ -2051,6 +2029,35 @@ th[aria-sort="descending"] > button.pots-sort::after {
   padding: 0 12px;
   font-size: 0.8125rem;
 }
+/* The light and dark switch, at the page's top corner; it scrolls away with the page. */
+.pots-theme {
+  position: absolute;
+  top: 6px;
+  inset-inline-end: max(6px, env(safe-area-inset-right, 0px));
+  z-index: 10;
+  min-height: 0;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: var(--pots-r);
+  background: none;
+  --pots-icon-colour: var(--pots-faint);
+}
+.pots-theme:hover {
+  background: var(--pots-soft);
+  --pots-icon-colour: var(--pots-text);
+}
+.pots-theme[data-icon]::before {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+}
+@media (min-width: 720px) {
+  .pots-theme {
+    top: 16px;
+    inset-inline-end: 16px;
+  }
+}
 [data-pots-error]::before {
   content: "Could not load this part of the page.";
   display: block;
@@ -2060,7 +2067,8 @@ th[aria-sort="descending"] > button.pots-sort::after {
   .pots-toc,
   .pots-tabbar,
   form button,
-  .pots-banner {
+  .pots-banner,
+  .pots-theme {
     display: none;
   }
   [data-pots-tabs] > .pots-off {

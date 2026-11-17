@@ -307,6 +307,43 @@ describe.skipIf(!path)("the page helper in a browser", () => {
       }
     }
   });
+
+  it("gives a light and dark switch that wins over the system, is kept for other pages, and is forgotten when it is the system's", async () => {
+    const dark = { "prefers-color-scheme": "dark" };
+    const state = `({ bg: getComputedStyle(document.body).backgroundColor, theme: document.documentElement.getAttribute("data-pots-theme"),
+      kept: localStorage.getItem("pots-theme"), buttons: document.querySelectorAll(".pots-theme").length,
+      icon: document.querySelector(".pots-theme")?.getAttribute("data-icon"), pressed: document.querySelector(".pots-theme")?.getAttribute("aria-pressed") })`;
+    // pots.js and pots-ui.js together make one switch.
+    const both = kitPage("<p>Hi</p>").replace("</head>", '<script src="../../__pots/kit/pots.js" defer></script></head>');
+    let page = await chrome.open(both, { media: dark });
+    try {
+      await page.eval("localStorage.clear()");
+      expect(await page.eval(state)).toEqual({ bg: "rgb(12, 13, 15)", theme: null, kept: null, buttons: 1, icon: "sun", pressed: "true" });
+      expect(await page.eval(`document.querySelector(".pots-theme").click(); ${state}`)).toEqual({
+        bg: "rgb(255, 255, 255)", theme: "light", kept: "light", buttons: 1, icon: "moon", pressed: "false",
+      });
+    } finally {
+      await page.close();
+    }
+    // Another page of the host starts light; back to dark is the system's own choice, so nothing is kept.
+    page = await chrome.open(kitPage("<p>Hi</p>"), { media: dark });
+    try {
+      expect(await page.eval(state)).toMatchObject({ bg: "rgb(255, 255, 255)", theme: "light", icon: "moon" });
+      expect(await page.eval(`document.querySelector(".pots-theme").click(); ${state}`)).toMatchObject({
+        bg: "rgb(12, 13, 15)", theme: null, kept: null, icon: "sun",
+      });
+    } finally {
+      await page.eval("localStorage.clear()");
+      await page.close();
+    }
+    // A page without pots.css gets no switch.
+    page = await chrome.open('<!doctype html><html><head><script src="../../__pots/kit/pots.js"></script></head><body><p>Hi</p></body></html>');
+    try {
+      expect(await page.eval(`document.querySelectorAll(".pots-theme").length`)).toBe(0);
+    } finally {
+      await page.close();
+    }
+  });
 });
 
 describe.skipIf(!path)("the pages skill's screenshot script", () => {

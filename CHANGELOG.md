@@ -2,6 +2,11 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
+## Unreleased
+
+### Fixed
+- **Teams: a reply could be lost when a reply in another thread of the channel had the same ID.** Microsoft Graph keeps a message ID unique only in its chat, channel or thread ([chatMessage](https://learn.microsoft.com/graph/api/resources/chatmessage)), but the inbox's event ID of a Teams message had only the conversation and the message ID, so the second reply (live, or from backfill with the same change time) was taken as a repeat and dropped. A reply's event ID now has its thread's root too, as its address does, live, from backfill and when posted with `call`. A root message, or one outside a thread, keeps the event ID it had; a reply that Teams sends again across the upgrade is stored again, and the log keeps it once, as one message.
+
 ## 0.8.4 (2026-11-16)
 
 A Microsoft Teams channel, as a preview: a bot sets up its own Teams app with Microsoft's Teams CLI while the person signs in on their phone, and then reads and answers in channels, threads, group chats and DMs, with mentions, reactions, Adaptive Card buttons, files in DMs and backfill from Microsoft Graph. It is tested with fakes of Microsoft's services and with Microsoft 365 Agents Playground, not yet in a real Microsoft 365 organisation; what has not been tried is listed below. ws 8.23.0 fixes a memory exhaustion attack over WebSocket.

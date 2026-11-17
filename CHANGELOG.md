@@ -2,6 +2,11 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
+## Unreleased
+
+### Changed
+- **Shorter guidance, without set steps or set words.** Three places gave set steps or a text to say, which a strong model works out itself and which can fit the case badly. The prompt's line on coding agents' command lines now says only that, unlike a child, one tells the bot nothing while it runs or when it ends, so the bot looks in on it now and then. The pages skill's Quick Tunnel note says what to tell the person, without a text to say or a memory to save. Step 4 of `docs/for-agents.md` says what the person signs in to and why, and names the menu's choices, without a text to paste.
+
 ## 0.8.5 (2026-11-17)
 
 Teams channel replies could be dropped: two replies in different threads of a channel with the same message ID were taken as one, and the second was lost. This affects bots that use the Teams preview from 0.8.4; other channels are not changed.

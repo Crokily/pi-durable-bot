@@ -97,7 +97,7 @@ All that follows serves this goal: plain words make the text fast to read, the r
 - **The header.** Start `<main>` with a `<header>`: `<p class="pots-eyebrow" data-icon="…">` with the kind of page (Proposal, Weekly report, Decision), the `<h1>`, one sentence with the answer, `<p class="pots-meta">` with a `<span>` for each fact about the page (date, who it is for, status; a status span takes `pots-good`, `pots-warn` or `pots-bad`), and last, if they help, two to four key numbers (`pots-stats`) or key points (`pots-points`).
 - **Sections.** Plain `<h2>` headings, with a number when the order matters (decisions to make, steps of a plan): `<h2><span class="pots-no">2</span>Costs</h2>`.
 - **Icons.** `data-icon="name"` puts a small line icon before an element's text. Use it where the reader scans: the eyebrow, the meta facts, card headings, badges, a stat, a note. Headings and `<summary>` stay plain. Notes and questions get their icon from the kit. The names: check, x, info, warn, question, ban, arrow, up, down, clock, calendar, user, users, bot, chat, mail, link, lock, key, shield, eye, search, chart, file, code, terminal, settings, money, place, globe, star, bolt, flag, bell, list.
-- **Colour.** The accent, and `pots-good`, `pots-warn`, `pots-bad` only for a status. Do not add colours, gradients, glows or shadows of your own. The kit's accent is a muted teal. You may choose another accent to fit the page's content, with one line in its CSS: `:root { --pots-accent: light-dark(#305a88, #8bb0db); }` (the light and the dark colour; this one is a muted slate blue). Choose a muted, darker, low-saturation colour; bright, common colours (bright blue, purple, violet) look cheap. One accent per page.
+- **Colour.** The accent, and `pots-good`, `pots-warn`, `pots-bad` only for a status. The kit's accent is a muted teal. You may choose another accent to fit the page's content, with one line in its CSS: `:root { --pots-accent: light-dark(#305a88, #8bb0db); }` (the light and the dark colour; this one is a muted slate blue). Choose a muted, darker, low-saturation colour; bright, common colours (bright blue, purple, violet) look cheap. One accent per page.
 
 Which part for which content:
 
@@ -136,6 +136,7 @@ When a form in the table above has no kit part, write it: a calendar, a checklis
 
 - Write the full content in the HTML first, so the page reads well without your script, for example in a phone's reader mode or when the script fails. The script adds the interaction.
 - Put the script in a file of the page, such as `cost.js`, loaded with `defer`. Then the page works under the private-page CSP.
+- A library (maps, formulas, diagrams, a chart library) loads under the private-page CSP only from the page itself: download it into the page's folder and load it from there.
 - Set text with `textContent`, never `innerHTML`, and keep nothing in `localStorage` (see One browser origin).
 - Use the kit's colour variables, and test it with the mouse, a finger and the keyboard.
 

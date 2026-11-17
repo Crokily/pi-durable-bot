@@ -23,9 +23,6 @@ does the work on its own computer, and speaks up when it should.
 
 </div>
 
-> [!WARNING]
-> **Heads up: Pots has no coin, token or airdrop, and never will.** Accounts impersonating Pots (such as @potsdotsh on X) are promoting a "$POTS" coin. It is not ours; please don't get scammed. Official accounts: [@PotsSh](https://x.com/PotsSh) and [@Crokily_](https://x.com/Crokily_).
-
 > [!TIP]
 > **Setting this up with an AI agent, such as Claude Code, Codex or Cursor?** Have it read [docs/for-agents.md](https://github.com/Crokily/pi-durable-bot/blob/main/docs/for-agents.md) first. That page explains Pots to your agent and how to set it up. In short: the agent installs it and makes the bot, you sign in to your model (and a judge such as Jev, for group chats) with `pots login`, and then the bot connects Slack and your other apps itself.
 
@@ -381,6 +378,11 @@ npm run tla               # the TLA+ models of the inbox, outbox and waker (need
 - [pi](https://github.com/earendil-works/pi)'s model layer for logins, providers and local models
 - [Effect](https://effect.website) for the gateway core and the `pots` command line
 - [TypeSafe AI](https://typesafe.ai)'s Jev, one of the judges you can choose
+
+## Official accounts
+
+> [!WARNING]
+> **Heads up: Pots has no coin, token or airdrop, and never will.** Accounts impersonating Pots (such as @potsdotsh on X) are promoting a "$POTS" coin. It is not ours; please don't get scammed. Official accounts: [@PotsSh](https://x.com/PotsSh) and [@Crokily_](https://x.com/Crokily_).
 
 ## License
 

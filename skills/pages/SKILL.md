@@ -70,7 +70,7 @@ Link them relative to the page's link, not its folder on disk: from a page's `in
 
 All that follows serves this goal: plain words make the text fast to read, the right form makes the shape of the information visible, and the layout puts more of it in view at once.
 
-**The text.** Write the page's text in plain words, in the style of ASD-STE100 Simplified Technical English applied to whatever language the reader uses: short sentences, one idea per sentence, common words, active voice. Use the reader's own words for things (the terms they already use), and do not invent new terms. Put the answer first: the title, one sentence with the conclusion, then two to four key numbers.
+**The text.** Always write in ASD-STE100 Simplified Technical <the reader's language>, and use the reader's ubiquitous language. Put the answer first: the title, one sentence with the conclusion, then two to four key numbers.
 
 **The form.** A guide, not a rule. Use a row only when the information has that shape:
 

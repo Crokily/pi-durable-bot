@@ -218,9 +218,9 @@ describe("the pages skill", () => {
     expect(display).toContain("Never put in a chart, a card or a widget for show");
   });
 
-    it("asks for plain words in the reader's own terms", () => {
+  it("asks for Simplified Technical words in the reader's ubiquitous language", () => {
     expect(display).toContain(
-      "Write the page's text in plain words, in the style of ASD-STE100 Simplified Technical English applied to whatever language the reader uses: short sentences, one idea per sentence, common words, active voice. Use the reader's own words for things (the terms they already use), and do not invent new terms.",
+      "Always write in ASD-STE100 Simplified Technical <the reader's language>, and use the reader's ubiquitous language.",
     );
   });
 

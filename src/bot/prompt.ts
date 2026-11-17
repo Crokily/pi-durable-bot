@@ -154,7 +154,7 @@ export function folderSection(facts: PromptFacts, child = false): string {
     : ` When the person has to give you secrets, such as tokens they copied, ask in the terminal channel with call <its channel id> ask-secret {"text": "…", "file": "<app>-${facts.id}.env", "keys": ["<TOKEN_NAME>", …]}: pots chat asks for each key without showing it and writes it to that file in ${facts.secretsDir}, and you get a message that names the keys it wrote. You never see the values, so they stay out of your log. In a chat app, never ask for a secret in a message: send a password page (pots page secret).`;
   return `# Your folder: ${paths.dir}
 - bot.json: your definition: name, model, thinking, judge, channels (channel accounts), screen (the environment of your screen, which the screen tool runs with), vnc (the VNC server that shows your screen, for desktop pages), settings (settings.maxChildren: how many children may work at once; settings.autoMemory: false turns your memory off). model is "provider/modelId". judge decides which messages that do not mention you wake you: "off" (all of them; the default), a classifier "provider/modelId" such as typesafe/jev-latest, or "main" (your own model judges, which is slower). Models and logins are pi's: ~/.pi/agent/auth.json, and ~/.pi/agent/models.json for OpenAI-compatible and local endpoints. Changes take effect within a few seconds. If it has an error, the error goes into bot.json.error and the old definition stays in use.
-- AGENTS.md: your personality, how you talk, and anything else you want to know at every request. Context files are found as pi finds them: AGENTS.md (or AGENTS.override.md, CLAUDE.md) in ~/.pi/agent and in your working directory and every folder above it, so one in ${facts.botsDir} is for every bot there. They are read before each request, so changes take effect at once.
+- AGENTS.md: your personality, how you talk, and anything else you want to know at every request: facts, and what people asked of you, in their own words. Context files are found as pi finds them: AGENTS.md (or AGENTS.override.md, CLAUDE.md) in ~/.pi/agent and in your working directory and every folder above it, so one in ${facts.botsDir} is for every bot there. They are read before each request, so changes take effect at once.
 - Skills, as in pi: a skill is a folder with a SKILL.md. They are found in ~/.pi/agent/skills, ~/.agents/skills, .pi/skills in your working directory, .agents/skills in it and the folders above, and pi's settings and packages, the same ones the pi command line uses. The ones found are listed below with where they are. You can write or install your own; new ones show at the next request.
 - A CLI on this computer is managed when it has a skill. When you find a CLI that has no skill, suggest to the person that you bring it under management: collect its docs and write one skill for it in ~/.agents/skills/<name>/SKILL.md, which says when to use the CLI, how to use it, and how to check its sign-in. pi finds skills in that folder, so every bot and every pi terminal sees them. When a CLI is removed, remove its skill too.
 - responsibilities.md: what you are responsible for. The judge uses it to decide whether an event that does not mention you is about you. When your responsibilities change, update it.
@@ -194,7 +194,9 @@ function indexBlock(folder: string, about: string, text: string, empty: string):
 
 /**
  * The main agent's memory section: Claude Code's auto-memory prompt (the lean one that 2.1.310 gives its default
- * models), changed only where it does not fit a bot, then both indexes. Pinned: the indexes are as the page began.
+ * models), changed where it does not fit a bot, then both indexes. Pinned: the indexes are as the page began.
+ * A feedback memory holds what happened and what people said, without Claude Code's "How to apply" line: with
+ * it, bots wrote one event down as a method of their own, and nothing removed such methods (Colin, 2026-11-17).
  */
 export function memorySection(facts: PromptFacts, indexes: MemoryIndexes): string {
   const own = facts.paths.memory;
@@ -210,12 +212,12 @@ metadata:
   type: user | feedback | project | reference
 ---
 
-<the fact; for feedback/project, follow with **Why:** and **How to apply:** lines. Link related memories with [[their-name]].>
+<the fact; for feedback/project, follow with a **Why:** line. Link related memories with [[their-name]].>
 \`\`\`
 
 In the body, link to related memories with \`[[name]]\`, where \`name\` is the other memory's \`name:\` slug. Link liberally — a \`[[name]]\` that doesn't match an existing memory yet is fine; it marks something worth writing later, not an error.
 
-\`user\`: who a person is (role, expertise, preferences). \`feedback\`: guidance people have given on how you should work, both corrections and confirmed approaches; include the why. \`project\`: ongoing work, goals, or constraints not derivable from your files or the message log; convert relative dates to absolute. \`reference\`: pointers to external resources (URLs, dashboards, tickets).
+\`user\`: who a person is (role, expertise, preferences). \`feedback\`: corrections and confirmed approaches from people: what happened, their own words with the date, and why. Keep it as that fact, not as a method of your own. \`project\`: ongoing work, goals, or constraints not derivable from your files or the message log; convert relative dates to absolute. \`reference\`: pointers to external resources (URLs, dashboards, tickets).
 
 After writing the file, add a one-line pointer in the \`MEMORY.md\` of the same directory (\`- [Title](file.md) — hook\`, under ~150 characters). \`MEMORY.md\` is the index loaded into context each page — one line per memory, no frontmatter, never put memory content there.
 
@@ -263,7 +265,10 @@ export function renderExtraction(messages: number, files: string, folders: Memor
   ].join("\n");
 }
 
-/** The dream's message: Claude Code's "# Dream: Memory Consolidation", for both memory folders and the bot's log. */
+/**
+ * The dream's message: Claude Code's "# Dream: Memory Consolidation", for both memory folders and the bot's log.
+ * One more focus in Phase 3: a method a memory gives that no person gave goes back to the fact behind it.
+ */
 export function renderDream(facts: PromptFacts, progress: MemoryProgress): string {
   const own = `${facts.paths.memory}/`;
   const shared = `${facts.sharedMemory}/`;
@@ -317,6 +322,7 @@ Focus on:
 - Merging new signal into existing topic files rather than creating near-duplicates
 - Converting relative dates ("yesterday", "last week") to absolute dates so they remain interpretable after time passes
 - Deleting contradicted facts — if today's investigation disproves an old memory, fix it at the source
+- Methods of your own: where a memory tells you how to work and no person gave that method, rewrite it as the fact behind it: what happened and what was said
 
 ## Phase 4 — Prune and index
 

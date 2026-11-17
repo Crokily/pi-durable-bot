@@ -8,6 +8,7 @@ What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm inst
 - **The bot asks less of people.** The more it takes on, the less it asks of the person: it does what it can itself and hands the person only what really needs them. Taking over its screen is the last step.
 - **The bot hands most of its work to children.** Its prompt said only that longer work goes to children, so the main agent, which thinks less deeply, still did much of the work and answered questions that needed thought itself. Now it hands children as much of the work as it can, also questions that need careful thought.
 - **What the bot writes for an agent gives the task, not rules on how to do it.** The prompt said this only of a child's brief. Now it holds for whatever the bot writes for an agent to act on: detailed rules cannot cover every case, and they limit what the agent can do.
+- **Long-term rules come only from people's own words.** The memory format, taken from Claude Code, asked for a "How to apply" line under each correction, so a bot wrote one mistake down as a method of its own and read it at every request; the daily consolidation deleted only memories that were stale, wrong or repeated, so such methods stayed and grew. Now a feedback memory holds what happened, the person's own words with the date, and why. The consolidation also rewrites a method that no person gave back into the fact behind it. AGENTS.md is said to hold facts, and what people asked of the bot in their own words.
 
 ## 0.8.4 (2026-11-16)
 

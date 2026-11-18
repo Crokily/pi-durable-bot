@@ -17,6 +17,10 @@ export interface FakeRequest {
   readonly tools: readonly string[];
   /** The provider session the request names (the session_id header), which providers use to find their cache. */
   readonly session?: string;
+  /** The longest answer the request asks for, in tokens, when it says: 1 for a prompt cache warm. */
+  readonly maxTokens?: number;
+  /** The app the request names to OpenRouter (X-OpenRouter-Title and HTTP-Referer), when it names one. */
+  readonly app?: { readonly title?: string; readonly referer?: string };
 }
 
 export type FakeReply =
@@ -53,9 +57,11 @@ export async function startFakeModel(
         res.writeHead(404).end();
         return;
       }
-      const body = JSON.parse(await readBody(req)) as { model: string; stream?: boolean; messages: OpenAiMessage[]; tools?: { function: { name: string } }[] };
+      const body = JSON.parse(await readBody(req)) as Parameters<typeof toRequest>[0] & { stream?: boolean };
       const session = req.headers["session_id"];
-      const request = { ...toRequest(body), ...(typeof session === "string" ? { session } : {}) };
+      const [title, referer] = [req.headers["x-openrouter-title"], req.headers["http-referer"]].map((value) => (typeof value === "string" ? value : undefined));
+      const app = title !== undefined || referer !== undefined ? { app: { ...(title ? { title } : {}), ...(referer ? { referer } : {}) } } : {};
+      const request = { ...toRequest(body), ...(typeof session === "string" ? { session } : {}), ...app };
       requests.push(request);
       if (options.delayMs) await new Promise((resolve) => setTimeout(resolve, options.delayMs));
       const reply = isMemoryPass(request) || isDream(request) ? await (options.memory ?? noMemory)(request) : script(request);
@@ -186,7 +192,7 @@ interface OpenAiMessage {
   tool_calls?: { function: { name: string } }[];
 }
 
-function toRequest(body: { model: string; messages: OpenAiMessage[]; tools?: { function: { name: string } }[] }): FakeRequest {
+function toRequest(body: { model: string; messages: OpenAiMessage[]; tools?: { function: { name: string } }[]; max_tokens?: number; max_completion_tokens?: number }): FakeRequest {
   const text = (content: OpenAiMessage["content"]) =>
     typeof content === "string" ? content : (content ?? []).map((part) => (part.type === "text" ? (part.text ?? "") : "")).join("");
   const isSystem = (message: OpenAiMessage | undefined) => message?.role === "system" || message?.role === "developer";
@@ -204,6 +210,7 @@ function toRequest(body: { model: string; messages: OpenAiMessage[]; tools?: { f
         ...(message.tool_calls ? { toolCalls: message.tool_calls.map((call) => call.function.name) } : {}),
       })),
     tools: (body.tools ?? []).map((tool) => tool.function.name),
+    ...(body.max_tokens !== undefined || body.max_completion_tokens !== undefined ? { maxTokens: body.max_tokens ?? body.max_completion_tokens } : {}),
   };
 }
 

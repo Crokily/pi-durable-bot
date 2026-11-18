@@ -17,6 +17,7 @@ import { Mcp } from "../agent/mcp.ts";
 import { piLoginHelpers } from "../agent/models.ts";
 import { openResources } from "../agent/resources.ts";
 import { CommandScopes, scopeSupport } from "../agent/scopes.ts";
+import type { CacheWarmingMode } from "../agent/warming.ts";
 import { loadChannel } from "../channels/load.ts";
 import type { Address, ChannelAdapter, ChannelConfig } from "../core/channel.ts";
 import { MEMORY_DIR, POTS_HOME, SECRETS_DIR } from "../core/home.ts";
@@ -79,6 +80,8 @@ export interface BotEnvironment {
   potsCommand: string;
   /** pi's model layer, shared by all bots of the process. */
   models: Models;
+  /** pi's setting cacheWarming, read again as it changes; without it, nothing is warmed. */
+  cacheWarming?: () => CacheWarmingMode;
   /** The gateway's page server, which every bot shares. */
   pages: PageHost;
 }
@@ -321,6 +324,7 @@ export class Bot implements WakeTarget {
     const agent = await Agent.open({
       database: sql,
       models: env.models,
+      ...(env.cacheWarming ? { cacheWarming: env.cacheWarming } : {}),
       model: definition.model,
       thinking: definition.thinking,
       compaction: () => settings().compaction,

@@ -430,6 +430,7 @@ function renderOutcome(session, outcome) {
     if (outcome.model) lines.push(outcome.modelProblem ? fill(W.notAnswer, { model: outcome.model, reason: outcome.modelProblem }) : fill(W.ready, { model: outcome.model }));
     if (outcome.judge) lines.push(outcome.judgeProblem ? fill(W.notAnswer, { model: outcome.judge, reason: outcome.judgeProblem }) : fill(W.judgeReady, { model: outcome.judge }));
     if (!outcome.model && !outcome.judge) lines.push(W.noModels);
+    if (outcome.extraUsage) lines.push(W.extraUsage);
   } else lines.push(outcome.cancelled ? W.cancelled : outcome.error);
   show(
     session,

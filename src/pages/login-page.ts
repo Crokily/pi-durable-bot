@@ -1,4 +1,5 @@
 import { isLongText, type Lang, possessive, textHtml } from "./desktop-page.ts";
+import { EXTRA_USAGE_NOTICE, EXTRA_USAGE_OFF } from "../agent/models.ts";
 import type { LoginView } from "./login.ts";
 
 // The login page: Pots' own HTML, never the bot's. The page is a shell: kit/login/login.js shows pi's questions and
@@ -59,6 +60,7 @@ const WORDS = {
     notAnswer: "{model} did not answer: {reason}",
     judgeReady: "Ready as a judge: {model}",
     noModels: "pi lists no model for this login.",
+    extraUsage: `${EXTRA_USAGE_NOTICE} ${EXTRA_USAGE_OFF}`,
     failed: "Not signed in to {provider}",
     cancelled: "Cancelled.",
     another: "Sign in to another",
@@ -125,6 +127,8 @@ const WORDS = {
     notAnswer: "{model} 没有回应：{reason}",
     judgeReady: "可以当判断模型：{model}",
     noModels: "pi 没有列出这个登录能用的模型。",
+    // pi's notice, in pi's words, then in Chinese.
+    extraUsage: `${EXTRA_USAGE_NOTICE}（Claude 订阅登录已生效：第三方工具的用量从额外用量里扣，按 token 收费，不算在 Claude 套餐的额度里。额外用量在 https://claude.ai/settings/usage 管理。）在 pi 的 /settings 里关掉，或在 pi 的 settings.json 里把 warnings.anthropicExtraUsage 设成 false，这里和 pi 里都不再显示这条提示。`,
     failed: "没有登录 {provider}",
     cancelled: "已取消。",
     another: "再登录一个",

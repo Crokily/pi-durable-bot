@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { openModels } from "./agent/models.ts";
+import { openModels, piSettings } from "./agent/models.ts";
 import { foundScopeSupport, stopAllScopes, stoppingOnPurpose } from "./agent/scopes.ts";
 import { Bot } from "./bot/bot.ts";
 import { ControlServer } from "./bot/control.ts";
@@ -47,6 +47,7 @@ export async function runGateway(): Promise<void> {
   const potsCommand = writePotsCommand();
   const log = print(undefined);
   const models = await openModels();
+  const settings = await piSettings();
   // One page server for every bot, on its kept port; a port that is taken is reported, and the bots run without it.
   const pages = new PageHost({ home: POTS_HOME, settingsFile: SETTINGS_FILE, binDir: BIN_DIR, print: log });
   await pages.start();
@@ -97,7 +98,7 @@ export async function runGateway(): Promise<void> {
           await current.bot.applyDefinition(read.definition);
           current.text = read.text;
         } else {
-          const bot = await Bot.start(id, paths.dir, read.definition, { botsDir: BOTS_DIR, potsCommand, models, pages }, print(id));
+          const bot = await Bot.start(id, paths.dir, read.definition, { botsDir: BOTS_DIR, potsCommand, models, cacheWarming: () => settings().getCacheWarmingMode(), pages }, print(id));
           running.set(id, { bot, text: read.text });
         }
         failed.delete(id);

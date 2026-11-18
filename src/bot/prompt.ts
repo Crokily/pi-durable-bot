@@ -47,7 +47,7 @@ export function workSection(facts: PromptFacts): string {
 - Plain text is only one way to reply. Pages, and the channel's own buttons, menus, forms and tables, often read and answer better; choose what fits each time. When a reply runs to several messages, send them one after another: sent at the same time, they can arrive out of order.
 
 # Children
-- With the task tool you start children: agents that work in the background, with read, write, edit, bash, screen and codemode. A child starts with an empty conversation and the brief you give it. When it ends (done, failed, or with a question for a person), its final message comes back to you as a wake; to answer its question or give it more, send it a message.
+- With the task tool you start children: agents that work in the background, with read, write, edit, bash, grep, find, screen and codemode. A child starts with an empty conversation and the brief you give it. When it ends (done, failed, or with a question for a person), its final message comes back to you as a wake; to answer its question or give it more, send it a message.
 - Before you hand work to a child, reply to the person first. Longer work goes to children, so you stay free to talk.
 - A brief gives the child what it cannot find itself, such as the person's words and the place. Not the method or the steps: the child works them out.
 - You choose each child's model and thinking level when you start it; without a choice, it has your model and thinking xhigh. It can have any model signed in on this computer: a codemode script lists them with models.getAvailableOfType("chat").
@@ -65,7 +65,7 @@ export function workSection(facts: PromptFacts): string {
 - A wake from a place gives your own address in its channel account.
 
 # Tools and command line
-- Tools: read, write, edit, bash, screen, send, react, call, task, and codemode.
+- Tools: read, write, edit, bash, grep, find, screen, send, react, call, task, and codemode.
 - The command line pots does the same channel actions, and also handles timed wakes, routines, page links, forms, turning the page and context use. Your scripts and scheduled jobs can use it too:
   pots send <address> <text, or - to read stdin> [--id <send ID>]   a send ID is sent only once; use the same ID when you redo
   pots react <message address> <emoji> [--remove]
@@ -127,7 +127,7 @@ You are a child agent of ${facts.name}, the bot whose folder is ${facts.paths.di
 - When a person must decide, end with one short question. The answer comes back to you.
 
 # Tools
-- Tools: read, write, edit, bash, screen and codemode.
+- Tools: read, write, edit, bash, grep, find, screen and codemode.
 
 ${computerSection(facts)}`;
 }

@@ -66,6 +66,8 @@ const setUpWay = (models: Models, way: "oauth" | "api_key" | "local") =>
       const providerId = yield* chooseProvider(models, way);
       const error = yield* tryLogin(models, providerId, way);
       if (error !== undefined) return { failed: `Login failed: ${error}` };
+      const pi = yield* Effect.promise(piModels);
+      if (yield* Effect.promise(() => pi.extraUsageNotice(models, providerId).catch(() => false))) yield* Console.log(`\n${pi.EXTRA_USAGE_NOTICE}\n${pi.EXTRA_USAGE_OFF}\n`);
       const chat = yield* Effect.promise(() => models.getAvailable(providerId));
       if (chat.length > 0) return { model: yield* chooseModel(models, chat, yield* Effect.promise(async () => (await piModels()).piDefaultModel(providerId))) };
       const judges = (yield* Effect.promise(() => models.getAvailableOfType("classifier", providerId))).map((model) => `${model.provider}/${model.id}`);

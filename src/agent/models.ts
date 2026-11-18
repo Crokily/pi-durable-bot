@@ -1,6 +1,7 @@
 import type { AnyModel, Api, Model, Models, Provider } from "@earendil-works/pi-ai";
 import { type LazyStreamObserver, lazyStream } from "@earendil-works/pi-ai/api/lazy";
-import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { type ClientIdentity, mergeClientIdentity } from "@earendil-works/pi-ai/utils/identity";
+import type { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { TelemetrySpan } from "@earendil-works/pi-telemetry";
 import { withCodexImages } from "./codex-images.ts";
 
@@ -17,6 +18,7 @@ export const piModule = (path: string) => new URL(path, import.meta.resolve("@ea
  * One per process; all bots share it.
  */
 export async function openModels(): Promise<Models> {
+  await usePiNetwork();
   // From pi's public entry. It also loads pi's terminal interface, which the bot does not use: about 0.3 seconds and
   // 20 MB more, once, when the gateway starts.
   const { ModelRuntime: Runtime } = await import("@earendil-works/pi-coding-agent");
@@ -27,7 +29,46 @@ export async function openModels(): Promise<Models> {
   models.registerNativeProvider(llama.createLlamaProvider().provider);
   const codex = await piCodexProvider();
   if (codex) models.registerNativeProvider(withCodexImages(codex));
-  return observeRequests(models);
+  return identify(await observeRequests(models));
+}
+
+/**
+ * The network as the pi CLI sets it up when it starts: a proxy from HTTP_PROXY, HTTPS_PROXY and NO_PROXY, or from pi's
+ * setting httpProxy; pi's setting httpIdleTimeoutMs (5 minutes by default); and 2 seconds for each address of a host to
+ * connect, not Node's 250 ms, which far routes miss. For every fetch of the process: model requests, MCP servers over
+ * HTTP, and the channels that use fetch. Once per process.
+ */
+let network: Promise<void> | undefined;
+export function usePiNetwork(): Promise<void> {
+  network ??= (async () => {
+    const [settings, http] = await Promise.all([piSettings(), import(piModule("./core/http-dispatcher.js"))]);
+    const { applyHttpProxySettings, configureHttpDispatcher } = http as { applyHttpProxySettings(proxy: string | undefined): void; configureHttpDispatcher(timeoutMs?: number): void };
+    applyHttpProxySettings(settings().getGlobalSettings().httpProxy);
+    configureHttpDispatcher(settings().getHttpIdleTimeoutMs());
+  })();
+  return network;
+}
+
+/**
+ * Who Pots' model requests come from, for the providers that show it: OpenRouter's app rankings, NVIDIA NIM and
+ * OpenCode. pi-ai names pi unless the app names itself; subscription logins send nothing of it.
+ */
+export const POTS_IDENTITY: ClientIdentity = { attribution: { name: "Pots", url: "https://pots.sh" } };
+
+/** The requests that pi-ai identifies to providers. */
+const IDENTIFIED = new Set<PropertyKey>(["stream", "complete", "streamSimple", "completeSimple", "streamDeferred", "fetchDeferred", "cancelDeferred", "generateImages", "classify"]);
+
+/** Every request names Pots, unless it names another app itself. Everything else is pi's ModelRuntime as it is. */
+function identify(models: Models): Models {
+  return new Proxy(models, {
+    get(target, property) {
+      const value: unknown = Reflect.get(target, property, target);
+      if (typeof value !== "function") return value;
+      if (!IDENTIFIED.has(property)) return value.bind(target);
+      return (model: unknown, input: unknown, options?: { identity?: ClientIdentity }) =>
+        value.call(target, model, input, { ...options, identity: mergeClientIdentity(POTS_IDENTITY, options?.identity) });
+    },
+  });
 }
 
 /**
@@ -110,6 +151,26 @@ export async function piDeviceId(): Promise<string> {
   return id;
 }
 
+/** How often pi's settings are read again at most. */
+const SETTINGS_MS = 5_000;
+
+/**
+ * pi's settings (`~/.pi/agent/settings.json`, and the working directory's `.pi/settings.json`), as the pi CLI reads them,
+ * read again when they are older than a few seconds: a change made in the pi CLI counts soon, without a restart.
+ */
+export async function piSettings(): Promise<() => SettingsManager> {
+  const { SettingsManager: Settings } = await import("@earendil-works/pi-coding-agent");
+  let settings: SettingsManager | undefined;
+  let readAt = 0;
+  return () => {
+    if (!settings || Date.now() - readAt >= SETTINGS_MS) {
+      settings = Settings.create(process.cwd());
+      readAt = Date.now();
+    }
+    return settings;
+  };
+}
+
 /** Ask the model for a word. The reason it cannot answer, or undefined when it can. */
 export async function modelProblem(models: Models, model: Model<Api>): Promise<string | undefined> {
   try {
@@ -142,8 +203,25 @@ export async function judgeProblem(models: Models, judge: string, mainModel = ""
   }
 }
 
+/** The notice pi gives when Claude is signed in with a Claude subscription, as the pi CLI words it. */
+export const EXTRA_USAGE_NOTICE =
+  "Anthropic subscription auth is active. Third-party harness usage draws from extra usage and is billed per token, not your Claude plan limits. Manage extra usage at https://claude.ai/settings/usage.";
+/** How to turn it off: pi's own setting, so it is off in Pots and in pi alike. */
+export const EXTRA_USAGE_OFF = "To turn this notice off here and in pi: pi's /settings, or warnings.anthropicExtraUsage false in pi's settings.json.";
+
+/**
+ * Whether pi's notice belongs after a login to this provider: as in the pi CLI, Anthropic with a subscription login,
+ * unless pi's setting warnings.anthropicExtraUsage is false.
+ */
+export async function extraUsageNotice(models: Models, provider: string): Promise<boolean> {
+  if (provider !== "anthropic") return false;
+  if ((await piSettings())().getWarnings().anthropicExtraUsage === false) return false;
+  return (await models.checkAuth("anthropic"))?.type === "oauth";
+}
+
 /** What a login page needs of pi, beyond its models: its device ID, its default models, and a try of a model or judge. */
 export const piLoginHelpers = {
+  extraUsage: extraUsageNotice,
   deviceId: piDeviceId,
   defaultModel: piDefaultModel,
   tryModel: async (models: Models, name: string) => {

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 
@@ -8,6 +8,9 @@ import { describe, expect, it } from "vitest";
 
 const source = readFileSync(new URL("../kit/pots.js", import.meta.url), "utf8");
 const css = readFileSync(new URL("../kit/pots.css", import.meta.url), "utf8");
+const ui = readFileSync(new URL("../kit/pots-ui.js", import.meta.url), "utf8");
+// The one thing the kit keeps in the browser: the reader's light or dark choice, under its one key.
+const withoutTheme = (js: string) => js.replace(/localStorage\.(getItem|removeItem)\(KEY\)|localStorage\.setItem\(KEY, v\)/g, "");
 
 /** The kit is plain JavaScript, with no types. */
 type Kit = any;
@@ -216,14 +219,93 @@ describe("the page kit", () => {
     expect(calls).toEqual([]);
   });
 
-  it("keeps nothing in the browser and writes no HTML from text", () => {
+  it("keeps nothing in the browser but the light or dark choice, and writes no HTML from text", () => {
+    expect(source).toContain('KEY = "pots-theme"');
     for (const word of ["localStorage", "sessionStorage", "indexedDB", "document.cookie", "innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function"])
-      expect(source).not.toContain(word);
+      expect(withoutTheme(source), word).not.toContain(word);
     expect(source).toContain("textContent");
   });
 
   it("styles light and dark, and loads nothing from elsewhere", () => {
-    expect(css).toMatch(/@media \(prefers-color-scheme: dark\)/);
-    expect(css).not.toMatch(/@import|url\(/);
+    // Every colour is a light-dark() pair, so the reader's switch (color-scheme) changes all of them.
+    expect(css).toMatch(/color-scheme: light dark;/);
+    expect(css).toMatch(/:root\[data-pots-theme="light"\] \{\s*color-scheme: light;/);
+    expect(css).toMatch(/:root\[data-pots-theme="dark"\] \{\s*color-scheme: dark;/);
+    expect(css).not.toMatch(/prefers-color-scheme/);
+    expect(css).toMatch(/--pots-bg: light-dark\(/);
+    expect(css).not.toMatch(/@import/);
+    // Icons and the flow's arrowheads are data: URLs, drawn from the stylesheet itself; the one font is in the kit, with its licence.
+    expect(css).not.toMatch(/url\((?!"data:image\/svg\+xml,|"fonts\/InterVariable-latin\.woff2")/);
+    expect(existsSync(new URL("../kit/fonts/InterVariable-latin.woff2", import.meta.url))).toBe(true);
+    expect(readFileSync(new URL("../kit/fonts/Inter-LICENSE.txt", import.meta.url), "utf8")).toContain("SIL Open Font License");
+  });
+
+  it("sets the accent, light and dark, in one line a page can override", () => {
+    const lines = css.split("\n").filter((line) => /^\s*--pots-accent:/.test(line));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/light-dark\(#[0-9a-f]{6}, #[0-9a-f]{6}\)/);
+  });
+
+  it("keeps every class and colour of the first stylesheet, so pages written for it look right", () => {
+    for (const name of ["pots-card", "pots-note", "pots-warn", "pots-row", "pots-badge", "pots-good", "pots-bad", "pots-muted", "pots-num", "pots-secondary", "pots-approve", "pots-comment", "pots-choice", "pots-banner"])
+      expect(css, name).toContain(`.${name}`);
+    for (const name of ["--pots-bg", "--pots-surface", "--pots-text", "--pots-muted", "--pots-border", "--pots-accent", "--pots-accent-soft", "--pots-code-bg", "--pots-radius", "--pots-font", "--pots-mono"])
+      expect(css, name).toContain(`${name}:`);
+    for (const selector of ["[data-pots-status]", '[data-state="done"]', '[data-pots-state="done"]', "[data-pots-error]"]) expect(css, selector).toContain(selector);
+  });
+
+  it("styles the parts that pots-ui.js draws, and lays a choice's explanation under its label", () => {
+    for (const name of ["pots-tabbar", "pots-off", "pots-chart", "pots-hbars", "pots-fill", "pots-mark", "pots-stackbar", "pots-legend", "pots-data", "pots-sort", "pots-hide", "pots-toc", "pots-cols", "pots-stats", "pots-wide", "pots-scroll"])
+      expect(css, name).toContain(`.${name}`);
+    for (const name of ["pots-tabbar", "pots-off", "pots-chart", "pots-hbars", "pots-fill", "pots-mark", "pots-stackbar", "pots-legend", "pots-data", "pots-sort", "pots-hide", "pots-scroll"]) expect(ui, name).toContain(name);
+    // The first stylesheet made a choice a flex row, which squeezed a title and its explanation into columns.
+    expect(css).toMatch(/label:has\(> input\[type="radio"\]\)[^{]*\{[^}]*display: block;/);
+    expect(css).toMatch(/> :is\(small, \.pots-muted\) \{\s*display: block;/);
+  });
+});
+
+describe("the page helper", () => {
+  /** pots-ui.js run as a browser runs it, before the page has loaded, with only what it touches at once. */
+  function loadUi(lang: string) {
+    const context: Record<string, unknown> = {
+      document: { documentElement: { lang }, readyState: "loading", addEventListener: () => {} },
+      Intl,
+    };
+    context.window = context;
+    runInNewContext(ui, context);
+    return context.PotsUI as { num: (text: string) => number };
+  }
+
+  it("reads numbers as people write them in table cells", () => {
+    const { num } = loadUi("en");
+    expect(num("€11,200")).toBe(11200);
+    expect(num("-3.5 kg")).toBe(-3.5);
+    expect(num("约 380 克")).toBe(380);
+    expect(num("n/a")).toBeNaN();
+    expect(num("−12")).toBe(-12);
+    expect(num("12%")).toBe(12);
+  });
+
+  it("reads a cell as a number only when all of it is one, with the page's separators", () => {
+    const en = loadUi("en").num;
+    for (const text of ["Zebra 1", "€1,50", "€1.234,56", "10/5", "14:00", "1,2,3"]) expect(en(text), text).toBeNaN();
+    expect(en("1,234,567.5")).toBe(1234567.5);
+    const de = loadUi("de").num;
+    expect(de("€1,50")).toBe(1.5);
+    expect(de("€1.234,56")).toBe(1234.56);
+    expect(de("1.5")).toBeNaN();
+    expect(loadUi("fr").num("10 000,5 €")).toBe(10000.5);
+    expect(loadUi("zh-CN").num("约 1，200 元")).toBe(1200);
+  });
+
+  it("starts also when the page's language tag is not valid", () => {
+    expect(loadUi("not a language!").num("12")).toBe(12);
+  });
+
+  it("keeps nothing in the browser but the light or dark choice, writes no HTML from text, and loads nothing", () => {
+    expect(ui).toContain('KEY = "pots-theme"');
+    for (const word of ["localStorage", "sessionStorage", "indexedDB", "document.cookie", "innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function", "fetch(", "XMLHttpRequest", "import(", "http://", "https://"])
+      expect(withoutTheme(ui).replace('"http://www.w3.org/2000/svg"', ""), word).not.toContain(word);
+    expect(ui).toContain("textContent");
   });
 });

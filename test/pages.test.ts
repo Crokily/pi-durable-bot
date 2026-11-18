@@ -383,6 +383,34 @@ describe("pages", { timeout: 120_000 }, () => {
     expect((await http("POST", `${pathOf(demo.url)}__pots/submit`, { body: JSON.stringify({ submission: "after-restart", version, answers: { ok: true } }) })).status).toBe(200);
     await waitFor(() => wakes(model).some((wake) => wake.includes(`on page demo (version ${version}): {"ok":true}`)), { what: "the answer after the restart" });
   });
+
+  it("serves the kit at its own address and under each link, and the pages skill's examples load every file they name", async () => {
+    for (const file of ["pots.css", "pots.js", "pots-ui.js"]) {
+      const body = readFileSync(join(import.meta.dirname, "..", "kit", file), "utf8");
+      for (const path of [`/__pots/kit/${file}`, `${pathOf(demo.url)}__pots/kit/${file}`]) {
+        const answer = await http("GET", path);
+        expect([answer.status, answer.body], path).toEqual([200, body]);
+        expect(answer.headers["content-type"]).toBe(file.endsWith(".css") ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8");
+        expect(answer.headers["x-content-type-options"]).toBe("nosniff");
+        // Same origin as the pages, so a page's own CSP of default-src 'self' lets it load; the kit adds no CSP of its own.
+        expect(answer.headers["content-security-policy"]).toBeUndefined();
+      }
+    }
+
+    const skill = readFileSync(join(import.meta.dirname, "..", "skills", "pages", "SKILL.md"), "utf8");
+    const [display, answer] = [...skill.matchAll(/```html\r?\n([\s\S]*?)```/g)].map((match) => match[1]!);
+    const script = /```js\r?\n([\s\S]*?)```/.exec(skill)![1]!;
+    writePage("offsite", { "index.html": display!, "cost.js": script });
+    writePage("keep/deploy", { "index.html": answer! });
+    for (const name of ["offsite", "keep/deploy"]) {
+      const link = await potsJson<Link>("page", "link", name);
+      const page = await http("GET", pathOf(link.url));
+      expect([page.status, page.headers["content-type"]], name).toEqual([200, "text/html; charset=utf-8"]);
+      const loads = [...page.body.matchAll(/(?:href|src)="([^"#]+)"/g)].map((match) => new URL(match[1]!, `http://page${pathOf(link.url)}`).pathname);
+      expect(loads.length, name).toBeGreaterThan(1);
+      for (const path of loads) expect((await http("GET", path)).status, `${name}: ${path}`).toBe(200);
+    }
+  });
 });
 
 describe("a page port that is taken", { timeout: 60_000 }, () => {

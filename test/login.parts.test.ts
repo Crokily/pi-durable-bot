@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,7 @@ import { type Database, openDatabase } from "../src/agent/agent.ts";
 import { PageHost, QUICK_TUNNEL_LOGIN_NOTE } from "../src/pages/host.ts";
 import { LOGIN_MINUTES, LOGIN_UNOPENED_MS, type LoginState, loginTimes, shapeOptions } from "../src/pages/login.ts";
 import { BotPages } from "../src/pages/store.ts";
+import { EXTRA_USAGE_NOTICE, extraUsageNotice } from "../src/agent/models.ts";
 import { waitFor } from "./support/gateway.ts";
 
 // The login page from outside, in this process: a real page server and a bot's links in a SQLite file, pi's own
@@ -92,6 +93,8 @@ function providers(site: FakeSite): Provider[] {
         },
       },
     }),
+    // Claude with a subscription, which signs in at once here.
+    chat("anthropic", "Anthropic", { oauth: { name: "Claude Pro/Max", isSubscription: true, ...refresh, login: async () => credential("claude-token") } }),
     // A plain API key, and one with a choice of which some ways work only on the computer itself, as Amazon Bedrock.
     chat("fake-key", "Fake Key", { apiKey: envApiKeyAuth("Fake Key API key", ["FAKE_KEY_FOR_TEST"]) }),
     chat("fake-aws", "Fake AWS", {
@@ -165,6 +168,7 @@ async function open(dir: string, site: FakeSite, settings: Record<string, unknow
         await state.probe;
         return model === "fake-key/fake-key-large" ? "401 bad key" : undefined;
       },
+      extraUsage: extraUsageNotice,
     },
   });
   // Never a real tunnel: without a publicUrl, the address cannot come.
@@ -419,6 +423,34 @@ describe("login pages", { timeout: 60_000 }, () => {
     f.state.now += LOGIN_MINUTES * 60_000 + 1;
     await f.pages.login.checkExpiry();
     expect(f.woke).toHaveLength(2);
+  });
+
+  it("gives pi's extra usage notice after a Claude subscription login, until pi's setting turns it off", async () => {
+    const page = await started(f);
+    expect((await http(f, "GET", page.path, { origin: null })).body).toContain(EXTRA_USAGE_NOTICE);
+    await http(f, "POST", `${page.path}login`, { body: { provider: "anthropic", way: "oauth" }, cookie: page.cookie });
+    const claude = await until(f, page.path, page.cookie, (state) => (state.outcomes?.length ?? 0) === 1, "the Claude login");
+    expect(claude.outcomes![0]).toMatchObject({ ok: true, provider: "anthropic", extraUsage: true });
+    // Not for another provider's subscription.
+    await http(f, "POST", `${page.path}login`, { body: { provider: "fake-paste", way: "oauth" }, cookie: page.cookie });
+    const asked = await until(f, page.path, page.cookie, (state) => state.login?.question?.type === "manual_code", "the code question");
+    await http(f, "POST", `${page.path}answer`, { body: { question: asked.login!.question!.id, value: f.site.code }, cookie: page.cookie });
+    const other = await until(f, page.path, page.cookie, (state) => (state.outcomes?.length ?? 0) === 2, "the other login");
+    expect(other.outcomes![1]).toMatchObject({ ok: true, provider: "fake-paste" });
+    expect(other.outcomes![1]).not.toHaveProperty("extraUsage");
+    // pi's setting, as /settings in pi writes it.
+    const piDir = join(process.env.HOME!, ".pi", "agent");
+    mkdirSync(piDir, { recursive: true });
+    writeFileSync(join(piDir, "settings.json"), JSON.stringify({ warnings: { anthropicExtraUsage: false } }));
+    try {
+      const again = await started(f);
+      await http(f, "POST", `${again.path}login`, { body: { provider: "anthropic", way: "oauth", replace: (await stateOf(f, again.path, again.cookie)).choices!.oauth.find((choice) => choice.id === "anthropic")!.stored }, cookie: again.cookie });
+      const off = await until(f, again.path, again.cookie, (state) => (state.outcomes?.length ?? 0) === 1, "the login with the notice off");
+      expect(off.outcomes![0]).toMatchObject({ ok: true, provider: "anthropic" });
+      expect(off.outcomes![0]).not.toHaveProperty("extraUsage");
+    } finally {
+      rmSync(join(piDir, "settings.json"));
+    }
   });
 
   it("leaves out the ways for the computer itself, and lets the person cancel a sign-in", async () => {

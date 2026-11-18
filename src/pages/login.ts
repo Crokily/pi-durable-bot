@@ -142,7 +142,20 @@ export type Question =
 
 /** How a login of this link ended, for its page. */
 export type Outcome =
-  | { readonly ok: true; readonly provider: string; readonly name: string; readonly way: AuthType; readonly replaced: boolean; readonly model?: string; readonly modelProblem?: string; readonly judge?: string; readonly judgeProblem?: string; readonly models: number }
+  | {
+      readonly ok: true;
+      readonly provider: string;
+      readonly name: string;
+      readonly way: AuthType;
+      readonly replaced: boolean;
+      readonly model?: string;
+      readonly modelProblem?: string;
+      readonly judge?: string;
+      readonly judgeProblem?: string;
+      readonly models: number;
+      /** pi's notice that a Claude subscription login pays for third-party use from extra usage. */
+      readonly extraUsage?: boolean;
+    }
   | { readonly ok: false; readonly provider: string; readonly name: string; readonly way: AuthType; readonly cancelled: boolean; readonly error: string };
 
 /** The link as its page sees it. Only the browser that pressed Start sees the login. */
@@ -190,6 +203,8 @@ export interface LoginOptions {
   /** Ask a model or a judge for a word: why it cannot answer, or undefined. */
   readonly tryModel?: (models: Models, model: string) => Promise<string | undefined>;
   readonly tryJudge?: (models: Models, judge: string) => Promise<string | undefined>;
+  /** Whether pi gives its extra usage notice after a login to this provider. */
+  readonly extraUsage?: (models: Models, provider: string) => Promise<boolean>;
 }
 
 /** What one started link has in this process: the login that runs, and what the page waits for. */
@@ -754,7 +769,8 @@ export class BotLogins {
    */
   async #tryAfter(login: Running): Promise<Extract<Outcome, { ok: true }>> {
     const models = this.#models();
-    const base = { ok: true as const, provider: login.provider, name: login.name, way: login.way, replaced: login.replaces };
+    const extraUsage = (await this.#options.extraUsage?.(models, login.provider).catch(() => false)) === true;
+    const base = { ok: true as const, provider: login.provider, name: login.name, way: login.way, replaced: login.replaces, ...(extraUsage ? { extraUsage } : {}) };
     const chat = await models.getAvailable(login.provider);
     if (chat.length > 0) {
       const preferred = await this.#options.defaultModel?.(login.provider).catch(() => undefined);

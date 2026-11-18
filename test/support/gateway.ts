@@ -33,6 +33,11 @@ export interface BotOptions {
    * that changes is then sent at the end, and the leading system message stays as it was.
    */
   readonly laterSystemMessages?: boolean;
+  /**
+   * The fake models keep a provider's prompt cache entry this many seconds, and are priced so that pi finds a warm of
+   * it worth its cost. Without it they have no prompt cache, and nothing is warmed.
+   */
+  readonly promptCacheSeconds?: number;
   /** Changes to the gateway's environment; undefined takes a variable out. */
   readonly env?: Record<string, string | undefined>;
 }
@@ -78,6 +83,8 @@ export class TestGateway {
       settings: { debounceMs: 300, debounceMaxMs: 2_000, ...options.settings },
     };
     writeFileSync(join(this.botDir, "bot.json"), JSON.stringify(definition, null, 2));
+    // Dollars per million tokens: a missed cache entry of the fake model's 100 input tokens costs $100.
+    const cache = options.promptCacheSeconds ? { promptCache: { short: options.promptCacheSeconds }, cost: { input: 1_000_000, output: 0, cacheRead: 1_000, cacheWrite: 0 } } : {};
     // pi's model layer reads its endpoints from here instead of ~/.pi/agent.
     const models = {
       providers: {
@@ -93,10 +100,7 @@ export class TestGateway {
             sessionAffinityFormat: "openai",
             ...(options.laterSystemMessages ? { supportsMidConvoSystemMessages: true } : {}),
           },
-          models: [
-            { id: "coworker", contextWindow: 128_000, input: ["text", "image"] },
-            ...(options.moreModels ? ["helper", "other"].map((id) => ({ id, contextWindow: 128_000, input: ["text", "image"] })) : []),
-          ],
+          models: ["coworker", ...(options.moreModels ? ["helper", "other"] : [])].map((id) => ({ id, contextWindow: 128_000, input: ["text", "image"], ...cache })),
         },
         // No key: pi knows its model, but it is not signed in.
         ...(options.moreModels ? { locked: { baseUrl: options.model.url, api: "openai-completions", models: [{ id: "model", contextWindow: 128_000 }] } } : {}),

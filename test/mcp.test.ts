@@ -15,8 +15,8 @@ import { ME, TestGateway, waitFor } from "./support/gateway.ts";
 const SERVER = fileURLToPath(new URL("./support/mcp-server.ts", import.meta.url));
 /** A script that calls the test server's tool. */
 const SHOUT = 'const result = await tools.mcp__shouter__shout({ text: "hello" });\nreturn result.content[0].text;';
-const MAIN_TOOLS = ["read", "write", "edit", "bash", "send", "react", "call", "screen", "task", "codemode"];
-const CHILD_TOOLS = ["read", "write", "edit", "bash", "screen", "codemode"];
+const MAIN_TOOLS = ["read", "write", "edit", "bash", "grep", "find", "send", "react", "call", "screen", "task", "codemode"];
+const CHILD_TOOLS = ["read", "write", "edit", "bash", "grep", "find", "screen", "codemode"];
 
 let model: FakeModel;
 let gateway: TestGateway;

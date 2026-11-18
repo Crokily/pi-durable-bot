@@ -2,6 +2,17 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
+## Unreleased
+
+### Added
+- **Prompt cache warming, as in pi.** A provider keeps the start of a request cached for about 5 minutes, and the bot often waits longer, for a person's answer or a child's work; the next request then writes the whole conversation to the cache again. Now Pots does what the pi command line does by default since pi 1.5.1: shortly before the cache entry of the main agent's or a child's last request expires, it sends the same request again with a one-token answer, but only when pi's numbers say the warm costs less than the miss it saves. During a run for up to an hour after the request, after it for up to 30 minutes. pi's setting `cacheWarming` (`idle` by default, `streaming`, `off`) in `~/.pi/agent/settings.json` is the switch for Pots and pi alike, read again within seconds. Memory passes, compaction and the judge are not warmed, nor a stopped child. A warm is a model request in `pots trace`, beside the request it repeats. On three bots' requests of 12 to 18 November, pi's rules would have saved about 17% of their model cost.
+- **`grep` and `find`, pi's search tools, for the main agent and its children.** They search file contents and file names with ripgrep and fd, skip what `.gitignore` lists and cap their output; when the computer has neither program, pi downloads it to `~/.pi/agent/bin` on first use. A child that ran `grep -r` in `bash` on a 6 GB folder had not finished after 17 minutes; ripgrep took a second. They run in the gateway's process, not in a systemd scope of their own. The tool list changes, so each bot's prompt cache is written once after the upgrade.
+- **Pi's notice after a Claude subscription login.** `pots init`, `pots login` and the login page show what the pi command line says when Claude is signed in with a subscription: a third-party program draws from extra usage, billed per token, not from the plan's limits. pi's setting `warnings.anthropicExtraUsage` turns it off in both.
+
+### Changed
+- **The network as pi sets it up.** The gateway, `pots init` and `pots login` now use a proxy from `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`, or from `httpProxy` in pi's settings, and pi's `httpIdleTimeoutMs`, and give each address of a host 2 seconds to connect, as pi does. Before, Node ignored the proxy variables, so on a network that needs a proxy the pi command line worked and Pots did not reach its model. Model requests, MCP servers over HTTP and the chat apps that use fetch go through the proxy; Slack's Socket Mode and Discord's gateway connection do not.
+- **Requests name Pots, not pi.** OpenRouter, NVIDIA NIM and OpenCode now see Pots (https://pots.sh) as the app; OpenRouter lists apps by this name. Subscription logins send no such name.
+
 ## 0.8.5 (2026-11-17)
 
 Teams channel replies could be dropped: two replies in different threads of a channel with the same message ID were taken as one, and the second was lost. This affects bots that use the Teams preview from 0.8.4; other channels are not changed.

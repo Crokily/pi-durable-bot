@@ -41,7 +41,7 @@ Grok Bot, OpenAI dots, Claude Duet, Claude Tag and Meta Muse are closed products
 | **Source code** | Open, MIT | Closed | Closed | Closed | Closed | Closed |
 | **Where it runs** | Your server, your VM, your office box | xAI's cloud | OpenAI's cloud | Anthropic's cloud | Anthropic's cloud | Meta's cloud |
 | **Model** | Any: your subscription login, 40+ providers, or a local model | Grok | OpenAI's | Claude | Claude | Meta's |
-| **Where you talk to it** | Slack, Discord, Telegram, and any channel with a [Chat SDK](https://chat-sdk.dev) adapter | Mac and iOS apps; Slack for team bots | ChatGPT, Slack, Teams | Its own app | Slack | Web, mobile app, WhatsApp |
+| **Where you talk to it** | Slack, Discord, Telegram, Microsoft Teams (preview), and any channel with a [Chat SDK](https://chat-sdk.dev) adapter | Mac and iOS apps; Slack for team bots | ChatGPT, Slack, Teams | Its own app | Slack | Web, mobile app, WhatsApp |
 | **Your data** | Stays on your machine, in each bot's folder | Sent to xAI | Sent to OpenAI | Sent to Anthropic | Sent to Anthropic | Sent to Meta |
 | **Custom work** | Anything. Change the code, add tools, connect your own systems | What the vendor allows | What the vendor allows | What the vendor allows | What the vendor allows | What the vendor allows |
 
@@ -49,7 +49,7 @@ Grok Bot, OpenAI dots, Claude Duet, Claude Tag and Meta Muse are closed products
 
 **Any model.** Log in once with a subscription you already pay for, use an API key from any of the 40+ providers [pi](https://github.com/earendil-works/pi) supports, point it at any OpenAI-compatible endpoint (vLLM, SGLang, a proxy), or run a local model with Ollama, LM Studio or llama.cpp. The bot uses pi's own model layer, so every model pi can use, the bot can use. With a local model for the agent and the judge, nothing leaves your machine. You are not locked to one model vendor.
 
-**Any channel.** The core speaks in five plain words: channel, place, thread, message, person. Platform details stay inside one adapter per platform. Slack, Discord and Telegram work today; Teams or email is one more adapter, not a rewrite. One bot can be in many channels and stays the same person everywhere.
+**Any channel.** The core speaks in five plain words: channel, place, thread, message, person. Platform details stay inside one adapter per platform. Slack, Discord and Telegram work today, and Microsoft Teams as a preview; email is one more adapter, not a rewrite. One bot can be in many channels and stays the same person everywhere.
 
 **Your business.** Give it your own tools, data and workflows. It can run several bots on one machine, each with its own name, persona, responsibilities and memory. A bot can even edit its own definition, or create a new bot.
 
@@ -64,7 +64,7 @@ Most AI bots are a command line with a chat bubble. You @ them, they answer, the
 | **What it remembers** | This thread, maybe | One long memory across every channel, kept on disk |
 | **How it works** | Calls the tools someone wired in | Writes and runs its own code on its own computer |
 | **What happens later** | Nothing | It sets its own reminders and comes back |
-| **After a crash** | Starts over, or sends twice | Picks up where it stopped. Never sends the same message twice (on Telegram it can, [see why](#status)) |
+| **After a crash** | Starts over, or sends twice | Picks up where it stopped. Never sends the same message twice (on Telegram and Teams it can, [see why](#status)) |
 
 ## What it does
 
@@ -112,7 +112,7 @@ When it speaks, it speaks like a teammate: in the right channel or thread, in it
 
 Some things do not fit in a chat message. For a plan, a report or a dashboard, the bot writes a web page and sends a link. It picks the best form for each piece of information (a chart, a calendar, a table to sort and search, a calculator), uses the width of a computer and one column on a phone, and looks at the page before it sends it. A page can ask, too: people choose, comment, fill in, approve or reject on it, and each answer wakes the bot at once.
 
-- **Buttons and forms in the chat.** On Slack and Discord the bot sends the platform's own buttons, menus and forms; on Telegram, inline buttons. A click wakes it within a second, and a form opens at once.
+- **Buttons and forms in the chat.** On Slack and Discord the bot sends the platform's own buttons, menus and forms; on Telegram, inline buttons; on Teams, Adaptive Cards. A click wakes it within a second, and a form opens at once.
 - **A password page for secrets.** When the bot needs an API key from you, it sends a one-time link to a page of Pots' own. You type the key there. It goes into a file in the secrets folder, never into the chat, the log or a trace.
 - **A desktop page for the steps only you can do.** When a sign-in, a CAPTCHA or an approval needs you, the bot sends a one-time link. On your phone or computer you see its whole screen, do the step, and press Done; the bot is woken with your note and carries on. On a phone the picture fills the screen, and the bot's desktop takes your phone's shape when its VNC server can change size; you type into a field that sends each character as you go. Pots signs in to the VNC server on the bot's computer itself, so its password stays there, and nothing shows before you press Start. While you have the screen, the bot's screen commands do not run.
 - **A login page for models.** When a model login expires, or you want another model or a judge, the bot sends a one-time link. On your phone or computer you sign in with your subscription (a device code or a copy code works from any device) or paste an API key, also TypeSafe's for Jev, as many as you need, then press Done. pi keeps the login on the bot's computer, for every bot there; the bot is told which provider and which models it can use now, never the login. When no bot can think, because its only login expired, `pots login --link` on that computer prints such a link.
@@ -266,6 +266,7 @@ flowchart LR
     S[Slack]
     D[Discord]
     TG[Telegram]
+    MT[Teams]
     T[Terminal]
   end
   subgraph Gateway[Gateway core, one per bot]
@@ -282,12 +283,14 @@ flowchart LR
   S --> I
   D --> I
   TG --> I
+  MT --> I
   T --> I
   K --> A
   A --> O
   O --> S
   O --> D
   O --> TG
+  O --> MT
   O --> T
 ```
 
@@ -323,6 +326,7 @@ pi-durable-bot runs every day as a teammate in a real workspace. What works toda
 - [x] Slack adapter (socket mode), with backfill after downtime
 - [x] Discord adapter (Gateway WebSocket), with backfill after downtime
 - [x] Telegram adapter (long polling). Telegram's Bot API cannot read history or look up a sent message, so the bot gets what it missed only within 24 hours, and a crash at the moment of a send can send it twice
+- [x] Microsoft Teams adapter, a preview (Socket Mode, or HTTP at the public address), with backfill of channels and group chats through Microsoft Graph. Tested with fakes and Microsoft 365 Agents Playground, not yet in a real organisation: the live socket, the permissions people grant, the backfill, files, admin policies and rate limits are untested. A crash at the moment of a send can send it twice, as on Telegram
 - [x] Mention, DM, judge and timer wakes, grouping, and steering
 - [x] Code mode on its own machine, `pots` command line
 - [x] Turning the page with notes, compaction as a fallback
@@ -339,7 +343,7 @@ pi-durable-bot runs every day as a teammate in a real workspace. What works toda
 - [x] MCP servers and code mode, through pi's own MCP support
 - [x] Pages, buttons, forms and a password page, with a public address that needs no setup
 - [x] A desktop page: a person takes over the bot's screen from a link, on a phone or a computer, and hands it back
-- [ ] More adapters: Teams, email
+- [ ] More adapters: email
 - [ ] `pots init` in a web page, for people who do not use a terminal
 
 ## Develop
@@ -374,6 +378,13 @@ npm run tla               # the TLA+ models of the inbox, outbox and waker (need
 - [pi](https://github.com/earendil-works/pi)'s model layer for logins, providers and local models
 - [Effect](https://effect.website) for the gateway core and the `pots` command line
 - [TypeSafe AI](https://typesafe.ai)'s Jev, one of the judges you can choose
+
+## Official accounts
+
+> [!WARNING]
+> **Heads up: Pots has no coin, token or airdrop, and never will.** Accounts impersonating Pots (such as @potsdotsh on X) are promoting a "$POTS" coin. It is not ours; please don't get scammed. Official accounts: [@PotsSh](https://x.com/PotsSh) and [@Crokily_](https://x.com/Crokily_).
+
+Sponsoring Colin on [GitHub Sponsors](https://github.com/sponsors/Crokily) is the only official way to support Pots.
 
 ## License
 

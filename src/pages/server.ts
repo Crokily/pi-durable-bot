@@ -9,6 +9,7 @@ import { contentType, openFile, pageFolder, pathSegments, type Resolved } from "
 import { LOGIN_COOKIE, LOGIN_MINUTES } from "./login.ts";
 import { renderLoginEnded, renderLoginPage } from "./login-page.ts";
 import { renderFailed, renderNotFound, renderSecretExpired, renderSecretForm, renderSecretSaved, renderSecretUsed, SECRET_PAGE_HEADERS } from "./secret-page.ts";
+import type { ChannelRequest, ChannelResponse } from "../core/channel.ts";
 import type { BotPages, OpenedLink } from "./store.ts";
 
 // The page server's routes, on 127.0.0.1 only; people reach it through the public address:
@@ -29,6 +30,8 @@ import type { BotPages, OpenedLink } from "./store.ts";
 //   POST /g/<token>/answer            {"question", "value"}: the answer to pi's open question
 //   POST /g/<token>/cancel            the sign-in that runs stops
 //   POST /g/<token>/done              the person is done: the link ends
+//   *    /channel/<bot>/<channel>     requests from a chat platform to a channel of a bot (Teams in HTTP mode); the
+//                                     channel checks them itself
 // Every response says Referrer-Policy: no-referrer and X-Content-Type-Options: nosniff. The bot's pages get no CSP; the
 // password page gets a sandbox of its own, and the desktop and login pages a CSP that lets them load and talk only to
 // this address.
@@ -45,6 +48,9 @@ const SECRET_PATH = new RegExp(`^/s/(${TOKEN})/?$`);
 const DESKTOP_PATH = new RegExp(`^/d/(${TOKEN})(/.*)?$`);
 const DESKTOP_SOCKET = new RegExp(`^/d/(${TOKEN})/ws$`);
 const LOGIN_PATH = new RegExp(`^/g/(${TOKEN})(/.*)?$`);
+const CHANNEL_PATH = /^\/channel\/[^/]+\/[^/]+$/;
+/** The largest request a chat platform sends a channel: an activity with a card is larger than a page's answers. */
+export const MAX_CHANNEL_BODY = 1024 * 1024;
 /** The largest message a desktop page's browser sends; noVNC's are small, a pasted text the largest. */
 const MAX_SOCKET_MESSAGE = 4 * 1024 * 1024;
 /** Tokens found, by the bot they belong to, so a request asks one bot's database, not all. */
@@ -57,6 +63,8 @@ export interface PageServerHost {
   quickTunnel(): boolean;
   /** The hosts people reach the page server at now (publicUrl's, the Quick Tunnel's), for the desktop page's origin checks. */
   publicHosts(): string[];
+  /** The handler a channel serves at this path, if one does. */
+  channelRoute(path: string): ((request: ChannelRequest) => Promise<ChannelResponse>) | undefined;
   /** The kit folder shipped with Pots. */
   readonly kitDir: string;
   readonly print: Print;
@@ -115,7 +123,23 @@ export class PageRequests {
     const login = LOGIN_PATH.exec(path);
     if (login) return this.#login(request, response, login[1]!, login[2], query);
     if (path.startsWith("/__pots/kit/")) return this.#kit(request, response, path.slice("/__pots/kit/".length));
+    if (CHANNEL_PATH.test(path)) return this.#channel(request, response, path);
     return text(response, 404, "Not found.");
+  }
+
+  /** A request from a chat platform to a channel that serves this path. The channel checks who sent it. */
+  async #channel(request: IncomingMessage, response: ServerResponse, path: string): Promise<void> {
+    const handler = this.#host.channelRoute(path);
+    if (!handler) return text(response, 404, "Not found.");
+    const body = await readBody(request, MAX_CHANNEL_BODY);
+    if (!body) return text(response, 413, "Too large.");
+    const answer = await handler({ method: request.method ?? "GET", headers: request.headers, body });
+    if (answer.body === undefined) {
+      response.writeHead(answer.status, { "cache-control": "no-store" });
+      response.end();
+      return;
+    }
+    json(response, answer.status, answer.body);
   }
 
   /** A WebSocket: only a desktop page's connection, of a started link, from the browser that started it. */
@@ -435,13 +459,13 @@ function answerProblem(value: unknown): string | undefined {
 }
 
 /** The request's body, or undefined when it is larger than MAX_BODY. */
-async function readBody(request: IncomingMessage): Promise<Buffer | undefined> {
-  if (Number(request.headers["content-length"] ?? 0) > MAX_BODY) return undefined;
+async function readBody(request: IncomingMessage, max = MAX_BODY): Promise<Buffer | undefined> {
+  if (Number(request.headers["content-length"] ?? 0) > max) return undefined;
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
     size += (chunk as Buffer).length;
-    if (size > MAX_BODY) return undefined;
+    if (size > max) return undefined;
     chunks.push(chunk as Buffer);
   }
   return Buffer.concat(chunks);

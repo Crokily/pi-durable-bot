@@ -576,3 +576,20 @@ describe("stop", () => {
       }),
     ));
 });
+
+describe("the log", () => {
+  it.effect("an edit older than the one logged (a backfill that read the message before a later edit) changes nothing", () =>
+    withCore({}, () =>
+      Effect.gen(function* () {
+        const log = yield* MessageLog;
+        const sent = message("general", "first", { at: 1_000 });
+        yield* logHappening(sent);
+        yield* logHappening({ ...sent, kind: "edit", at: 3_000, text: "third" });
+        const [stale] = yield* log.apply("mem", "event-stale-edit", [{ ...sent, kind: "edit", at: 2_000, text: "second" }]);
+        assert.strictEqual(stale, undefined);
+        assert.deepStrictEqual(yield* log.message(sent.message!).pipe(Effect.map((row) => [row?.text, row?.edited_at])), ["third", 3_000]);
+        yield* logHappening({ ...sent, kind: "edit", at: 3_000, text: "third, again" });
+        assert.strictEqual((yield* log.message(sent.message!))?.text, "third, again");
+      }),
+    ));
+});

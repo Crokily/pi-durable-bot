@@ -169,8 +169,9 @@ export function coworker(request: FakeRequest): FakeReply {
   }
   const last = request.messages.at(-1);
   if (last?.role !== "user") return { text: "done" };
-  // The first address of a place in the wake, for example "test:#general".
-  const place = /\b[a-z0-9][a-z0-9-]*:#[\w-]+/.exec(last.content)?.[0];
+  // The first address of a place in the wake, for example "test:#general", or "teams:#19:abc@thread.v2" with Teams' ":",
+  // "@" and "." inside it, but not at its end.
+  const place = /\b[a-z0-9][a-z0-9-]*:#[\w-]+(?:[:@.][\w-]+)*/.exec(last.content)?.[0];
   if (!place) return { text: "nothing to do" };
   return { call: { name: "send", arguments: { to: place, text: `ack: ${wakeLine(last.content)}` } } };
 }

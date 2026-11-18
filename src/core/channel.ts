@@ -175,5 +175,31 @@ export interface ChannelEnv {
   readonly botDir: string;
   /** The bot's name, for adapters that need one. */
   readonly botName: string;
+  /** The page server, for channels whose platform sends them requests. Undefined where there is none. */
+  readonly http?: ChannelHttp;
   log(message: string, data?: Record<string, unknown>): void;
+}
+
+/** A request from a platform, as the page server read it. */
+export interface ChannelRequest {
+  readonly method: string;
+  readonly headers: Readonly<Record<string, string | string[] | undefined>>;
+  readonly body: Buffer;
+}
+
+/** The answer to a ChannelRequest: a JSON body, or none. */
+export interface ChannelResponse {
+  readonly status: number;
+  readonly body?: unknown;
+}
+
+/**
+ * The page server, as a channel uses it: one path of its own, which people's platforms reach at the page server's
+ * public address.
+ */
+export interface ChannelHttp {
+  /** Serve requests to this channel's path with handler, until close. Gives the path, such as /channel/<bot>/<channel>. */
+  serve(handler: (request: ChannelRequest) => Promise<ChannelResponse>): { readonly path: string; close(): void };
+  /** settings.json's publicUrl, if one is set. */
+  publicUrl(): string | undefined;
 }

@@ -1,6 +1,6 @@
 {
   "name": "pi-durable-bot",
-  "version": "0.8.3",
+  "version": "0.8.5",
   "description": "Open-source AI coworkers that read every channel, decide what matters, and act on their own computer. Self-hosted, any model.",
   "license": "MIT AND MPL-2.0",
   "type": "module",
@@ -57,6 +57,7 @@
     "@chat-adapter/discord": "4.44.0",
     "@chat-adapter/slack": "4.44.0",
     "@chat-adapter/state-memory": "4.44.0",
+    "@chat-adapter/teams": "4.44.0",
     "@chat-adapter/telegram": "4.44.0",
     "@earendil-works/chord": "1.5.2",
     "@earendil-works/pi-ai": "1.5.2",
@@ -68,10 +69,12 @@
     "@earendil-works/pi-telemetry": "1.5.2",
     "@effect/platform-node": "4.1.4",
     "@effect/platform-node-shared": "4.1.4",
+    "@microsoft/teams.api": "2.2.1",
+    "@microsoft/teams.apps": "2.2.1",
     "chat": "4.44.0",
     "discord.js": "14.28.1",
     "effect": "4.1.4",
-    "ws": "8.22.2"
+    "ws": "8.23.0"
   },
   "devDependencies": {
     "@effect/vitest": "4.1.4",

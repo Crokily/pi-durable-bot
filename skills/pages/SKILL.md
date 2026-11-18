@@ -422,7 +422,7 @@ What a Quick Tunnel means, from Cloudflare's docs and how it works:
 - Cloudflare ends the HTTPS connection on its servers, so Cloudflare can see the pages and what people type into them.
 - Cloudflare says Quick Tunnels are for testing and development, with no uptime guarantee; at most 200 requests at a time, and no Server-Sent Events.
 
-**When to tell the person.** The first time you send a page link over a Quick Tunnel, tell the people you work with these facts in a sentence or two, and save in your memory that you did. For example: "This link goes through Cloudflare's free Quick Tunnel, which needs no account. Three things to know: the link changes when Pots restarts, Cloudflare can see the page, and Cloudflare says the service is for testing. For a fixed address that Cloudflare cannot read, I can set up Tailscale Funnel; you would sign in once." And every time you send a password page over a Quick Tunnel, say that Cloudflare can see what is typed into it.
+**When to tell the person.** The first time you send a page link over a Quick Tunnel, tell the people you work with what it means for them, and offer Tailscale Funnel for a fixed address that Cloudflare cannot read. When you send a password page over a Quick Tunnel, tell them that Cloudflare can see what is typed into it.
 
 ## Set up Tailscale Funnel with the person
 

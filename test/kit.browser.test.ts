@@ -4,14 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type Chrome, chromePath, kitPage, startChrome } from "./support/chrome.ts";
+import { type Chrome, chromeEnv, chromePath, kitPage, startChrome } from "./support/chrome.ts";
 
 // The page kit's moving parts (kit/pots-ui.js) and its layout (kit/pots.css) in headless Chrome, and the pages skill's
 // screenshot script. Skipped where no Chrome or Chromium is installed.
 
 const path = chromePath();
 
-describe.skipIf(!path)("the page helper in a browser", () => {
+describe.skipIf(!path)("the page helper in a browser", { timeout: 15_000 }, () => {
   let chrome: Chrome;
   beforeAll(async () => {
     chrome = await startChrome(path!);
@@ -362,7 +362,7 @@ describe.skipIf(!path)("the pages skill's screenshot script", () => {
     const png = join(out, "phone.png");
     // Not spawnSync: the page comes from this process.
     const stdout = await new Promise<string>((resolve, reject) =>
-      execFile(process.execPath, [fileURLToPath(new URL("../skills/pages/shot.mjs", import.meta.url)), url, "390", png, "dark"], { env: { ...process.env, CHROME: path }, timeout: 30_000 }, (error, out, err) =>
+      execFile(process.execPath, [fileURLToPath(new URL("../skills/pages/shot.mjs", import.meta.url)), url, "390", png, "dark"], { env: { ...chromeEnv(), CHROME: path }, timeout: 30_000 }, (error, out, err) =>
         error ? reject(new Error(`${error.message}\n${err}`)) : resolve(out),
       ),
     );
@@ -376,7 +376,7 @@ describe.skipIf(!path)("the pages skill's screenshot script", () => {
     const url = chrome.serve(kitPage(`<div style="height: 26600px"></div>`));
     const png = join(out, "long.png");
     const stdout = await new Promise<string>((resolve, reject) =>
-      execFile(process.execPath, [fileURLToPath(new URL("../skills/pages/shot.mjs", import.meta.url)), url, "390", png], { env: { ...process.env, CHROME: path }, timeout: 30_000 }, (error, out, err) =>
+      execFile(process.execPath, [fileURLToPath(new URL("../skills/pages/shot.mjs", import.meta.url)), url, "390", png], { env: { ...chromeEnv(), CHROME: path }, timeout: 30_000 }, (error, out, err) =>
         error ? reject(new Error(`${error.message}\n${err}`)) : resolve(out),
       ),
     );

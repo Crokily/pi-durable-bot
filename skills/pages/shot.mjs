@@ -23,16 +23,18 @@ if (!chrome) {
   process.exit(2);
 }
 const profile = mkdtempSync(join(tmpdir(), "shot-"));
-const browser = spawn(chrome, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--no-default-browser-check", "--hide-scrollbars", "about:blank"], { stdio: "ignore" });
+// --use-mock-keychain: Chrome on macOS does not wait for the keychain, which can hold back the page for good.
+const browser = spawn(chrome, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--no-default-browser-check", "--hide-scrollbars", "--use-mock-keychain", "about:blank"], { stdio: "ignore" });
 let status = 1;
 let port;
 try {
+  // A file that is empty or not yet complete is read again after a wait.
   for (let i = 0; i < 100 && !port; i++) {
     try {
-      port = readFileSync(join(profile, "DevToolsActivePort"), "utf8").split("\n")[0];
-    } catch {
-      await sleep(100);
-    }
+      const [p, path] = readFileSync(join(profile, "DevToolsActivePort"), "utf8").split("\n");
+      if (path) port = p;
+    } catch {}
+    if (!port) await sleep(100);
   }
   const page = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find((t) => t.type === "page");
   const ws = new WebSocket(page.webSocketDebuggerUrl);

@@ -233,8 +233,8 @@ describe("the pages skill", () => {
   });
 
   it("has an example display page that loads the kit, keeps its script in a file and uses only what the kit has", () => {
-    const html = /```html\n([\s\S]*?)```/.exec(display)![1]!;
-    const script = /```js\n([\s\S]*?)```/.exec(display)![1]!;
+    const html = /```html\r?\n([\s\S]*?)```/.exec(display)![1]!;
+    const script = /```js\r?\n([\s\S]*?)```/.exec(display)![1]!;
     expect(html).toContain('<link rel="stylesheet" href="../../__pots/kit/pots.css">');
     expect(html).toContain('<script src="../../__pots/kit/pots-ui.js" defer></script>');
     expect(html).toContain('<script src="cost.js" defer></script>');

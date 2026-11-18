@@ -398,8 +398,8 @@ describe("pages", { timeout: 120_000 }, () => {
     }
 
     const skill = readFileSync(join(import.meta.dirname, "..", "skills", "pages", "SKILL.md"), "utf8");
-    const [display, answer] = [...skill.matchAll(/```html\n([\s\S]*?)```/g)].map((match) => match[1]!);
-    const script = /```js\n([\s\S]*?)```/.exec(skill)![1]!;
+    const [display, answer] = [...skill.matchAll(/```html\r?\n([\s\S]*?)```/g)].map((match) => match[1]!);
+    const script = /```js\r?\n([\s\S]*?)```/.exec(skill)![1]!;
     writePage("offsite", { "index.html": display!, "cost.js": script });
     writePage("keep/deploy", { "index.html": answer! });
     for (const name of ["offsite", "keep/deploy"]) {

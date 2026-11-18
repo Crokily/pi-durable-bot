@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer, type Server } from "node:http";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
@@ -12,6 +12,17 @@ import { setTimeout as sleep } from "node:timers/promises";
 const NAMES = ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"];
 const MAC = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const WINDOWS = ["C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe", "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe"];
+
+/**
+ * The environment for Chrome, and for the screenshot script that starts it. On Windows, Chrome with the tests' empty
+ * home folder as USERPROFILE runs but never opens its DevTools port, so it gets the user's own; it keeps its profile in
+ * --user-data-dir all the same.
+ */
+export function chromeEnv(): NodeJS.ProcessEnv {
+  if (process.platform !== "win32") return process.env;
+  const home = userInfo().homedir;
+  return { ...process.env, HOME: home, USERPROFILE: home };
+}
 
 export function chromePath(): string | undefined {
   if (process.env.CHROME) return process.env.CHROME;
@@ -67,15 +78,16 @@ export async function startChrome(path: string): Promise<Chrome> {
   };
 
   const profile = mkdtempSync(join(tmpdir(), "pots-chrome-"));
-  const browser: ChildProcess = spawn(path, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--no-default-browser-check", "--hide-scrollbars", "about:blank"], { stdio: "ignore" });
+  // --use-mock-keychain: with the tests' empty home folder, Chrome on macOS waits for the keychain and never loads a page.
+  const browser: ChildProcess = spawn(path, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--no-default-browser-check", "--hide-scrollbars", "--use-mock-keychain", "about:blank"], { stdio: "ignore", env: chromeEnv() });
   let devtools: string | undefined;
+  // A file that is empty or not yet complete is read again after a wait.
   for (let i = 0; i < 150 && !devtools; i++) {
     try {
       const [p, wsPath] = readFileSync(join(profile, "DevToolsActivePort"), "utf8").split("\n");
       if (wsPath) devtools = `ws://127.0.0.1:${p}${wsPath}`;
-    } catch {
-      await sleep(100);
-    }
+    } catch {}
+    if (!devtools) await sleep(100);
   }
   if (!devtools) throw new Error("Chrome did not start");
   const ws = new WebSocket(devtools);

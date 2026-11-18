@@ -2,6 +2,7 @@ import type { AnyModel, Api, Model, Models, Provider } from "@earendil-works/pi-
 import { type LazyStreamObserver, lazyStream } from "@earendil-works/pi-ai/api/lazy";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { TelemetrySpan } from "@earendil-works/pi-telemetry";
+import { withCodexImages } from "./codex-images.ts";
 
 /**
  * A module of pi-coding-agent that its package does not export. Only for what is not in its public entry; check each
@@ -24,7 +25,24 @@ export async function openModels(): Promise<Models> {
   // models through /v1/systemone, chat models through next-token probabilities).
   const llama: { createLlamaProvider(): { provider: Provider } } = await import(piModule("./extensions/llama/provider.js"));
   models.registerNativeProvider(llama.createLlamaProvider().provider);
+  const codex = await piCodexProvider();
+  if (codex) models.registerNativeProvider(withCodexImages(codex));
   return observeRequests(models);
+}
+
+/**
+ * pi's built-in openai-codex provider, made as ModelRuntime.create makes it: with the pi.dev catalog over the shipped
+ * one. Undefined when pi's modules have moved; the bot then works without ChatGPT images.
+ */
+export async function piCodexProvider(): Promise<Provider | undefined> {
+  try {
+    const { openaiCodexProvider } = await import("@earendil-works/pi-ai/providers/openai-codex");
+    const { getBuiltinModelDataGeneratedAt } = await import("@earendil-works/pi-ai/providers/all");
+    const catalog: { withRemoteCatalog(provider: Provider, catalogBaseUrl?: string, localGeneratedAt?: number): Provider } = await import(piModule("./core/remote-catalog-provider.js"));
+    return catalog.withRemoteCatalog(openaiCodexProvider(), undefined, getBuiltinModelDataGeneratedAt());
+  } catch {
+    return undefined;
+  }
 }
 
 type Observe = (model: Parameters<Models["streamSimple"]>[0], options: { telemetry?: TelemetrySpan; reasoning?: unknown } | undefined, poll: boolean) => LazyStreamObserver;

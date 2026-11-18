@@ -75,9 +75,9 @@ function script(request: FakeRequest): FakeReply {
 /** A command that hangs after one line of output; the process that hangs writes its ID to hang.pid in the workspace. */
 const HANG = "sleep 6131 & echo $! > hang.pid; echo probing 5901; wait";
 
-async function setUp(options: { moreModels?: boolean; definition?: Record<string, unknown> } = {}): Promise<void> {
+async function setUp(options: { moreModels?: boolean; definition?: Record<string, unknown>; promptCacheSeconds?: number } = {}): Promise<void> {
   model = await startFakeModel(script);
-  gateway = new TestGateway({ model, moreModels: options.moreModels ?? false });
+  gateway = new TestGateway({ model, moreModels: options.moreModels ?? false, ...(options.promptCacheSeconds ? { promptCacheSeconds: options.promptCacheSeconds } : {}) });
   if (options.definition) {
     const file = join(gateway.botDir, "bot.json");
     writeFileSync(file, `${JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), ...options.definition }, null, 2)}\n`);
@@ -120,7 +120,7 @@ describe("children", { timeout: 90_000 }, () => {
     const child = model.requests.find(isChild)!;
     expect(child.messages.map((message) => message.role)).toEqual(["user"]);
     expect(child.messages[0]!.content).toBe("[brief from the main agent]\nfind the answer");
-    expect(child.tools).toEqual(["read", "write", "edit", "bash", "screen", "codemode"]);
+    expect(child.tools).toEqual(["read", "write", "edit", "bash", "grep", "find", "screen", "codemode"]);
     expect(child.system).not.toMatch(/pots send|pots react|pots call|ask-secret/);
     expect(gateway.pots("children")).toMatch(/^c1 "research": ended .* ago, waits for a message, for test:#general, thinking xhigh$/m);
 
@@ -242,6 +242,21 @@ describe("children", { timeout: 90_000 }, () => {
     expect(reports()).toHaveLength(0);
     expect(gateway.query<{ id: string }>("SELECT id FROM bot_wakes WHERE reason = 'child'")).toHaveLength(0);
     expect(wakeLine(gateway.pots("children"))).toMatch(/^c1 "research": stopped/);
+  });
+
+  it("has its prompt cache warmed while it works, as pi warms its session, and no more once it is stopped", async () => {
+    await setUp({ promptCacheSeconds: 12 });
+    gateway.say("general", "alice", `@${ME} please research slowly`);
+    // The child's request asked for its long command; the command runs, and the request is sent again every 2 seconds.
+    const warms = () => model.requests.filter((request) => isChild(request) && request.maxTokens === 1);
+    await waitFor(() => warms().length >= 2, { timeout: 20_000, what: "two warms of the child" });
+    const { maxTokens: _, ...first } = model.requests.find((request) => isChild(request) && request.maxTokens !== 1)!;
+    for (const { maxTokens: _cap, ...warm } of warms()) expect(warm).toEqual(first);
+    gateway.say("general", "alice", `@${ME} stop the research`);
+    await waitFor(() => /^c1 "research": stopped/m.test(gateway.pots("children")), { what: "the stop" });
+    const stopped = warms().length;
+    await pause(5_000);
+    expect(warms()).toHaveLength(stopped);
   });
 
   it("shows what a child that hangs in a command does, and interrupt ends only the command: the child takes the message that waited", async () => {

@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { JsonValue } from "@earendil-works/chord/json";
 import { BACKGROUND_CONTEXT, type Context, withAbortSignal, withTelemetry } from "@earendil-works/chord/context";
-import type { Message, Models } from "@earendil-works/pi-ai";
+import type { ImageContent, Message, Models, TextContent } from "@earendil-works/pi-ai";
 import { calculateContextTokens, estimateMessageTokens } from "@earendil-works/pi-ai/utils/estimate";
 import {
   configure,
@@ -56,11 +56,36 @@ import {
 import type { Codemode } from "./codemode.ts";
 import type { Mcp } from "./mcp.ts";
 import { deleteLeftForks, lastAnswer, type MemoryHost, MemoryPasses, readPaths, withAgeNote } from "./memory.ts";
-import { modelRef, requireModel } from "./models.ts";
+import { modelRef, POTS_IDENTITY, requireModel } from "./models.ts";
 import type { CommandScopes } from "./scopes.ts";
 import { NO_SCREEN, renderBusy, type Screen, ScreenLeases } from "./screen.ts";
+import { CacheWarming, type CacheWarmingMode } from "./warming.ts";
 
 const context = BACKGROUND_CONTEXT;
+
+/** A tool of the pi CLI, as its public entry gives it. */
+interface PiCliTool {
+  readonly name: string;
+  readonly description: string;
+  readonly parameters: object;
+  execute(toolCallId: string, params: never, signal: AbortSignal | undefined, onUpdate: undefined, context: never): Promise<{ content: (TextContent | ImageContent)[] }>;
+}
+
+/**
+ * pi's grep or find as a pi-durable tool. They search with ripgrep and fd, which pi downloads to ~/.pi/agent/bin when
+ * the computer has none, skip what .gitignore lists, and cap their output. They only read, so a call cut off by a crash
+ * runs again. Unlike bash, they run in the gateway's process, not in a systemd scope of their own.
+ */
+function searchTool(tool: PiCliTool): ToolRegistration {
+  return defineTool({
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.parameters,
+    replay: "safe",
+    // Without pi's extension context, they search from the folder they were made with.
+    execute: async (args, api, call) => ({ output: (await tool.execute(String(api.callId), args as never, call.abortSignal, undefined, undefined as never)).content }),
+  });
+}
 
 /** A stopped child, with what its stop must end. */
 interface Stop {
@@ -104,6 +129,8 @@ export interface AgentOptions {
   database: Database;
   /** pi's model layer, from openModels(). */
   models: Models;
+  /** pi's setting cacheWarming, read at each use: the prompt cache warming of the main agent and its children. Without it, none. */
+  cacheWarming?: () => CacheWarmingMode;
   /** "provider/modelId". */
   model: string;
   thinking: Thinking;
@@ -217,10 +244,10 @@ const RESERVE_TOKENS = 32_768;
 let images: ReturnType<typeof createNodePhotonImages> | undefined;
 
 /**
- * The bot's agent: one long-lived pi-durable conversation (the root). Tools: read, write, edit, bash, screen (bash with
- * the screen's environment and a lease on the screen), the channel actions send, react and call, task, and codemode
- * (scripts that call the other tools and the MCP servers' tools). Its children have read, write, edit, bash, screen and
- * codemode. Everything else the agents do with code.
+ * The bot's agent: one long-lived pi-durable conversation (the root). Tools: read, write, edit, bash, grep, find, screen
+ * (bash with the screen's environment and a lease on the screen), the channel actions send, react and call, task, and
+ * codemode (scripts that call the other tools and the MCP servers' tools). Its children have read, write, edit, bash,
+ * grep, find, screen and codemode. Everything else the agents do with code.
  */
 export class Agent {
   readonly #options: AgentOptions;
@@ -234,6 +261,7 @@ export class Agent {
   #children: readonly ChildInfo[] = [];
   #disposeChildren?: () => void;
   #memory: MemoryPasses | undefined;
+  #warming: CacheWarming | undefined;
   #closing = false;
   /** Stops the last process did not finish; resume() finishes them. */
   #unfinishedStops: Stop[] = [];
@@ -451,7 +479,21 @@ export class Agent {
       tools: [screenTool],
       sections: options.children.sections.map((part) => section(part.name, childRender(part), { tag: false })),
     });
+    // pi's prompt cache warming, for the main conversation and the children that are not stopped; not for memory forks.
+    const warmable = (conversation: string) =>
+      !(agent && agent.#closing) && (conversation === String(ROOT_CONVERSATION_ID) || children.some((each) => each.conversationId === conversation && each.stoppedAt === undefined));
+    const warming = options.cacheWarming ? await CacheWarming.open(models, options.cacheWarming, warmable) : undefined;
+    // pi-durable hands a hook the task's runtime, whose abort signal is the request's: so the request is known as the
+    // conversation's when it goes out.
+    const warmingHooks = hook(GenerationTask, {
+      beforeRequest: (_request, api) => {
+        warming?.request(String(api.conversationId), (api as { signal?: AbortSignal }).signal);
+        return undefined;
+      },
+      afterResponse: (message, api) => warming?.response(String(api.conversationId), message),
+    });
     const read = createReadTool({ images: await (images ??= createNodePhotonImages()) });
+    const { createGrepToolDefinition, createFindToolDefinition } = await import("@earendil-works/pi-coding-agent");
     const memoryFolders = () => (options.memory?.enabled() ? options.memory.folders : undefined);
     const coding = defineExtension({
       name: "coding-tools",
@@ -461,7 +503,10 @@ export class Agent {
         createWriteTool(),
         createEditTool(),
         timed(createBashTool({ prepare: environment() })),
+        searchTool(createGrepToolDefinition(options.workspace)),
+        searchTool(createFindToolDefinition(options.workspace)),
       ],
+      hooks: warming ? [warmingHooks] : [],
     });
     // pi's code mode, for the main agent and its children. As in pi, a script waits for the MCP servers it names, or for
     // all of them when it looks tools up, so it sees their tools. A server that connected meanwhile came after this
@@ -518,7 +563,9 @@ export class Agent {
     harness = await Harness.open(
       storage,
       {
-        models,
+        models: warming ? warming.wrap(models) : models,
+        // pi-durable names pi to providers unless told otherwise.
+        identity: POTS_IDENTITY,
         registry,
         settings: {
           // The main agent's; a child selects its own.
@@ -550,6 +597,7 @@ export class Agent {
     const root = await harness.root(context, { agent: { model, thinkingLevel: options.thinking } });
     await root.configure({ model, thinkingLevel: options.thinking, cwd: options.workspace }, context);
     agent = new Agent(options, harness, root, outputs);
+    agent.#warming = warming;
     if (memory) {
       memory.attach(harness, root);
       memory.beforePass = () => agent?.crashTests.beforeMemoryPass?.();
@@ -806,6 +854,7 @@ export class Agent {
       await this.#harness.abortTask(task, context);
       await this.#harness.waitForTask(task, context);
     }
+    this.#warming?.cancel(String(stop.conversationId));
     await (await this.#harness.conversation(stop.conversationId, context))?.abort(context);
     await this.#withdrawReports(stop);
     this.#releaseScreen(String(stop.conversationId));
@@ -837,6 +886,7 @@ export class Agent {
 
   async close(): Promise<void> {
     this.#closing = true;
+    this.#warming?.cancel();
     this.#disposeView?.();
     this.#disposeChildren?.();
     // The pass that runs ends when pi-durable closes; its fork is deleted at the next start.
@@ -910,6 +960,7 @@ export class Agent {
 
   /** Start a new context whose first message is the handoff. While busy, the current run ends at the next boundary. */
   async turnPage(handoff: string): Promise<void> {
+    this.#warming?.cancel(String(ROOT_CONVERSATION_ID));
     await this.#root.reset(handoff, context);
   }
 
@@ -940,6 +991,8 @@ export class Agent {
   async configure(model: string, thinking: Thinking): Promise<void> {
     await requireChatModel(this.#models, model);
     this.#model = modelRef(model);
+    // The next requests have another model or thinking level: the last ones are not repeated.
+    this.#warming?.cancel();
     await this.#root.configure({ model: this.#model, thinkingLevel: thinking }, context);
     await this.#configureChildren();
   }

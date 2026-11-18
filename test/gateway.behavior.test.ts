@@ -479,6 +479,8 @@ describe("when the model cannot be used", { timeout: 60_000 }, () => {
     gateway.say("general", "bob", `@${ME} hello?`);
     await waitFor(() => gateway.sent().length === 2, { what: "both notices" });
     expect(gateway.sent().map((record) => record.place).sort()).toEqual(["dm-alice", "general"]);
+    // The output can come after the notice it led to, as on Windows.
+    await waitFor(() => gateway.output.filter((line) => line.message === "agent run failed").length === 2, { what: "both failed runs in the output" });
 
     gateway.output.splice(0, gateway.output.length, ...gateway.output.filter((line) => line.message !== "agent run failed"));
   });

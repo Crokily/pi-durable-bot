@@ -155,6 +155,28 @@ describe("pi's prompt cache warming", { timeout: 90_000 }, () => {
     expect(warms()).toHaveLength(after);
   });
 
+  it("stops warming after a request fails, as pi does, and does not send the failed request again", async () => {
+    let down = false;
+    model = await startFakeModel((request) => (down ? { fail: { status: 401, message: "the login expired" } } : coworker(request)));
+    gateway = new TestGateway({ model, promptCacheSeconds: 12 });
+    await gateway.start();
+    const failedRuns = () => gateway.output.filter((line) => line.message === "agent run failed").length;
+    gateway.say("general", "alice", `@${ME} hello`);
+    await waitFor(() => gateway.sent().length === 1, { what: "the reply" });
+    await waitFor(() => warms().length >= 1, { timeout: 20_000, what: "a warm" });
+
+    // A failure reports no usage: pi's last answer then has no prompt size, and its warming stops.
+    down = true;
+    gateway.say("general", "alice", `@${ME} and now?`);
+    await waitFor(() => failedRuns() === 1, { what: "the failed run" });
+    const after = warms().length;
+    await new Promise((resolve) => setTimeout(resolve, 6_000));
+    expect(warms()).toHaveLength(after);
+
+    // The failure was the test's own.
+    gateway.output.splice(0, gateway.output.length, ...gateway.output.filter((line) => line.message !== "agent run failed"));
+  });
+
   it("warms nothing when pi's setting is off", async () => {
     model = await startFakeModel();
     gateway = new TestGateway({ model, promptCacheSeconds: 12 });

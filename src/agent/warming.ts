@@ -22,7 +22,7 @@ type CacheWarmerClass = new (models: Models, session: WarmerSession, getMode: ()
 
 interface Warmed {
   warmer: PiCacheWarmer;
-  /** Of the conversation's last answer. */
+  /** Of the conversation's last answer, also a failed one. */
   usage?: Usage;
 }
 
@@ -101,7 +101,9 @@ export class CacheWarming {
   response(conversation: string, message: AssistantMessage): void {
     const warmed = this.#warmed.get(conversation);
     if (!warmed) return;
-    if (message.usage.input + message.usage.cacheRead + message.usage.cacheWrite > 0) warmed.usage = message.usage;
+    // As in pi's session, the last answer counts even when it failed: a failure reports no usage, so no prompt size, and
+    // pi then stops warming instead of sending the failed request again.
+    warmed.usage = message.usage;
     if (message.stopReason !== "toolUse") warmed.warmer.onAgentSettled();
   }
 

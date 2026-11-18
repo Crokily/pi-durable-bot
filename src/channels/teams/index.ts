@@ -876,7 +876,8 @@ export class TeamsChannel implements ChannelAdapter {
         messages.sort((a, b) => (Date.parse(a.createdDateTime ?? "") || 0) - (Date.parse(b.createdDateTime ?? "") || 0));
         for (const message of messages) {
           if (stopping.aborted) return;
-          await sink.receive(`history:${conversation}/${message.id}:${message.lastModifiedDateTime ?? ""}`, { source: "history", conversation, message, since } satisfies Raw);
+          const where: Where = { conversation, ...(message.replyToId ? { root: message.replyToId } : {}) };
+          await sink.receive(`history:${messageKey(where, message.id)}:${message.lastModifiedDateTime ?? ""}`, { source: "history", conversation, message, since } satisfies Raw);
           added++;
         }
         if (stopping.aborted) return;
@@ -1114,7 +1115,7 @@ export class TeamsChannel implements ChannelAdapter {
     const id = (result as { id?: unknown } | null)?.id;
     if (verb === "POST" && posted && typeof id === "string" && (body?.type === undefined || body.type === "message")) {
       const activity = { ...body, id, conversation: { id: posted }, ...(this.#botId ? { from: { id: this.#botId, name: this.#env.botName } } : {}), timestamp: new Date().toISOString() };
-      await this.#sink?.receive(`sent:${posted}/${id}`, { source: "sent", activity } satisfies Raw).catch((error: unknown) => this.#sink?.log("sent message not stored", { error: String(error) }));
+      await this.#sink?.receive(`sent:${messageKey(whereOf(activity)!, id)}`, { source: "sent", activity } satisfies Raw).catch((error: unknown) => this.#sink?.log("sent message not stored", { error: String(error) }));
     }
     return result;
   }
@@ -1210,10 +1211,20 @@ function whereOf(activity: Activity): Where | undefined {
  * activity without an ID is known by its content.
  */
 function activityEventId(activity: Activity): string {
-  const base = whereOf(activity)?.conversation ?? "";
+  const where = whereOf(activity) ?? { conversation: "" };
   const id = activity.id ?? createHash("sha256").update(JSON.stringify(activity)).digest("hex").slice(0, 32);
-  if (activity.type === "messageUpdate") return `${activity.channelData?.eventType ?? "messageUpdate"}:${base}/${id}:${activity.timestamp ?? ""}`;
-  return `${activity.type}${activity.name ? `/${activity.name}` : ""}:${base}/${id}`;
+  if (activity.type === "messageUpdate") return `${activity.channelData?.eventType ?? "messageUpdate"}:${messageKey(where, id)}:${activity.timestamp ?? ""}`;
+  return `${activity.type}${activity.name ? `/${activity.name}` : ""}:${messageKey(where, id)}`;
+}
+
+/**
+ * A message in an event ID: its conversation, its thread's root when it is a reply, and its ID, as in its address.
+ * Graph keeps a message ID unique only in its chat, channel or thread
+ * (https://learn.microsoft.com/graph/api/resources/chatmessage): replies in two threads of a channel can have the same.
+ * A root message, or one outside a thread, keeps the key it always had.
+ */
+function messageKey(where: Where, id: string): string {
+  return where.root && where.root !== id ? `${where.conversation}/${where.root}/${id}` : `${where.conversation}/${id}`;
 }
 
 /** A message ID of Teams is the time it was made, in Unix ms. */

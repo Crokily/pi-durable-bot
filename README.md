@@ -379,6 +379,13 @@ npm run tla               # the TLA+ models of the inbox, outbox and waker (need
 - [Effect](https://effect.website) for the gateway core and the `pots` command line
 - [TypeSafe AI](https://typesafe.ai)'s Jev, one of the judges you can choose
 
+## Official accounts
+
+> [!WARNING]
+> **Heads up: Pots has no coin, token or airdrop, and never will.** Accounts impersonating Pots (such as @potsdotsh on X) are promoting a "$POTS" coin. It is not ours; please don't get scammed. Official accounts: [@PotsSh](https://x.com/PotsSh) and [@Crokily_](https://x.com/Crokily_).
+
+Sponsoring Colin on [GitHub Sponsors](https://github.com/sponsors/Crokily) is the only official way to support Pots.
+
 ## License
 
 MIT. The demo video, music, sky images and logo in [`docs/media`](docs/media) were made for this project and use the same license.

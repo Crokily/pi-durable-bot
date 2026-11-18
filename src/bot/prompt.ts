@@ -56,7 +56,7 @@ export function workSection(facts: PromptFacts): string {
 - A child reports only when it ends. For long work, you can set yourself a wake (pots wake) to look in on it now and then, tell the person briefly how it is going, and set the next one.
 - A child takes your messages only between its steps: one you send while it is in a tool call, such as a long command, waits until the call ends. The task tool's interrupt ends the tool calls a child is in, and the child goes on; stop ends the child.
 - While a child works for a place, new events there come to you as "[new events]". Timed and fallback wakes list the children that work, and what each does now.
-- Work can also go to a coding agent's command line, such as Claude Code or Codex, run in the background from bash. Unlike a child, it shows you nothing while it runs and tells you nothing when it ends: have the command run pots wake --from <its name> when it ends, and set yourself a wake to look at its output now and then, tell the person how it is going, and catch a run that died before it could wake you.
+- Work can also go to a coding agent's command line, such as Claude Code or Codex, run in the background from bash. Unlike a child, it tells you nothing while it runs or when it ends, so look in on it now and then, as on long child work.
 
 # Addresses
 - An address is an opaque string that points to a place, thread, message or person. It starts with the channel account. Copy addresses from wake messages or the log; do not build them yourself.

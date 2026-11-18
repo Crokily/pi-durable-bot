@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { ImagesContext, Models } from "@earendil-works/pi-ai";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CODEX_IMAGE_MODEL, withCodexImages } from "../src/agent/codex-images.ts";
+import { CODEX_IMAGE_MODEL, generateCodexImages, withCodexImages } from "../src/agent/codex-images.ts";
 import { openModels, piCodexProvider } from "../src/agent/models.ts";
 
 // Images with the ChatGPT login signed in to pi (src/agent/codex-images.ts): a login in pi's auth.json, the bot's
@@ -80,6 +80,14 @@ describe("images with the ChatGPT login", () => {
     expect(result.stopReason).toBe("stop");
     expect(requests[0]!.url).toBe("https://chatgpt.com/backend-api/codex/images/edits");
     expect(requests[0]!.body.images).toEqual([{ image_url: `data:image/png;base64,${PNG}` }]);
+  });
+
+  it("takes the base URLs pi takes for Codex: ending in /backend-api, /codex or /codex/responses", async () => {
+    for (const baseUrl of ["https://chatgpt.com/backend-api/", "https://chatgpt.com/backend-api/codex", "https://chatgpt.com/backend-api/codex/responses/"]) {
+      const result = await generateCodexImages({ ...CODEX_IMAGE_MODEL, baseUrl }, { input: [{ type: "text", text: "A red fox" }] }, { apiKey: TOKEN });
+      expect(result.stopReason).toBe("stop");
+    }
+    expect(requests.map((request) => request.url)).toEqual(Array(3).fill("https://chatgpt.com/backend-api/codex/images/generations"));
   });
 
   it("gives ChatGPT's refusal as the result's error", async () => {

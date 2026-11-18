@@ -60,7 +60,7 @@ export async function generateCodexImages(model: ImageModel<ImageApi>, context: 
     headers.set("content-type", "application/json");
     headers.set("accept", "application/json");
     const signals = [options?.signal, options?.timeoutMs === undefined ? undefined : AbortSignal.timeout(options.timeoutMs)].filter((signal) => signal !== undefined);
-    const response = await (options?.fetch ?? fetch)(`${model.baseUrl.replace(/\/+$/, "")}/codex/images/${images.length > 0 ? "edits" : "generations"}`, {
+    const response = await (options?.fetch ?? fetch)(`${codexRoot(model.baseUrl)}/images/${images.length > 0 ? "edits" : "generations"}`, {
       method: "POST",
       headers,
       body: JSON.stringify(body),
@@ -80,6 +80,12 @@ export async function generateCodexImages(model: ImageModel<ImageApi>, context: 
     result.errorMessage = error instanceof Error ? error.message : String(error);
     return result;
   }
+}
+
+/** The Codex root of a base URL, which pi takes ending in /backend-api, /codex or /codex/responses (its resolveCodexUrl). */
+function codexRoot(baseUrl: string): string {
+  const url = baseUrl.replace(/\/+$/, "").replace(/\/responses$/, "");
+  return url.endsWith("/codex") ? url : `${url}/codex`;
 }
 
 /** The ChatGPT account of a login, which the Codex endpoints need with its token. */

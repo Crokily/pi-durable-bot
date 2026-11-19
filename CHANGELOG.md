@@ -2,7 +2,9 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
-## Unreleased
+## 0.8.7 (2026-11-19)
+
+A bot can make and edit images with the ChatGPT subscription signed in to pi, as the Codex CLI does, without an OpenRouter key.
 
 ### Added
 - **Images with the ChatGPT subscription.** With ChatGPT signed in to pi (`openai-codex`), a bot's `codemode` scripts make and edit images with `models.generateImages()`: `models.getAvailableOfType("image")` lists `openai-codex/gpt-image-2`, and the request goes to the endpoint the Codex CLI's own image tool uses, on the subscription's Codex usage. Before, the image models pi knows needed an OpenRouter key. To edit, give up to 5 images with the prompt. pi keeps the login and refreshes it; Pots stores no token. ChatGPT decides which accounts may make images: when it answers 403, the Codex CLI's image tool is refused too.

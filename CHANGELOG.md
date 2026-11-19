@@ -2,6 +2,11 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
+## Unreleased
+
+### Added
+- **Images with the ChatGPT subscription.** With ChatGPT signed in to pi (`openai-codex`), a bot's `codemode` scripts make and edit images with `models.generateImages()`: `models.getAvailableOfType("image")` lists `openai-codex/gpt-image-2`, and the request goes to the endpoint the Codex CLI's own image tool uses, on the subscription's Codex usage. Before, the image models pi knows needed an OpenRouter key. To edit, give up to 5 images with the prompt. pi keeps the login and refreshes it; Pots stores no token. ChatGPT decides which accounts may make images: when it answers 403, the Codex CLI's image tool is refused too.
+
 ## 0.8.6 (2026-11-19)
 
 Pages get information across better: the bot picks the best form for each piece of information (a chart, a calendar, a table to sort and search, a calculator), uses the width of a computer and one column on a phone, and looks at the page before it sends it. Pages have a new, calmer look and a light and dark switch. The bot hands more of its work to children and asks less of people, and long-term rules come only from people's own words. From pi: prompt cache warming, the `grep` and `find` tools, proxy settings, and the notice after a Claude subscription login.

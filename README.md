@@ -229,6 +229,8 @@ Then set `"model": "ollama/qwen3:8b"`. The agent needs a model that calls tools 
 { "model": "llama.cpp/<your chat model>", "judge": "llama.cpp/Kev-4B-Q4_K_M" }
 ```
 
+**Images.** A bot makes and edits images in `codemode` scripts with `models.generateImages()`; `models.getAvailableOfType("image")` lists the image models it can use. With the ChatGPT subscription signed in to pi (`openai-codex`), that is `openai-codex/gpt-image-2`, through the same endpoint the Codex CLI uses, on the subscription's Codex usage. ChatGPT decides which accounts may: when it answers 403, the Codex CLI's own image tool is refused too. OpenRouter's image models work with an OpenRouter key.
+
 ### MCP servers
 
 The bot uses [MCP](https://modelcontextprotocol.io) servers through pi's own MCP support. They are set in pi's files: `~/.pi/agent/mcp.json` for every bot on the computer and the [pi](https://github.com/earendil-works/pi) command line, and `.pi/mcp.json` in a bot's `workspace/` for that bot alone. The bot's `codemode` scripts call their tools, as with pi's default exposure, so the tools the model is told about never change and the provider's prompt cache keeps serving; a section of the prompt lists the servers. A server added, removed or changed applies from the bot's next wake, with no restart.

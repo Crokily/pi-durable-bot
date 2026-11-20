@@ -220,8 +220,12 @@ export interface ChildrenHost {
   max(): number;
   /** The place the main agent works on now, when it works on one. */
   place(): string | undefined;
-  /** The main agent's extensions that a child does not get, and the child's own. */
-  extensions(): { child: readonly Extension[] };
+  /**
+   * A child's extensions as a change to the main agent's: the child's own added, the main agent's that a child does not
+   * get removed. Stored as this change, not as a list, so a child follows what the main agent has now, such as the MCP
+   * servers that come and go.
+   */
+  extensions(): { add: readonly Extension[]; remove: readonly Extension[] };
   /** Hand a child's end to the main agent as a wake. The same reporter is one wake. Returns its submission ID. */
   ended(end: ChildEnd, context: Context): Promise<string>;
   /** Withdraw the main agent's queued submission, for a report of a child stopped in the meantime. */
@@ -465,7 +469,7 @@ export function childrenExtension(host: ChildrenHost): Extension {
           const anchor = await tx.createTask(Anchor, null, background);
           const conversation = await tx.createConversation({ ownership: { kind: "task", taskId: anchor } });
           // The child's tools and prompt, and the model for children.
-          await configure(tx, conversation.id, { extensions: [...host.extensions().child], model, thinkingLevel });
+          await configure(tx, conversation.id, { extensions: host.extensions(), model, thinkingLevel });
           const now = api.now();
           const reporter = await tx.createTask(Reporter, { child: id, conversationId: conversation.id, message: `[brief from the main agent]\n${args.brief}` }, background);
           state.children[id] = {

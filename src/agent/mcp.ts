@@ -64,6 +64,7 @@ interface Pi {
   loadMcpConfig(options: { agentDir: string; cwd: string; projectTrusted: boolean }): LoadedMcpConfig;
   getMcpToolExposure(config: McpServerConfig, tool: string): McpExposure;
   mcpNamespace(server: string): string;
+  mcpServerSummary(description: string | undefined, instructions: string | undefined): string;
   createMcpToolName(server: string, tool: string, isTaken?: (name: string) => boolean): string;
   createMcpToolDefinition(options: {
     server: string;
@@ -100,7 +101,7 @@ interface Runtime {
 
 async function loadPi(): Promise<Pi> {
   // pi-mcp has pi's tool names (createMcpToolName, mcpNamespace) since pi 1.5.1.
-  const [{ getAgentDir }, { createMcpToolName, mcpNamespace }, config, servers, tools, resources, extension] = await Promise.all([
+  const [{ getAgentDir }, { createMcpToolName, mcpNamespace, mcpServerSummary }, config, servers, tools, resources, extension] = await Promise.all([
     import("@earendil-works/pi-coding-agent"),
     import("@earendil-works/pi-mcp"),
     import(piModule("./extensions/mcp/config.js")),
@@ -109,7 +110,7 @@ async function loadPi(): Promise<Pi> {
     import(piModule("./extensions/mcp/resources.js")),
     import(piModule("./extensions/mcp/index.js")),
   ]);
-  return { getAgentDir, createMcpToolName, mcpNamespace, ...config, ...servers, ...tools, ...resources, ...extension } as Pi;
+  return { getAgentDir, createMcpToolName, mcpNamespace, mcpServerSummary, ...config, ...servers, ...tools, ...resources, ...extension } as Pi;
 }
 
 async function loadRuntime(): Promise<Runtime> {
@@ -150,6 +151,19 @@ interface Server {
 
 const enabled = (entry: McpServerEntry) => entry.config.enabled !== false;
 const keyOf = (entry: McpServerEntry) => JSON.stringify([entry.source, entry.scope, entry.override, entry.config]);
+/** Characters of a server's summary in the codemode section, as pi allows in mcp_servers. */
+const MAX_SUMMARY_CHARS = 250;
+
+function shorten(text: string, max: number): string {
+  const characters = [...text];
+  return characters.length <= max ? text : `${characters.slice(0, max - 1).join("").trimEnd()}…`;
+}
+
+/** Whether every tool of the server is hidden: its exposure and every per-tool exposure. */
+function allHidden(config: McpServerConfig): boolean {
+  return config.exposure === "hidden" && Object.values(config.toolExposure ?? {}).every((exposure) => exposure === "hidden");
+}
+
 /** Every exposure but hidden is codemode here: the bot declares no server tool to the model and has no tool_search. */
 const viaCodemode = (exposure: McpExposure): McpExposure => (exposure === "hidden" ? "hidden" : "codemode");
 
@@ -448,14 +462,22 @@ export class Mcp {
         ? this.#pi.createMcpResourceToolDefinitions({ exposure: "codemode", servers: () => this.#resourceServers() }).map(scriptTool)
         : [];
     }
-    const servers = [...this.#servers.values()].filter((server) => enabled(server.entry));
+    // A server whose every tool is hidden is not named to the model, as mcp_servers does not name it.
+    const servers = [...this.#servers.values()].filter((server) => enabled(server.entry) && !allHidden(server.entry.config));
     this.#extensions = [
       ...servers.map((server) => {
         const name = server.entry.name;
         const description = server.entry.config.description?.trim();
-        const instructions = server.connection?.instructions;
-        // The codemode section lists each namespace with its description; pi shows none when the server has none.
-        const namespace = { name: this.#pi.mcpNamespace(name), description: description || `The tools of the MCP server "${name}".`, ...(instructions ? { instructions } : {}) };
+        const sent = server.connection?.instructions?.trim();
+        // The codemode section lists each namespace with its description: pi's one-line summary of the server, as
+        // mcp_servers has it, so a long description does not go into every request. describeNamespace() gives the rest.
+        const summary = shorten(this.#pi.mcpServerSummary(description, sent).trim(), MAX_SUMMARY_CHARS);
+        const instructions = [description && description !== summary ? description : undefined, sent].filter(Boolean).join("\n\n");
+        const namespace = {
+          name: this.#pi.mcpNamespace(name),
+          description: summary || `The tools of the MCP server "${name}".`,
+          ...(instructions ? { instructions } : {}),
+        };
         return defineExtension({ name: `${MCP_EXTENSION}${name}`, namespace, tools: this.#tools.get(name) ?? [] });
       }),
       defineExtension({ name: RESOURCES, tools: this.#resourceTools }),

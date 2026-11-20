@@ -13,6 +13,7 @@ import {
   DEFAULT_COMPACTION_POLICY,
   defineExtension,
   defineTool,
+  type Extension,
   GenerationTask,
   Harness,
   hook,
@@ -26,11 +27,13 @@ import {
   ROOT_CONVERSATION_ID,
   type SubmissionId,
   type TaskId,
+  type ToolHooks,
   SystemEntry,
   section,
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
+import { createFitImagesExtension } from "@earendil-works/pi-durable/images/fit";
 import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
 import { type SqliteDatabase, SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
@@ -262,6 +265,7 @@ export class Agent {
   #disposeChildren?: () => void;
   #memory: MemoryPasses | undefined;
   #warming: CacheWarming | undefined;
+  #childExtensions: { add: readonly Extension[]; remove: readonly Extension[] } = { add: [], remove: [] };
   #closing = false;
   /** Stops the last process did not finish; resume() finishes them. */
   #unfinishedStops: Stop[] = [];
@@ -492,7 +496,22 @@ export class Agent {
       },
       afterResponse: (message, api) => warming?.response(String(api.conversationId), message),
     });
-    const read = createReadTool({ images: await (images ??= createNodePhotonImages()) });
+    const processor = await (images ??= createNodePhotonImages());
+    const read = createReadTool({ images: processor });
+    // pi's fitting of the images every other tool returns (MCP tools, code mode's image()) to the model's limits, as
+    // the pi CLI does, so a large image does not make the provider refuse the request. First, so the hooks of the other
+    // extensions see the fitted images.
+    // read fits its images itself, to the same limits: its results are not decoded again.
+    const fitAll = createFitImagesExtension(processor);
+    const fitImages = defineExtension({
+      ...fitAll,
+      hooks: (fitAll.hooks ?? []).map((each) => {
+        const afterTool = (each.handlers as Partial<ToolHooks>).afterTool;
+        if (!afterTool) return each;
+        const handlers: Partial<ToolHooks> = { ...each.handlers, afterTool: (call, result, api, context) => (call.name === read.name ? undefined : afterTool(call, result, api, context)) };
+        return { ...each, handlers };
+      }),
+    });
     const { createGrepToolDefinition, createFindToolDefinition } = await import("@earendil-works/pi-coding-agent");
     const memoryFolders = () => (options.memory?.enabled() ? options.memory.folders : undefined);
     const coding = defineExtension({
@@ -525,8 +544,9 @@ export class Agent {
       }),
     );
     const codemode = defineExtension({ name: "codemode", tools: [codemodeTool, ...scriptModels] });
-    // The servers' tools, which only scripts call: a new extension of the same name each time servers connect or go.
-    const mcp = () => options.mcp?.extension() ?? defineExtension({ name: "mcp" });
+    // The servers' tools, which only scripts call: an extension per server, with its namespace; new ones each time
+    // servers connect or go.
+    const mcp = () => options.mcp?.extensions() ?? [];
     let agent: Agent | undefined;
     const self = () => {
       if (!agent) throw new Error("the agent is still starting");
@@ -537,7 +557,7 @@ export class Agent {
       childModel: (model) => childModel(models, model),
       max: () => options.children.max(),
       place: () => options.children.place(),
-      extensions: () => ({ child: [coding, child, codemode, mcp()] }),
+      extensions: () => childExtensions,
       ended: (end, context) => options.children.ended(end, context),
       withdraw: async (submission) => {
         await self().#harness.abortSubmission(Number(submission) as SubmissionId, context, ROOT_CONVERSATION_ID);
@@ -549,15 +569,25 @@ export class Agent {
       beforeReport: (reporter) => self().crashTests.beforeReport?.(reporter),
       afterReport: (reporter) => self().crashTests.afterReport?.(reporter),
     });
+    // A child has the main agent's extensions without its channel actions and its task tool, and with its own prompt.
+    const childExtensions = { add: [child], remove: [bot, tasks] };
     const memory = options.memory ? new MemoryPasses({ host: options.memory, sql: options.database, cwd: options.workspace, context, log: options.log }) : undefined;
     const registry = createRegistry();
+    registry.install(fitImages);
     registry.install(coding);
     registry.install(bot);
     registry.install(tasks);
     registry.install(child);
     registry.install(codemode);
-    registry.install(mcp());
-    options.mcp?.onChange(() => registry.install(mcp()));
+    let servers = mcp();
+    for (const extension of servers) registry.install(extension);
+    options.mcp?.onChange(() => {
+      const next = mcp();
+      const names = new Set(next.map((extension) => extension.name));
+      for (const gone of servers) if (!names.has(gone.name)) registry.uninstall(gone);
+      for (const extension of next) registry.install(extension);
+      servers = next;
+    });
     if (memory) registry.install(memory.extension);
 
     harness = await Harness.open(
@@ -568,8 +598,10 @@ export class Agent {
         identity: POTS_IDENTITY,
         registry,
         settings: {
-          // The main agent's; a child selects its own.
-          extensions: [coding, bot, tasks, codemode, mcp()],
+          // The main agent's, with the servers there are now; a child selects its own.
+          get extensions() {
+            return [fitImages, coding, bot, tasks, codemode, ...mcp()];
+          },
           // Several queued wakes go into one run.
           steeringMode: "all",
           followUpMode: "all",
@@ -598,6 +630,7 @@ export class Agent {
     await root.configure({ model, thinkingLevel: options.thinking, cwd: options.workspace }, context);
     agent = new Agent(options, harness, root, outputs);
     agent.#warming = warming;
+    agent.#childExtensions = childExtensions;
     if (memory) {
       memory.attach(harness, root);
       memory.beforePass = () => agent?.crashTests.beforeMemoryPass?.();
@@ -607,6 +640,8 @@ export class Agent {
     await agent.#watchChildren((list) => (children = list));
     await agent.#holdUnfinishedStops();
     // bot.json may have changed the model while the bot was stopped: the children without a model of their own get it.
+    // A child that an earlier version started has its extensions as a list of names, from before each MCP server was an
+    // extension of its own: it gets the change to the main agent's extensions.
     await agent.#configureChildren();
     return agent;
   }
@@ -811,15 +846,19 @@ export class Agent {
   }
 
   /**
-   * Give the main model to every child that is not stopped and has no model of its own. A child with its own model
-   * keeps it, and every child keeps its thinking level.
+   * Give the main model to every child that is not stopped and has no model of its own, and every such child its
+   * extensions as a change to the main agent's. A child with its own model keeps it, and every child keeps its thinking
+   * level.
    */
   async #configureChildren(): Promise<void> {
-    const children = this.#children.filter((child) => child.stoppedAt === undefined && child.model === undefined);
+    const children = this.#children.filter((child) => child.stoppedAt === undefined);
     if (children.length === 0) return;
     const model = this.#model;
+    // Writing what a child has already changes nothing.
     await this.#root.commit(async (tx) => {
-      for (const child of children) await configure(tx, Number(child.conversationId) as ConversationId, { model });
+      for (const child of children) {
+        await configure(tx, Number(child.conversationId) as ConversationId, { extensions: this.#childExtensions, ...(child.model === undefined ? { model } : {}) });
+      }
     }, context);
   }
 
@@ -920,6 +959,9 @@ export class Agent {
     id: string;
     trace?: TelemetryCarrier;
   }> {
+    // mcp.json is read again before the wake, so the request it starts names the servers there are now: the agent of a
+    // request is resolved before its sections render, where mcp_servers reads it too.
+    this.#options.mcp?.reload();
     const submission = await this.#root.submit(
       {
         type: "input",

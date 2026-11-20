@@ -306,7 +306,7 @@ export class Bot implements WakeTarget {
     // each request, so a change counts from the next wake.
     const mcp = await Mcp.open({ cwd: paths.workspace, projectTrusted: () => resources.projectTrusted(), env: shellEnv, models: env.models, log: print });
     // pi's code mode, for every agent of the bot; its scripts call the servers' tools.
-    const codemode = createCodemode(() => mcp.namespaces());
+    const codemode = createCodemode();
     const codemodeSection = { name: "codemode", render: codemode.section };
     const mcpServers = {
       name: "mcp_servers",

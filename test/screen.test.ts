@@ -127,7 +127,7 @@ describe("the screen tool in a codemode script", { timeout: 60_000 }, () => {
           place: () => undefined,
           ended: async () => "0",
         },
-        codemode: createCodemode(() => []),
+        codemode: createCodemode(),
         actions: { send: async () => ({ message: "test:#general/1" }), react: async () => {}, call: async () => null },
         log: () => {},
       });

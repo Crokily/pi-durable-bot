@@ -1,7 +1,7 @@
 import type { Context } from "@earendil-works/chord/context";
 import { CodemodeSandbox } from "@earendil-works/pi-codemode";
 import type { PromptInput, ToolRegistration } from "@earendil-works/pi-durable";
-import { type CodemodeNamespace, createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
+import { createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
 
 // pi's code mode, as pi-durable gives it: the codemode tool, whose JavaScript scripts call the agent's other tools and
 // the MCP servers' tools in a QuickJS sandbox and survive a restart, and the codemode section, which lists the tools
@@ -20,14 +20,11 @@ export interface Codemode {
   section(input?: PromptInput, context?: Context): Promise<string | undefined>;
 }
 
-/** namespaces: the MCP servers, read at each script, as they come and go. */
-export function createCodemode(namespaces: () => readonly CodemodeNamespace[]): Codemode {
+/** The namespaces of scripts' tools (the MCP servers) come from the extensions that bring them (`Extension.namespace`). */
+export function createCodemode(): Codemode {
   const extension = createCodemodeExtension({
     get sandbox() {
       return (sandbox ??= new CodemodeSandbox({ memoryLimitBytes: MEMORY_LIMIT_BYTES }));
-    },
-    get namespaces() {
-      return namespaces();
     },
   });
   const section = extension.sections![0]!;

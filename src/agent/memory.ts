@@ -20,6 +20,7 @@ import {
   ROOT_CONVERSATION_ID,
   type TaskId,
   type ToolExecutionResult,
+  type ToolPark,
   ToolTask,
 } from "@earendil-works/pi-durable";
 import type { Sql } from "../core/sql.ts";
@@ -316,7 +317,12 @@ function ageNote(days: number): string {
 }
 
 /** A read result, with the age note in front when the file is in a memory folder and 2 days old or more, as in Claude Code. */
-export async function withAgeNote(result: ToolExecutionResult, path: string, folders: MemoryFolders | undefined, cwd: string): Promise<ToolExecutionResult> {
+export async function withAgeNote<Result extends ToolExecutionResult | ToolPark>(
+  result: Result,
+  path: string,
+  folders: MemoryFolders | undefined,
+  cwd: string,
+): Promise<Result> {
   const file = toolPath(cwd, path);
   const [first, ...rest] = result.output ?? [];
   if (!folders || !folderOf(file, folders) || first?.type !== "text") return result;

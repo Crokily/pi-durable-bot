@@ -31,6 +31,7 @@ import {
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
+import { createFitImagesExtension } from "@earendil-works/pi-durable/images/fit";
 import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
 import { type SqliteDatabase, SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
@@ -492,7 +493,12 @@ export class Agent {
       },
       afterResponse: (message, api) => warming?.response(String(api.conversationId), message),
     });
-    const read = createReadTool({ images: await (images ??= createNodePhotonImages()) });
+    const processor = await (images ??= createNodePhotonImages());
+    const read = createReadTool({ images: processor });
+    // pi's fitting of the images every other tool returns (MCP tools, code mode's image()) to the model's limits, as
+    // the pi CLI does, so a large image does not make the provider refuse the request. First, so the hooks of the other
+    // extensions see the fitted images.
+    const fitImages = createFitImagesExtension(processor);
     const { createGrepToolDefinition, createFindToolDefinition } = await import("@earendil-works/pi-coding-agent");
     const memoryFolders = () => (options.memory?.enabled() ? options.memory.folders : undefined);
     const coding = defineExtension({
@@ -525,8 +531,9 @@ export class Agent {
       }),
     );
     const codemode = defineExtension({ name: "codemode", tools: [codemodeTool, ...scriptModels] });
-    // The servers' tools, which only scripts call: a new extension of the same name each time servers connect or go.
-    const mcp = () => options.mcp?.extension() ?? defineExtension({ name: "mcp" });
+    // The servers' tools, which only scripts call: an extension per server, with its namespace; new ones each time
+    // servers connect or go.
+    const mcp = () => options.mcp?.extensions() ?? [];
     let agent: Agent | undefined;
     const self = () => {
       if (!agent) throw new Error("the agent is still starting");
@@ -537,7 +544,7 @@ export class Agent {
       childModel: (model) => childModel(models, model),
       max: () => options.children.max(),
       place: () => options.children.place(),
-      extensions: () => ({ child: [coding, child, codemode, mcp()] }),
+      extensions: () => ({ child: [fitImages, coding, child, codemode, ...mcp()] }),
       ended: (end, context) => options.children.ended(end, context),
       withdraw: async (submission) => {
         await self().#harness.abortSubmission(Number(submission) as SubmissionId, context, ROOT_CONVERSATION_ID);
@@ -551,13 +558,21 @@ export class Agent {
     });
     const memory = options.memory ? new MemoryPasses({ host: options.memory, sql: options.database, cwd: options.workspace, context, log: options.log }) : undefined;
     const registry = createRegistry();
+    registry.install(fitImages);
     registry.install(coding);
     registry.install(bot);
     registry.install(tasks);
     registry.install(child);
     registry.install(codemode);
-    registry.install(mcp());
-    options.mcp?.onChange(() => registry.install(mcp()));
+    let servers = mcp();
+    for (const extension of servers) registry.install(extension);
+    options.mcp?.onChange(() => {
+      const next = mcp();
+      const names = new Set(next.map((extension) => extension.name));
+      for (const gone of servers) if (!names.has(gone.name)) registry.uninstall(gone);
+      for (const extension of next) registry.install(extension);
+      servers = next;
+    });
     if (memory) registry.install(memory.extension);
 
     harness = await Harness.open(
@@ -568,8 +583,10 @@ export class Agent {
         identity: POTS_IDENTITY,
         registry,
         settings: {
-          // The main agent's; a child selects its own.
-          extensions: [coding, bot, tasks, codemode, mcp()],
+          // The main agent's, with the servers there are now; a child selects its own.
+          get extensions() {
+            return [fitImages, coding, bot, tasks, codemode, ...mcp()];
+          },
           // Several queued wakes go into one run.
           steeringMode: "all",
           followUpMode: "all",

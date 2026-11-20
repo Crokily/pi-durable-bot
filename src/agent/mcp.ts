@@ -3,20 +3,24 @@ import type { JsonValue } from "@earendil-works/chord/json";
 import type { ImageContent, Models, TextContent } from "@earendil-works/pi-ai";
 import type { LoadedMcpConfig, McpExposure, McpServerConfig, McpServerEntry } from "@earendil-works/pi-coding-agent";
 import { defineExtension, defineTool, type Extension, type ToolRegistration } from "@earendil-works/pi-durable";
-import type { CodemodeNamespace } from "@earendil-works/pi-durable/codemode";
 import { piModule } from "./models.ts";
 
 // MCP servers, through pi's own MCP support: pi's mcp.json (~/.pi/agent/mcp.json, and .pi/mcp.json in the bot's working
 // directory), pi's connections and sign-ins (tokens in ~/.pi/agent/mcp-auth.json), and pi's adapters of server tools.
 // pi's MCP extension is written for a pi session, so its parts are joined here for pi-durable: every server tool is a
 // tool that only codemode scripts call and that the codemode section does not list, as with pi's default exposure. So
-// the tools declared to the model and the system prompt stay the same while servers come, go and connect. One set of
+// the tools declared to the model and the system prompt stay the same while servers connect. Each server is an
+// extension of its own whose namespace (mcp__<server>) groups its tools for scripts, as pi's namespaces do. One set of
 // connections per bot serves its main agent and all its children.
 
 /** The text of the mcp_servers section without servers, so the sections after it stay where they are. */
 const NO_SERVERS = "MCP servers whose tools are not declared to you: none.";
 /** Script globals that list or look up tools, so a script that uses one may call any tool (pi's codemode tool). */
 const DISCOVERY = /\b(searchTools|describeNamespace|describeTool|ALL_TOOLS)\b/;
+/** The names of the servers' extensions: this prefix and the server's name. */
+const MCP_EXTENSION = "mcp:";
+/** The extension with pi's resource tools. It has the name of the one extension that had all MCP tools before pi 1.6. */
+const RESOURCES = "mcp";
 /** pi's resource tools, which reach every server with resources. */
 const RESOURCE_TOOLS = new Set(["list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"]);
 
@@ -174,7 +178,7 @@ function scriptTool(tool: PiTool): ToolRegistration {
 /**
  * The MCP servers of one bot, from pi's mcp.json, read again before each request: a server added, removed or changed
  * there connects, goes or reconnects from the bot's next wake, and a server that needed a sign-in is used from the next
- * request after `pots mcp login`. `extension()` holds the servers' tools; it changes as they connect.
+ * request after `pots mcp login`. `extensions()` holds the servers' tools; they change as servers come, go and connect.
  */
 export class Mcp {
   readonly #options: McpOptions;
@@ -183,7 +187,7 @@ export class Mcp {
   /** The tools of each server, as their connection offers them. */
   readonly #tools = new Map<string, readonly ToolRegistration[]>();
   #resourceTools: readonly ToolRegistration[] = [];
-  #extension: Extension = defineExtension({ name: "mcp" });
+  #extensions: readonly Extension[] = [defineExtension({ name: RESOURCES })];
   readonly #listeners = new Set<() => void>();
   #runtime: Promise<Runtime> | undefined;
   #credentials: Credentials | undefined;
@@ -203,9 +207,12 @@ export class Mcp {
     return mcp;
   }
 
-  /** The extension with the servers' tools; a new one after every change. */
-  extension(): Extension {
-    return this.#extension;
+  /**
+   * One extension per enabled server, with the server's namespace and tools (none before it connects), then the
+   * extension with pi's resource tools. New ones after every change.
+   */
+  extensions(): readonly Extension[] {
+    return this.#extensions;
   }
 
   /** Called after the servers' tools changed. */
@@ -266,18 +273,6 @@ export class Mcp {
       ...(server.connection?.instructions ? { connection: { instructions: server.connection.instructions } } : {}),
     }));
     return `<mcp_servers>\n${this.#pi.renderServersSection(listed) ?? NO_SERVERS}\n</mcp_servers>`;
-  }
-
-  /** The servers as codemode namespaces, for describeNamespace() and searchTools(). */
-  namespaces(): CodemodeNamespace[] {
-    return [...this.#servers.values()]
-      .filter((server) => enabled(server.entry))
-      .map((server) => {
-        const name = this.#pi.mcpNamespace(server.entry.name);
-        const description = server.entry.config.description?.trim();
-        const instructions = server.connection?.instructions;
-        return { name, prefix: `${name}__`, ...(description ? { description } : {}), ...(instructions ? { instructions } : {}) };
-      });
   }
 
   /**
@@ -453,7 +448,18 @@ export class Mcp {
         ? this.#pi.createMcpResourceToolDefinitions({ exposure: "codemode", servers: () => this.#resourceServers() }).map(scriptTool)
         : [];
     }
-    this.#extension = defineExtension({ name: "mcp", tools: [...[...this.#tools.values()].flat(), ...this.#resourceTools] });
+    const servers = [...this.#servers.values()].filter((server) => enabled(server.entry));
+    this.#extensions = [
+      ...servers.map((server) => {
+        const name = server.entry.name;
+        const description = server.entry.config.description?.trim();
+        const instructions = server.connection?.instructions;
+        // The codemode section lists each namespace with its description; pi shows none when the server has none.
+        const namespace = { name: this.#pi.mcpNamespace(name), description: description || `The tools of the MCP server "${name}".`, ...(instructions ? { instructions } : {}) };
+        return defineExtension({ name: `${MCP_EXTENSION}${name}`, namespace, tools: this.#tools.get(name) ?? [] });
+      }),
+      defineExtension({ name: RESOURCES, tools: this.#resourceTools }),
+    ];
     for (const listener of this.#listeners) listener();
   }
 }

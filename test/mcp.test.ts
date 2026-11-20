@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
+import { crc32, deflateSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { agentRequests, type FakeModel, type FakeReply, type FakeRequest, startFakeModel } from "./support/fake-model.ts";
@@ -15,6 +16,29 @@ import { ME, TestGateway, waitFor } from "./support/gateway.ts";
 const SERVER = fileURLToPath(new URL("./support/mcp-server.ts", import.meta.url));
 /** A script that calls the test server's tool. */
 const SHOUT = 'const result = await tools.mcp__shouter__shout({ text: "hello" });\nreturn result.content[0].text;';
+/** A script that looks the test server up by its namespace, as pi names it. */
+const DESCRIBE = 'return JSON.stringify(await describeNamespace("mcp__shouter"));';
+/** A grey PNG of `width` x `height` pixels. */
+function png(width: number, height: number): Buffer {
+  const chunk = (type: string, data: Buffer) => {
+    const body = Buffer.concat([Buffer.from(type, "latin1"), data]);
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(body));
+    return Buffer.concat([length, body, crc]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header.set([8, 0, 0, 0, 0], 8);
+  // Each row: filter 0, then one grey byte per pixel.
+  const rows = Buffer.alloc((width + 1) * height, 128);
+  for (let row = 0; row < height; row++) rows[row * (width + 1)] = 0;
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", header), chunk("IDAT", deflateSync(rows)), chunk("IEND", Buffer.alloc(0))]);
+}
+/** A script that gives the model an image wider than models take: pi's default limit is 2000 pixels. */
+const WIDE_IMAGE = `image("data:image/png;base64,${png(3000, 30).toString("base64")}");\nreturn "here it is";`;
 const MAIN_TOOLS = ["read", "write", "edit", "bash", "grep", "find", "send", "react", "call", "screen", "task", "codemode"];
 const CHILD_TOOLS = ["read", "write", "edit", "bash", "grep", "find", "screen", "codemode"];
 
@@ -41,9 +65,12 @@ const mcp = (...args: string[]) => gateway.run(["mcp", ...args], { env: { PI_COD
 function script(request: FakeRequest): FakeReply {
   const last = request.messages.at(-1);
   if (isChild(request)) return { text: "the answer is 42" };
-  if (last?.role !== "user" || last.content.startsWith("[wake] your child")) return { text: "done" };
+  // On an OpenAI-style API a tool result's images follow it in a user message.
+  if (last?.role !== "user" || last.content.startsWith("[wake] your child") || last.content.startsWith("Attached image")) return { text: "done" };
   if (last.content.includes("please research")) return { call: { name: "task", arguments: { action: "start", title: "research", brief: "find the answer" } } };
   if (last.content.includes("please shout")) return { call: { name: "codemode", arguments: { code: SHOUT } } };
+  if (last.content.includes("please draw")) return { call: { name: "codemode", arguments: { code: WIDE_IMAGE } } };
+  if (last.content.includes("please describe")) return { call: { name: "codemode", arguments: { code: DESCRIBE } } };
   const place = /\b[a-z0-9][a-z0-9-]*:#[\w-]+/.exec(last.content)![0];
   return { call: { name: "send", arguments: { to: place, text: "ack" } } };
 }
@@ -99,6 +126,22 @@ describe("code mode and MCP servers", { timeout: 90_000 }, () => {
     }
     expect(requests[0]!.prompt).toContain("MCP servers whose tools are not declared to you: none.");
     expect(requests.at(-1)!.system).toMatch(/<mcp_servers>\nMCP servers whose tools are not declared to you\. Call the tools of `codemode` servers from codemode scripts\.\n- mcp__shouter \(codemode\)/);
+    // The server is a namespace of code mode: the codemode section names it, and a script finds its tools by it.
+    expect(section(requests.at(-1)!, "codemode")).toContain('## mcp__shouter\nThe tools of the MCP server "shouter".');
+    gateway.say("general", "alice", `@${ME} please describe`);
+    const described = () => mainRequests().find((request) => request.messages.at(-1)?.role === "tool" && request.messages.at(-1)!.content.includes("mcp__shouter__shout"));
+    await waitFor(() => described() !== undefined, { what: "the namespace" });
+  });
+
+  it("fits the images a script gives the model to the model's limits, as pi does", async () => {
+    await setUp();
+    gateway.say("general", "alice", `@${ME} please draw`);
+    const result = () => mainRequests().flatMap((request) => request.messages.filter((message) => message.role === "tool")).at(0);
+    const attached = () => mainRequests().flatMap((request) => request.messages.filter((message) => message.content.startsWith("Attached image"))).at(0);
+    await waitFor(() => result() !== undefined, { what: "the script's result" });
+    expect(result()!.content).toContain("here it is");
+    expect(result()!.content).toContain("Resized from 3000x30 to 2000x20.");
+    expect(attached()!.images).toBe(1);
   });
 
   it("adds, lists and removes servers with pots mcp, in pi's mcp.json", async () => {

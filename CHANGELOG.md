@@ -2,6 +2,26 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
+## 0.8.8 (2026-11-21)
+
+Pots runs on pi 1.6.0: GPT-6.2 Astra and GPT-6.2 Sol, with GPT-6.2 Sol as the default model. Images that any tool gives the bot are fitted to the model's limits, as in the pi command line, and each MCP server is a namespace of its own in code mode. After this upgrade, a bot's database cannot go back to 0.8.7.
+
+### Added
+- **GPT-6.2 Astra and GPT-6.2 Sol**, on `openai`, `azure` and `openai-codex` (the ChatGPT login). With the ChatGPT login, Sol has a 500K context window and Astra 272K; Azure gives both 1.05M. Neither has thinking `off` or `minimal`; a level a model does not have becomes the nearest one it has.
+- **Images from every tool are fitted to the model.** Before, only `read` shrank its images, so a large image from an MCP tool or from a script's `image()` could make the provider refuse the request. Now pi's image fitting fits every image a tool returns to the limits of the conversation's model before it is stored, for the main agent and its children, as the pi command line does. An image that cannot be prepared is left out with a note.
+
+### Changed
+- **After the upgrade, a bot's database cannot go back to 0.8.7.** pi 1.6.0 stores the bot's tool calls and model requests in a newer format, which 0.8.7 and older do not read correctly. If you may want to go back, stop Pots and copy each bot's `bot.sqlite` before you upgrade.
+- **pi 1.6.0** (was 1.5.2). What the bot gains:
+  - **Models.** A request that fails with `Connection closed.` or a socket error such as `ECONNRESET`, `EPIPE` or `ETIMEDOUT` is tried again. With the ChatGPT login, a request that reaches the connection's 60-minute limit during the answer, for example during long thinking, is tried again on a new connection; GPT-6.2 now gets prompt cache hits on the system prompt; a change of thinking level no longer loses the prompt cache on GPT-6 models; and a model's `maxTokens` is used. OpenAI no longer refuses a request whose tool schema has a part without a `type`; such a tool is sent as not strict. Mistral Large 4 tool calls no longer stall for minutes. OpenAI-compatible providers other than OpenAI get system messages with the `system` role, so Groq's Qwen models no longer fail with `400 Unexpected message role`. The Qwen Token Plan providers have new models and use the current gateways.
+  - **llama.cpp.** pi's llama.cpp provider connects to `http://127.0.0.1:9931` by default, the current default port of llama-server, instead of 8080. A llama.cpp classifier that takes images, such as Clef with its `mmproj`, now gets the images of `models.classify()`.
+  - **Tools.** `read` no longer keeps a note that the model takes no images, which stayed in the conversation after a change to a model that takes them. `bash` shows the end of its output when the output ends in one very long line (over about 100KB, such as a `grep` match in a minified file); before, it showed nothing.
+  - **undici 8.12.4** (was 8.12.3), for six security advisories.
+- **`find` path patterns start at the folder searched** (pi 1.6.0). A pattern with `/` now matches from the folder `find` searches, as the `glob` of `grep` does: searching `src`, `slack/*.ts` no longer finds `src/channels/slack/sdk.ts`, and `**/slack/*.ts` finds it at any depth. A pattern without `/` still matches file names at any depth, and a pattern that starts with `./` now works.
+- **Each MCP server is a namespace of its own in code mode.** The `codemode` section lists each server as `mcp__<server>`, with pi's one-line summary of it (the first line of its `description` in `mcp.json`, or else of the instructions the server sends, at most 250 characters), also before it connects. `describeNamespace("mcp__<server>")` gives the whole description, the instructions and the server's tools, and `searchTools()` searches them. A server whose every tool is `hidden` is not named. For a bot with MCP servers, the `codemode` section changes, so its prompt cache is written once more after the upgrade.
+- **Children follow the bot's MCP servers.** A child has the main agent's tools without the channel actions and `task`, and keeps them as that difference, so a server added to `mcp.json` while a child works reaches the child too, and a server removed there goes from it. Children that 0.8.7 started are changed this way when the bot starts. The order of their tools changes, so each such child's prompt cache is written once more.
+- **The default model is `openai/gpt-6.2-sol`** (was `openai/gpt-6.1-sol`), as pi's default for `openai`. A bot whose `bot.json` has no `model` uses it after the restart.
+
 ## 0.8.7 (2026-11-19)
 
 A bot can make and edit images with the ChatGPT subscription signed in to pi, as the Codex CLI does, without an OpenRouter key.

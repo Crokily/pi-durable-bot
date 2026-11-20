@@ -195,7 +195,7 @@ The bot's children, which do its longer work, have the bot's model unless it cho
 
 | Field | What it does | Values |
 |---|---|---|
-| `model` | The agent that reads, thinks and acts | Any pi model as `provider/modelId`, for example `openai/gpt-6.1-sol` or `anthropic/claude-opus-5-5` |
+| `model` | The agent that reads, thinks and acts | Any pi model as `provider/modelId`, for example `openai/gpt-6.2-sol` or `anthropic/claude-opus-5-5` |
 | `thinking` | How hard the agent thinks. A level the model does not have becomes the nearest one it has, as in pi | `off`, `minimal`, `low`, `medium` (default), `high`, `xhigh`, `max` |
 | `judge` | Decides which messages that do not mention the bot should wake it | `off` (default): every message wakes the bot, and the agent decides<br>`provider/modelId` of a classifier: `typesafe/jev-latest`, `openrouter/typesafe/jev-1.14`, `opencode/jev-1.13-free`, or a llama.cpp model<br>`main`: the bot's own model judges, no extra account, but slower |
 

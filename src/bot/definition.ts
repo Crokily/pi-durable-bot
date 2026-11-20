@@ -66,7 +66,7 @@ const DEFAULT_SETTINGS: BotSettings = {
   autoMemory: true,
 };
 
-export const DEFAULT_MODEL = "openai/gpt-6.1-sol";
+export const DEFAULT_MODEL = "openai/gpt-6.2-sol";
 /** No judge: every message that does not mention the bot comes to it, and it decides itself. */
 export const DEFAULT_JUDGE: JudgeSetting = "off";
 

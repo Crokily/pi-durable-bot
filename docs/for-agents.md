@@ -57,7 +57,7 @@ Do the setup yourself, in your own shell. Only one step is your person's: signin
    When your person will not use a terminal on that computer, run `pots login --link` yourself and give them the link it prints. They open it on their phone or another computer, press Start, and sign in there: with a subscription (the page puts a device code or a copy code first), or with an API key, also TypeSafe's. They can add several, then press Done. It needs no bot yet. The command serves the page until they press Done, or 15 minutes after Start (an hour unopened), prints each login and then what pi can use, so wait for it to end. Without a `publicUrl` in `~/.pots/settings.json`, the link goes through a Cloudflare Quick Tunnel and the command says so: Cloudflare can see what is typed on the page. A device code is safe there. Tell them that a copy code or a pasted address, and an API key typed there, are not private: with them Cloudflare could finish the sign-in or use the key.
 5. **Make the bot:**
    ```sh
-   pots init --yes --name "Ada" --model openai/gpt-6.1-sol --about "our team's research and ops assistant" --no-chat
+   pots init --yes --name "Ada" --model openai/gpt-6.2-sol --about "our team's research and ops assistant" --no-chat
    ```
    For `--model`, take the newest strong model of your person's provider from `pots login --list`, and tell them which one you chose. Use `--judge off` when the bot will not be in group chats, and `--judge typesafe/jev-latest` for Jev. `pots init` tries the model and the judge before it makes the bot, then starts the gateway as a background service (launchd on macOS, a systemd user service on Linux, Task Scheduler on Windows). On Linux it turns on lingering for the user (with `sudo` when the system asks for it), so the bot keeps running after your person logs out of SSH; `pots init --system` installs a system service instead (it needs sudo). Each Linux user has one Pots service: one gateway process that runs all of that user's bots (`pots bot new` adds more). On a computer that several people use, each user runs their own, with a user service of their own.
 6. **Check, then hand over:** `pots chat --bot <id> -m "hi" --timeout 60` must print the bot's answer; `<id>` is the folder name in the `Created …/bots/<id>` line of `pots init`. If no answer comes, see `pots status` and `pots service logs`. Then tell your person to run `pots chat` to meet the bot. It says hello, checks the screen and asks which chat apps to join.
@@ -94,7 +94,7 @@ One computer can run several bots, each with its own name, persona, memory and c
 - **Your person asks a bot they already have**, for example "make us a marketing bot". That bot runs `pots bot new` itself. Until the new bot has joined a chat app, the bot that made it passes messages between them with `pots chat`, so your person can stay in the chat app where they asked.
 - **You run it**, the way you made the first one:
   ```sh
-  pots bot new "Bloom" --about "marketing for our product" --model openai/gpt-6.1-sol
+  pots bot new "Bloom" --about "marketing for our product" --model openai/gpt-6.2-sol
   ```
   Choose the model as in step 5 above. When the gateway runs, `pots bot new` waits until the bot has started, and prints its folder; the folder name is its ID. Check it with `pots chat --bot <id> -m "hi" --timeout 60`, then tell your person to meet it with `pots chat --bot <id>`.
 

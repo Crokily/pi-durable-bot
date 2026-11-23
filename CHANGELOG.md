@@ -2,6 +2,17 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
+## Unreleased
+
+A child's end no longer wakes the bot. A routine can start a child at its time without waking the bot.
+
+### Changed
+- **A child decides whether to wake the bot.** Before, every end of a child became a wake of the main agent, also when the child had found nothing worth telling. Now the end wakes no one: the child's final message is kept, also across restarts, and the `task` tool's new `result` action gives it, or why the child could not answer. A child that judges the main agent needs to know, for example with a question for a person, wakes it itself with `pots wake --from <its ID>`, which comes as a wake from that child. Its brief now starts with its ID. For work it hands to a child, the main agent looks in with its own timed wakes, as before. The prompts of the main agent and of children say so.
+- **At the upgrade**, a child that still works keeps working and ends quietly. An end that 0.8.8 had already handed to the main agent still arrives as before; an end it had decided but not handed over yet is kept, not handed over. The crash-test files `crash-before-child-report` and `crash-after-child-report` are gone.
+
+### Added
+- **`pots routine add <name> ... --child "<brief>"`** starts a child at each time with the brief, for no place, with the bot's model and thinking `xhigh`, without waking the bot; the child decides itself whether to wake it. The routine's time is skipped while its last child still works. A child that cannot start, for example at `settings.maxChildren`, counts as a failed run: it wakes the bot once, until one starts. `pots routine list` shows which child each run started. Existing routines do not change.
+
 ## 0.8.8 (2026-11-21)
 
 Pots runs on pi 1.6.0: GPT-6.2 Astra and GPT-6.2 Sol, with GPT-6.2 Sol as the default model. Images that any tool gives the bot are fitted to the model's limits, as in the pi command line, and each MCP server is a namespace of its own in code mode. After this upgrade, a bot's database cannot go back to 0.8.7.

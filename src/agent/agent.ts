@@ -45,16 +45,16 @@ import {
   type CallTask,
   type ChildActivity,
   type ChildCall,
-  type ChildEnd,
   type ChildInfo,
   type ChildRecord,
   type ChildrenState,
+  type ChildrenTools,
   Children,
+  DEFAULT_CHILD_THINKING,
   childActivity,
   childInfo,
   childrenExtension,
   describeActivity,
-  reportRequestId,
 } from "./children.ts";
 import type { Codemode } from "./codemode.ts";
 import type { Mcp } from "./mcp.ts";
@@ -95,8 +95,6 @@ interface Stop {
   id: string;
   title: string;
   conversationId: ConversationId;
-  /** All its reporters, to find their reports in the main agent's queue. */
-  reporters: readonly string[];
   /** Those that have not ended yet. */
   live: readonly string[];
 }
@@ -159,8 +157,8 @@ export interface AgentOptions {
    */
   sections: readonly AgentSection[];
   /**
-   * The children the main agent starts with the task tool. It chooses each one's model and thinking level; a child
-   * without a model of its own has the main model, also after it changes.
+   * The children the main agent starts with the task tool, and those routines start. The main agent chooses each one's
+   * model and thinking level; a child without a model of its own has the main model, also after it changes.
    */
   children: {
     /** How many children may work at once. */
@@ -172,8 +170,6 @@ export interface AgentOptions {
     sections: readonly AgentSection[];
     /** The place the main agent works on now, when it works on one: a new child works for it unless told otherwise. */
     place(): string | undefined;
-    /** Hand a child's end to the main agent as a wake; the same reporter is one wake. Returns its submission ID. */
-    ended(end: ChildEnd, context: Context): Promise<string>;
   };
   /**
    * Set after an upgrade: the main conversation's requests show the new text of pinned sections, as a new page does, so
@@ -266,18 +262,18 @@ export class Agent {
   #memory: MemoryPasses | undefined;
   #warming: CacheWarming | undefined;
   #childExtensions: { add: readonly Extension[]; remove: readonly Extension[] } = { add: [], remove: [] };
+  /** The task extension's start, for children that routines start. */
+  #startChild?: ChildrenTools["start"];
   #closing = false;
   /** Stops the last process did not finish; resume() finishes them. */
   #unfinishedStops: Stop[] = [];
   /** The running tool calls that give output as they run, by tool task, with when their last output came. */
   readonly #outputs: Map<string, number | undefined>;
   /**
-   * Crash tests: called just before and just after a child's end is handed to the main agent, right after a stop
-   * marked a child stopped, before its work ended, and right before a memory pass forks the main conversation.
+   * Crash tests: called right after a stop marked a child stopped, before its work ended, and right before a memory
+   * pass forks the main conversation.
    */
   readonly crashTests: {
-    beforeReport?: (reporter: string) => void;
-    afterReport?: (reporter: string) => void;
     afterStopMark?: (child: string) => void;
     beforeMemoryPass?: () => void;
   } = {};
@@ -552,23 +548,18 @@ export class Agent {
       if (!agent) throw new Error("the agent is still starting");
       return agent;
     };
-    const tasks = childrenExtension({
+    const childrenTools = childrenExtension({
       mainModel: () => self().#model,
       childModel: (model) => childModel(models, model),
       max: () => options.children.max(),
       place: () => options.children.place(),
       extensions: () => childExtensions,
-      ended: (end, context) => options.children.ended(end, context),
-      withdraw: async (submission) => {
-        await self().#harness.abortSubmission(Number(submission) as SubmissionId, context, ROOT_CONVERSATION_ID);
-      },
       stop: (id) => self().stopChild(id),
       activity: (conversation) => self().#activity(conversation),
       interrupt: (child) => self().interruptChild(child),
       settled: (conversation) => self().#releaseScreen(conversation),
-      beforeReport: (reporter) => self().crashTests.beforeReport?.(reporter),
-      afterReport: (reporter) => self().crashTests.afterReport?.(reporter),
     });
+    const tasks = childrenTools.extension;
     // A child has the main agent's extensions without its channel actions and its task tool, and with its own prompt.
     const childExtensions = { add: [child], remove: [bot, tasks] };
     const memory = options.memory ? new MemoryPasses({ host: options.memory, sql: options.database, cwd: options.workspace, context, log: options.log }) : undefined;
@@ -631,6 +622,7 @@ export class Agent {
     agent = new Agent(options, harness, root, outputs);
     agent.#warming = warming;
     agent.#childExtensions = childExtensions;
+    agent.#startChild = childrenTools.start;
     if (memory) {
       memory.attach(harness, root);
       memory.beforePass = () => agent?.crashTests.beforeMemoryPass?.();
@@ -677,7 +669,6 @@ export class Agent {
     }
     for (const stop of stops) {
       for (const reporter of stop.live) await this.#harness.abortTask(Number(reporter) as TaskId, context);
-      await this.#withdrawReports(stop);
     }
     this.#unfinishedStops = stops;
   }
@@ -895,7 +886,6 @@ export class Agent {
     }
     this.#warming?.cancel(String(stop.conversationId));
     await (await this.#harness.conversation(stop.conversationId, context))?.abort(context);
-    await this.#withdrawReports(stop);
     this.#releaseScreen(String(stop.conversationId));
     await this.#root.commit(async (tx) => {
       const record = (await tx.doc(Children, ROOT_CONVERSATION_ID)).children[stop.id];
@@ -903,17 +893,16 @@ export class Agent {
     }, context);
   }
 
-  /** Withdraw the reports of a stopped child that wait in the main agent's queue. */
-  async #withdrawReports(stop: Stop): Promise<void> {
-    const queued = await this.#root.commit(async (tx) => {
-      const ids: SubmissionId[] = [];
-      for (const reporter of stop.reporters) {
-        const submission = await tx.submissionByRequest(ROOT_CONVERSATION_ID, reportRequestId(reporter));
-        if (submission?.status === "queued") ids.push(submission.id);
-      }
-      return ids;
-    }, context);
-    for (const submission of queued) await this.#harness.abortSubmission(submission, context, ROOT_CONVERSATION_ID);
+  /**
+   * Start a child for a routine, with the main agent's model and the default thinking level, for no place. Returns its
+   * ID, or why it did not start: at the cap, the children that work.
+   */
+  async startChild(title: string, brief: string, from: string): Promise<{ id: string } | { refused: string }> {
+    const start = this.#startChild;
+    if (!start) throw new Error("the agent is still starting");
+    const started = await this.#root.commit((tx) => start(tx, { title, brief, from, model: this.#model, thinking: DEFAULT_CHILD_THINKING }, Date.now()), context);
+    if ("id" in started) return started;
+    return { refused: `${started.full.length} children work now, as many as the cap (settings.maxChildren in bot.json)` };
   }
 
   /** Stop every child that is not stopped yet. Returns what happened to each. */
@@ -1074,7 +1063,6 @@ function stopOf(state: Readonly<ChildrenState>, record: Readonly<ChildRecord>): 
     id: record.id,
     title: record.title,
     conversationId: record.conversationId,
-    reporters: [...record.reporters],
     live: Object.entries(state.live).flatMap(([reporter, child]) => (child === record.id ? [reporter] : [])),
   };
 }

@@ -179,6 +179,40 @@ describe("routines", () => {
       }),
     ));
 
+  it.effect("start a --child routine's child without waking the bot, skip a time while that child works, and wake the bot once when none could start", () =>
+    withCore({ fallbackWakeMinutes: 600 }, (recorder) =>
+      Effect.gen(function* () {
+        const timers = yield* Timers;
+        yield* timers.start;
+        yield* timers.addRoutine({ name: "mail-watch", every: 10 * MINUTE, child: "look at the new mail" });
+        yield* pass(10 * MINUTE);
+        assert.deepStrictEqual(recorder.children, [{ id: "c1", routine: "mail-watch", brief: "look at the new mail", at: 10 * MINUTE }]);
+        const last = (yield* timers.routines).routines[0]?.last;
+        assert.deepStrictEqual([last?.result, last?.output], ["child", "c1"]);
+        assert.deepStrictEqual(recorder.timers, []);
+
+        // c1 still works at 20 minutes: that time is skipped. Once it ended, the next time starts the next child.
+        yield* pass(10 * MINUTE);
+        assert.strictEqual(recorder.children.length, 1);
+        assert.isTrue(recorder.prints.some((print) => print.message === "routine skipped: its last run still runs" && print.data?.due === 20 * MINUTE));
+        recorder.workingChildren.delete("c1");
+        yield* pass(10 * MINUTE);
+        assert.deepStrictEqual(recorder.children.map((child) => [child.id, child.at]), [["c1", 10 * MINUTE], ["c2", 30 * MINUTE]]);
+        recorder.workingChildren.clear();
+
+        // At the cap no child starts: that wakes the bot once, until a child starts again.
+        recorder.refuseChildren = "2 children work now, as many as the cap";
+        yield* pass(20 * MINUTE);
+        assert.deepStrictEqual(routineWakes(recorder), [["mail-watch", "error", 40 * MINUTE]]);
+        assert.strictEqual(recorder.timers[0]!.timer.run?.output, "2 children work now, as many as the cap");
+        recorder.refuseChildren = undefined;
+        yield* pass(10 * MINUTE);
+        assert.deepStrictEqual(recorder.children.map((child) => child.at), [10 * MINUTE, 30 * MINUTE, 60 * MINUTE]);
+        assert.strictEqual((yield* timers.routines).routines[0]?.failing, 0);
+        assert.strictEqual(recorder.timers.length, 1);
+      }),
+    ));
+
   it.effect("wake the bot once for failed runs, until a run succeeds, with the last lines of the output", () =>
     withCore({ fallbackWakeMinutes: 600 }, (recorder) =>
       Effect.gen(function* () {
@@ -347,8 +381,11 @@ describe("routines", () => {
         assert.strictEqual(yield* refused({ name: "a b", every: MINUTE, note: "" }), 'bad routine name "a b": use letters, digits, "-" and "_", at most 64 characters');
         assert.strictEqual(yield* refused({ name: "a", note: "" }), "give exactly one of --every and --cron");
         assert.strictEqual(yield* refused({ name: "a", every: MINUTE, cron: "* * * * *", note: "" }), "give exactly one of --every and --cron");
-        assert.strictEqual(yield* refused({ name: "a", every: MINUTE }), "give exactly one of --note and --run");
-        assert.strictEqual(yield* refused({ name: "a", every: MINUTE, note: "", run: "x" }), "give exactly one of --note and --run");
+        assert.strictEqual(yield* refused({ name: "a", every: MINUTE }), "give exactly one of --note, --run and --child");
+        assert.strictEqual(yield* refused({ name: "a", every: MINUTE, note: "", run: "x" }), "give exactly one of --note, --run and --child");
+        assert.strictEqual(yield* refused({ name: "a", every: MINUTE, run: "x", child: "y" }), "give exactly one of --note, --run and --child");
+        assert.strictEqual(yield* refused({ name: "a", every: MINUTE, child: " " }), "--child is empty");
+        assert.strictEqual(yield* refused({ name: "a", every: MINUTE, child: "y", timeout: MINUTE }), "--timeout is for --run");
         assert.strictEqual(yield* refused({ name: "a", every: 0, note: "" }), "--every must be more than 0");
         assert.strictEqual(yield* refused({ name: "a", every: MINUTE, run: " " }), "--run is empty");
         assert.strictEqual(yield* refused({ name: "a", every: MINUTE, note: "", timeout: MINUTE }), "--timeout is for --run");

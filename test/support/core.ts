@@ -40,6 +40,11 @@ export class Recorder {
   readonly timers: { timer: DueTimer; at: number }[] = [];
   /** The routines' commands that started, in order. */
   readonly commands: FakeCommand[] = [];
+  /** The children routines started, in order; working: those that still work. */
+  readonly children: { id: string; routine: string; brief: string; at: number }[] = [];
+  readonly workingChildren = new Set<string>();
+  /** Why the next children cannot start, while set. */
+  refuseChildren?: string;
   readonly prints: { message: string; data?: Record<string, unknown> }[] = [];
   /** Places the bot works on now. */
   readonly working = new Set<Address>();
@@ -74,6 +79,14 @@ export class Recorder {
       });
       this.commands.push(entry);
     });
+
+  readonly startChild = async (routine: string, brief: string): Promise<{ child: string } | { error: string }> => {
+    if (this.refuseChildren !== undefined) return { error: this.refuseChildren };
+    const id = `c${this.children.length + 1}`;
+    this.children.push({ id, routine, brief, at: this.now() });
+    this.workingChildren.add(id);
+    return { child: id };
+  };
 
   target(): WakeTarget {
     return {
@@ -118,6 +131,8 @@ export const withCore = <A, E, R>(options: CoreOptions, body: (recorder: Recorde
         return { submission: `timer-${timer.id}` };
       },
       runCommand: recorder.runCommand,
+      startChild: recorder.startChild,
+      childWorks: (child) => recorder.workingChildren.has(child),
       filesDir: FILES_DIR,
       print: (message, data) => recorder.prints.push({ message, ...(data ? { data } : {}) }),
     };

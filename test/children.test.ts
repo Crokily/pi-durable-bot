@@ -4,8 +4,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { agentRequests, type FakeModel, type FakeReply, type FakeRequest, startFakeModel, wakeLine, wakes } from "./support/fake-model.ts";
 import { ME, pause, TestGateway, waitFor } from "./support/gateway.ts";
 
-// Children from outside: a real gateway whose fake main agent starts a child with the task tool. A report that comes
-// twice, or one that comes after a stop, would show only as a confused bot, so these are checked here.
+// Children from outside: a real gateway whose fake main agent starts a child with the task tool, or a routine starts
+// one. A child's end that wakes the main agent, or a child that goes on after a stop, would show only as a confused
+// bot, so these are checked here.
 
 let model: FakeModel;
 let gateway: TestGateway;
@@ -19,17 +20,24 @@ afterEach(async () => {
 const isChild = (request: FakeRequest) => request.system.includes("You are a child agent of");
 
 /**
- * The main agent starts a child for "please research" and stops it for "stop the research"; a child's end it passes
- * on in the place. The child answers its brief at once, or for "wait long" runs a long command first, and for "wait
- * for go" one that ends once the file go is in the workspace. For "please note", the child adds a line to the bot's
- * memory index first. "on <model>" starts the child on that model, and "please tell <child> more" sends it a message.
- * For "please probe" the child runs a command that hangs after one line of output, from bash or from a script; the
- * main agent sends it "wrap up" for "wrap up the probe", and interrupts it for "interrupt the probe".
+ * The main agent starts a child for "please research" and stops it for "stop the research"; a wake from a child it
+ * passes on in the place, and for "what did <child> say" it reads the child's result. The child answers its brief at
+ * once, or for "wait long" runs a long command first, and for "wait for go" one that ends once the file go is in the
+ * workspace. For "please note", the child adds a line to the bot's memory index first, and for "please research and
+ * tell", it wakes the main agent with pots wake first. "on <model>" starts the child on that model, and "please tell
+ * <child> more" sends it a message. For "please probe" the child runs a command that hangs after one line of output,
+ * from bash or from a script; the main agent sends it "wrap up" for "wrap up the probe", and interrupts it for
+ * "interrupt the probe".
  */
 function script(request: FakeRequest): FakeReply {
   const last = request.messages.at(-1);
   if (isChild(request)) {
+    if (last?.role === "tool" && last.content.includes('"id"')) return { text: "told the main agent" };
     if (last?.role !== "user") return { text: "done waiting" };
+    if (last.content.includes("and tell")) {
+      const id = /you are child (c\d+)/.exec(request.messages[0]!.content)?.[1] ?? "?";
+      return { call: { name: "bash", arguments: { command: `pots wake --note "the answer is 42, Alice should know" --from ${id}` } } };
+    }
     if (last.content.includes("wrap up")) return { text: "wrapped up" };
     if (last.content.includes("hang in bash")) return { call: { name: "bash", arguments: { command: HANG } } };
     if (last.content.includes("hang in a script")) return { call: { name: "codemode", arguments: { code: `return await tools.bash({ command: ${JSON.stringify(HANG)} });` } } };
@@ -45,10 +53,12 @@ function script(request: FakeRequest): FakeReply {
   }
   if (last?.role !== "user") return { text: "done" };
   const place = /\b[a-z0-9][a-z0-9-]*:#[\w-]+/.exec(last.content)?.[0];
-  if (last.content.startsWith("[wake] your child")) {
-    const final = /Its final message: (.*)/.exec(last.content)?.[1] ?? "?";
-    return { call: { name: "send", arguments: { to: place, text: `report: ${final}` } } };
+  if (last.content.startsWith("[wake] wake from your child")) {
+    const note = /^Note: (.*)/m.exec(last.content)?.[1] ?? "?";
+    return { call: { name: "send", arguments: { to: "test:#general", text: `report: ${note}` } } };
   }
+  const said = /what did (c\d+) say/.exec(last.content);
+  if (said) return { call: { name: "task", arguments: { action: "result", child: said[1] } } };
   if (last.content.includes("stop the research")) return { call: { name: "task", arguments: { action: "stop", child: "c1" } } };
   if (last.content.includes("wrap up the probe")) return { call: { name: "task", arguments: { action: "send", child: "c1", message: "wrap up" } } };
   if (last.content.includes("interrupt the probe")) return { call: { name: "task", arguments: { action: "interrupt", child: "c1" } } };
@@ -66,7 +76,7 @@ function script(request: FakeRequest): FakeReply {
   if (last.content.includes("please nap")) return { call: { name: "task", arguments: { action: "start", title: "nap", brief: "nap first, then answer" } } };
   if (last.content.includes("please note")) return { call: { name: "task", arguments: { action: "start", title: "note", brief: "save a memory", thinking: "max" } } };
   if (last.content.includes("please research")) {
-    const brief = last.content.includes("slowly") ? "wait long, then find the answer" : "find the answer";
+    const brief = last.content.includes("slowly") ? "wait long, then find the answer" : last.content.includes("and tell") ? "find the answer and tell" : "find the answer";
     return { call: { name: "task", arguments: { action: "start", title: "research", brief, ...(on ? { model: on } : {}) } } };
   }
   return { text: "nothing to do" };
@@ -86,6 +96,14 @@ async function setUp(options: { moreModels?: boolean; definition?: Record<string
 }
 
 const reports = () => gateway.sent().filter((record) => record.text?.startsWith("report:"));
+/** Whether a child ended and waits for a message, as pots children shows it. */
+const ended = (id: string) => new RegExp(`^${id} "[^"]*": ended`, "m").test(gateway.pots("children"));
+/** The child's final message as the task tool's result gives it to the main agent, after a person asks for it. */
+async function resultOf(id: string): Promise<string> {
+  gateway.say("general", "alice", `@${ME} what did ${id} say`);
+  await waitFor(() => taskResult(`${id} "`) !== undefined && taskResult(`${id} "`)!.includes("final message"), { what: `${id}'s result` });
+  return taskResult(`${id} "`)!;
+}
 /** The result of the main agent's last task call that starts with `start`. */
 const taskResult = (start: string) =>
   agentRequests(model)
@@ -103,36 +121,72 @@ const hangRuns = () => {
     return false;
   }
 };
-/** How often the main conversation holds a child's report, as its newest request shows it. */
-const reportsSeen = () => {
-  const main = agentRequests(model).filter((request) => !isChild(request));
-  return main.at(-1)?.messages.filter((message) => message.role === "user" && message.content.startsWith("[wake] your child")).length ?? 0;
-};
+/** The main agent's requests. */
+const mainRequests = () => agentRequests(model).filter((request) => !isChild(request));
 
 describe("children", { timeout: 90_000 }, () => {
-  it("works in the background and reports its final message to the main agent", async () => {
+  it("works in the background; its end wakes no one, and the task tool gives its final message", async () => {
     await setUp();
     gateway.say("general", "alice", `@${ME} please research`);
-    await waitFor(() => reports().length === 1, { what: "the report" });
-    expect(reports()[0]!.text).toBe("report: the answer is 42");
-    // The child started from the brief alone, with the working tools but no channel actions and no task tool, and its
-    // prompt does not tell it how to use them.
+    await waitFor(() => ended("c1"), { what: "the child's end" });
+    // The child started from the brief alone, with its ID, the working tools but no channel actions and no task tool,
+    // and its prompt does not tell it how to use them.
     const child = model.requests.find(isChild)!;
     expect(child.messages.map((message) => message.role)).toEqual(["user"]);
-    expect(child.messages[0]!.content).toBe("[brief from the main agent]\nfind the answer");
+    expect(child.messages[0]!.content).toBe("[brief from the main agent; you are child c1]\nfind the answer");
     expect(child.tools).toEqual(["read", "write", "edit", "bash", "grep", "find", "codemode", "screen"]);
     expect(child.system).not.toMatch(/pots send|pots react|pots call|ask-secret/);
     expect(gateway.pots("children")).toMatch(/^c1 "research": ended .* ago, waits for a message, for test:#general, thinking xhigh$/m);
+
+    // The end did not wake the main agent: its only wake is the mention, and it made two requests for it.
+    await pause(2_000);
+    expect(gateway.query<{ reason: string }>("SELECT reason FROM bot_wakes").map((wake) => wake.reason)).toEqual(["mention"]);
+    expect(mainRequests()).toHaveLength(2);
+    expect(reports()).toHaveLength(0);
+    expect(await resultOf("c1")).toMatch(/^c1 "research": ended \d+ s ago, waits for a message, for test:#general\nIts last final message:\nthe answer is 42$/);
 
     // On Windows a stop ends the process at once, as a kill does, before the gateway writes the spans of its last second:
     // there, wait until the last model request is written (with it, all that ended before it).
     if (process.platform === "win32") await waitFor(() => /^Model requests: 5,/m.test(gateway.pots("trace")), { what: "the spans" });
     await gateway.stop();
-    // The child's end is a wake of its own, and the child's model requests are in the trace with the others.
-    expect(gateway.pots("trace")).toMatch(/child\s+test:#general\s+sent 1\s+model 2×/);
+    // The child's model requests are in the trace with those of the wake that started it.
     expect(gateway.pots("trace")).toMatch(/mention\s+test:#general\s+1 event\s+model 3×/);
     expect(gateway.pots("trace")).toMatch(/^Model requests: 5,/m);
     expect(gateway.pots("trace", "mention:test:#general:1")).toMatch(/^child run, trace [^\n]*\nsubmission \d+ \(placed\)[\s\S]*model fake\/coworker, 100 in \(80% cached\), 10 out, stop/m);
+  });
+
+  it("wakes the main agent itself when it judges that the main agent needs to know", async () => {
+    await setUp();
+    gateway.say("general", "alice", `@${ME} please research and tell`);
+    await waitFor(() => reports().length === 1, { what: "the report" });
+    expect(reports()[0]!.text).toBe("report: the answer is 42, Alice should know");
+    const wake = wakes(model).find((text) => text.startsWith("[wake] wake from your child"))!;
+    expect(wakeLine(wake)).toMatch(/^\[wake\] wake from your child c1 "research": it set it with pots wake at .*\. Its note is what it wrote$/);
+    await waitFor(() => ended("c1"), { what: "the child's end" });
+    expect(await resultOf("c1")).toMatch(/\nIts last final message:\ntold the main agent$/);
+    // One wake from the child, none for its end.
+    expect(gateway.query<{ reason: string }>("SELECT reason FROM bot_wakes").map((wake) => wake.reason)).toEqual(["mention", "timer", "mention"]);
+  });
+
+  it("starts a child for a routine without waking the main agent, and skips the routine's time while that child works", async () => {
+    await setUp();
+    gateway.pots("routine", "add", "mail-watch", "--every", "3s", "--child", "wait for go, then answer (no model)");
+    await waitFor(() => model.requests.some(isChild), { what: "the routine's child" });
+    const first = model.requests.find(isChild)!;
+    expect(first.messages[0]!.content).toBe("[brief from routine mail-watch; you are child c1]\nwait for go, then answer (no model)");
+    expect(gateway.pots("children")).toMatch(/^c1 "mail-watch": working, for \d+ s, thinking xhigh$/m);
+    expect(gateway.pots("routine", "list")).toMatch(/last: .*, started child c1\n/);
+    // While c1 works, the routine's next times start no child.
+    await pause(7_000);
+    expect(gateway.pots("children")).not.toMatch(/^c2 /m);
+    writeFileSync(join(gateway.botDir, "workspace", "go"), "");
+    await waitFor(() => ended("c1"), { what: "the first child's end" });
+    await waitFor(() => /^c2 "mail-watch"/m.test(gateway.pots("children")), { what: "the next child" });
+    gateway.pots("routine", "remove", "mail-watch");
+    await waitFor(() => ended("c2"), { what: "the next child's end" });
+    // The main agent was never woken.
+    expect(mainRequests()).toHaveLength(0);
+    expect(gateway.query("SELECT id FROM bot_wakes")).toHaveLength(0);
   });
 
   it("sees the memory index as it was when it started, for its whole conversation, and keeps the thinking level it was given", async () => {
@@ -141,7 +195,7 @@ describe("children", { timeout: 90_000 }, () => {
     mkdirSync(join(gateway.botDir, "memory"), { recursive: true });
     writeFileSync(index, "- [Alice](alice.md) — likes tea\n");
     gateway.say("general", "alice", `@${ME} please note`);
-    await waitFor(() => reports().length === 1, { what: "the report" });
+    await waitFor(() => ended("c1"), { what: "the child's end" });
     expect(readFileSync(index, "utf8")).toBe("- [Alice](alice.md) — likes tea\n- [Bob](bob.md) — likes coffee\n");
     // The line the child added itself does not change the start of its own requests; the child has no memory instructions.
     const [first, second] = model.requests.filter(isChild);
@@ -170,20 +224,24 @@ describe("children", { timeout: 90_000 }, () => {
     writeFileSync(file, `${JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), model: "fake/other" }, null, 2)}\n`);
     await waitFor(() => gateway.output.some((line) => line.message === "definition applied"), { what: "the new definition" });
     writeFileSync(join(gateway.botDir, "workspace", "go"), "");
-    await waitFor(() => reports().length === 2, { what: "both reports" });
+    await waitFor(() => ended("c1") && ended("c2"), { what: "both ends" });
     const of = (choice: string) => children().filter((request) => request.messages[0]!.content.endsWith(`(${choice})`)).map((request) => request.model);
     expect(of("fake/helper")).toEqual(["helper", "helper"]);
     expect(of("no model")).toEqual(["coworker", "other"]);
 
-    // After a restart, each keeps the model it had.
+    // After a restart, each keeps the model it had, and the main agent still reads what each ended with.
     await gateway.stop();
     await gateway.start();
+    expect(await resultOf("c1")).toMatch(/\nIts last final message:\ndone waiting$/);
     gateway.say("general", "alice", `@${ME} please tell c1 more`);
-    await waitFor(() => reports().length === 3, { what: "the first child's second report" });
+    await waitFor(() => children().length === 5, { what: "the first child's second answer" });
+    await waitFor(() => ended("c1"), { what: "the first child's second end" });
     gateway.say("general", "alice", `@${ME} please tell c2 more`);
-    await waitFor(() => reports().length === 4, { what: "the second child's second report" });
+    await waitFor(() => children().length === 6, { what: "the second child's second answer" });
+    await waitFor(() => ended("c2"), { what: "the second child's second end" });
     expect(of("fake/helper")).toEqual(["helper", "helper", "helper"]);
     expect(of("no model")).toEqual(["coworker", "other", "other"]);
+    expect(reports()).toHaveLength(0);
   });
 
   it("starts no child on a model that is not signed in or unknown, and says why", async () => {
@@ -202,25 +260,7 @@ describe("children", { timeout: 90_000 }, () => {
     expect(model.requests.some(isChild)).toBe(false);
   });
 
-  for (const when of ["before", "after"] as const) {
-    it(`reports once when the gateway dies ${when} the report reaches the main agent`, async () => {
-      await setUp();
-      gateway.crashAroundNextChildReport(when);
-      gateway.say("general", "alice", `@${ME} please research`);
-      await gateway.exited();
-      expect(gateway.output.some((line) => line.message === `crash test: dying ${when} the child's report`)).toBe(true);
-      expect(reports()).toHaveLength(0);
-
-      await gateway.start();
-      await waitFor(() => reports().length === 1, { what: "the report" });
-      await pause(2_000);
-      expect(reports()).toHaveLength(1);
-      expect(reportsSeen()).toBe(1);
-      expect(gateway.query<{ id: string }>("SELECT id FROM bot_wakes WHERE reason = 'child'")).toHaveLength(1);
-    });
-  }
-
-  it("reports nothing after a stop, from the task tool or pots children", async () => {
+  it("does nothing more after a stop, from the task tool or pots children", async () => {
     await setUp();
     gateway.say("general", "alice", `@${ME} please research slowly`);
     // The child runs its long command.
@@ -229,8 +269,6 @@ describe("children", { timeout: 90_000 }, () => {
     gateway.say("general", "alice", `@${ME} stop the research`);
     await waitFor(() => /^c1 "research": stopped/m.test(gateway.pots("children")), { what: "the stop" });
     await pause(2_000);
-    expect(reports()).toHaveLength(0);
-    expect(reportsSeen()).toBe(0);
     // Only the first request of the child: its command was stopped, so it never answered.
     expect(model.requests.filter(isChild)).toHaveLength(1);
 
@@ -239,8 +277,7 @@ describe("children", { timeout: 90_000 }, () => {
     await waitFor(() => /^c2 "research": working/m.test(gateway.pots("children")), { what: "the second child" });
     expect(gateway.pots("children", "--stop", "c2")).toMatch(/Stopped c2/);
     await pause(2_000);
-    expect(reports()).toHaveLength(0);
-    expect(gateway.query<{ id: string }>("SELECT id FROM bot_wakes WHERE reason = 'child'")).toHaveLength(0);
+    expect(model.requests.filter(isChild)).toHaveLength(2);
     expect(wakeLine(gateway.pots("children"))).toMatch(/^c1 "research": stopped/);
   });
 
@@ -286,8 +323,8 @@ describe("children", { timeout: 90_000 }, () => {
 
     // The interrupt ends the command and the processes it started; the child goes on with the message.
     gateway.say("general", "alice", `@${ME} interrupt the probe`);
-    await waitFor(() => reports().length === 1, { what: "the report" });
-    expect(reports()[0]!.text).toBe("report: wrapped up");
+    await waitFor(() => ended("c1"), { what: "the child's end" });
+    expect(await resultOf("c1")).toMatch(/\nIts last final message:\nwrapped up$/);
     expect(taskResult("Interrupted c1")).toMatch(
       /^Interrupted c1: ended its bash, which ran \d+ s \(sleep 6131 & echo \$! > hang\.pid; echo probing 5901; wait\)\. It goes on: it sees that the call was aborted, and takes the message from you that waits\.$/,
     );
@@ -307,8 +344,8 @@ describe("children", { timeout: 90_000 }, () => {
       /^c1 "probe": working, [^\n]*\n {2}In codemode for \d+ s: return await tools\.bash\(\{ command: "sleep 6131 [^\n]*\n {2}Its script is in bash for \d+ s: sleep 6131 & echo \$! > hang\.pid; echo probing 5901; wait\n {2}Last output \d+ s ago: probing 5901$/m,
     );
     gateway.say("general", "alice", `@${ME} interrupt the probe`);
-    await waitFor(() => reports().length === 1, { what: "the report" });
-    expect(reports()[0]!.text).toBe("report: done waiting");
+    await waitFor(() => ended("c1"), { what: "the child's end" });
+    expect(await resultOf("c1")).toMatch(/\nIts last final message:\ndone waiting$/);
     expect(taskResult("Interrupted c1")).toMatch(/^Interrupted c1: ended its codemode, which ran \d+ s \(return await tools\.bash[^\n]*\)\. It goes on: it sees that the call was aborted\.$/);
     expect(model.requests.filter(isChild).at(-1)!.messages.at(-1)!.content).toMatch(/aborted/);
     expect(hangRuns()).not.toBe(true);
@@ -329,8 +366,6 @@ describe("children", { timeout: 90_000 }, () => {
     await pause(3_000);
     expect(gateway.pots("children")).toMatch(/^c1 "research": stopped/m);
     expect(model.requests.filter(isChild)).toHaveLength(1);
-    expect(reports()).toHaveLength(0);
-    expect(gateway.query<{ id: string }>("SELECT id FROM bot_wakes WHERE reason = 'child'")).toHaveLength(0);
     expect(gateway.pots("children", "--stop", "c1")).toMatch(/c1 \("research"\) was stopped before/);
   });
 });

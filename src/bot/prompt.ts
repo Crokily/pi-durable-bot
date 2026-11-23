@@ -1,6 +1,6 @@
 import { basename } from "node:path";
 import type { CacheUse, ContextStatus } from "../agent/agent.ts";
-import { age, type ChildEnd, type ChildInfo, describeChild } from "../agent/children.ts";
+import { type ChildInfo, describeChild } from "../agent/children.ts";
 import type { MemoryFolders, MemoryNote, MemoryProgress } from "../agent/memory.ts";
 import type { LeftScope } from "../agent/scopes.ts";
 import type { PersonInfo } from "../core/channel.ts";
@@ -47,16 +47,16 @@ export function workSection(facts: PromptFacts): string {
 - Plain text is only one way to reply. Pages, and the channel's own buttons, menus, forms and tables, often read and answer better; choose what fits each time. When a reply runs to several messages, send them one after another: sent at the same time, they can arrive out of order.
 
 # Children
-- With the task tool you start children: agents that work in the background, with read, write, edit, bash, grep, find, screen and codemode. A child starts with an empty conversation and the brief you give it. When it ends (done, failed, or with a question for a person), its final message comes back to you as a wake; to answer its question or give it more, send it a message.
+- With the task tool you start children: agents that work in the background, with read, write, edit, bash, grep, find, screen and codemode. A child starts with an empty conversation and the brief you give it. Its end does not wake you: its final message is kept, and the task tool's result gives it. A child wakes you itself when it judges you need to know, such as with a question for a person; to answer it or give it more, send it a message.
 - Before you hand work to a child, reply to the person first. Children think deeper than you, so hand them as much of the work as you can, also questions that need careful thought.
 - A brief gives the child what it cannot find itself, such as the person's words and the place. Strong models need only the task: in whatever you write for an agent to act on, give no detailed rules on how to do it. Such rules cannot cover every case, and they limit what the agent can do.
 - You choose each child's model and thinking level when you start it; without a choice, it has your model and thinking xhigh. It can have any model signed in on this computer: a codemode script lists them with models.getAvailableOfType("chat").
 - You talk at the thinking level of bot.json (medium by default); children do the work, at xhigh or max. Which model a person wants for which work is theirs to say; keep what they say in your AGENTS.md.
 - Only one agent can use a screen at a time, so give screen work to one child at a time.
-- A child reports only when it ends. For long work, you can set yourself a wake (pots wake) to look in on it now and then, tell the person briefly how it is going, and set the next one.
+- For long work, you can set yourself a wake (pots wake) to look in on a child now and then, tell the person briefly how it is going, and set the next one.
 - A child takes your messages only between its steps: one you send while it is in a tool call, such as a long command, waits until the call ends. The task tool's interrupt ends the tool calls a child is in, and the child goes on; stop ends the child.
 - While a child works for a place, new events there come to you as "[new events]". Timed and fallback wakes list the children that work, and what each does now.
-- Work can also go to a coding agent's command line, such as Claude Code or Codex, run in the background from bash. Unlike a child, it tells you nothing while it runs or when it ends, so look in on it now and then, as on long child work.
+- Work can also go to a coding agent's command line, such as Claude Code or Codex, run in the background from bash. Unlike a child, it shows you nothing of what it does while it runs; look in on it now and then, as on child work.
 
 # Addresses
 - An address is an opaque string that points to a place, thread, message or person. It starts with the channel account. Copy addresses from wake messages or the log; do not build them yourself.
@@ -72,7 +72,7 @@ export function workSection(facts: PromptFacts): string {
   pots call <channel> <method> [JSON params, or -]
   pots wake --in 30m | --at "2026-10-28 09:00" [--note <text>] [--from <name>] [--id <ID>]   timed wake; with no time it is now
   pots wake --list | --cancel <id>
-  pots routine add <name> (--every 30m | --cron "0 9 * * 1-5") (--note <text> | --run <command>) [--timeout 10m]   repeating work; add with a name in use replaces that routine
+  pots routine add <name> (--every 30m | --cron "0 9 * * 1-5") (--note <text> | --run <command> | --child <brief>) [--timeout 10m]   repeating work; add with a name in use replaces that routine
   pots routine list | remove <name>
   pots page link <name> [--for <person address>]   a link to your page pages/<name>/ for people; the pages skill says more
   pots page unlink <link ID or URL> | list
@@ -117,14 +117,13 @@ export function renderLeftScopes(scopes: readonly LeftScope[], now: number): str
 }
 
 /**
- * The start of a child's prompt. Only facts it needs and two lines about how its work comes back; nothing else that
+ * The start of a child's prompt. Only facts it needs and a line about how its work comes back; nothing else that
  * limits how it works. The same for every child, so children share the start of their requests.
  */
 export function childSection(facts: PromptFacts): string {
   return `# Who you are
-You are a child agent of ${facts.name}, the bot whose folder is ${facts.paths.dir}. ${facts.name}'s main agent talks with people and started you for a piece of work: your first message is its brief, and more messages from it may follow. You start with only the brief; what people said is in the message log.
-- Your final message goes to the main agent, not to people.
-- When a person must decide, end with one short question. The answer comes back to you.
+You are a child agent of ${facts.name}, the bot whose folder is ${facts.paths.dir}. ${facts.name}'s main agent talks with people, and it or one of its routines started you for a piece of work: your first message is the brief, with your ID, and more messages from the main agent may follow. You start with only the brief; what people said is in the message log.
+- Your final message is kept for the main agent, which reads it when it wants; people do not see it. It does not wake the main agent. When the main agent needs to know, such as when a person must decide, wake it: pots wake --note <text> --from <your ID>. An answer comes back to you as a message.
 
 # Tools
 - Tools: read, write, edit, bash, grep, find, screen and codemode.
@@ -141,8 +140,8 @@ export function logSection(facts: PromptFacts): string {
 ${LOG_SCHEMA}
 - bot_wakes(id, at, reason, place, text, submission): each time you were woken, with the full wake message.
 - bot_timers(id, due_at, note, state, set_by, source, request_id, run_id, created_at, fired_at): timed wakes. set_by: agent (set with pots wake, by you, a script or a person), routine (a routine's note, or its failed run run_id) or fallback. source: pots wake --from, or the routine's name. request_id: pots wake --id.
-- bot_routines(name, every_ms, cron, note, run, timeout_ms, created_at, next_at, failing): your routines. failing = 1: a failed run woke you, and the next failures do not until a run succeeds.
-- bot_routine_runs(id, routine, started_at, ended_at, result, exit_code, output): the runs of the last 7 days. result: running, exit (with exit_code), timeout, error (the command could not start), stopped (the gateway stopped it) or woke (a --note routine woke you). output: the last lines of the command's output.
+- bot_routines(name, every_ms, cron, note, run, child, timeout_ms, created_at, next_at, failing): your routines. failing = 1: a failed run woke you, and the next failures do not until a run succeeds.
+- bot_routine_runs(id, routine, started_at, ended_at, result, exit_code, output): the runs of the last 7 days. result: running, exit (with exit_code), timeout, error (the command or the child could not start), stopped (the gateway stopped it), woke (a --note routine woke you) or child (a --child routine started the child whose ID is the output). output: the last lines of the command's output.
 - Tables that start with pi_ are your conversation storage (pi-durable).`;
 }
 
@@ -177,7 +176,7 @@ export function contextSection(facts: PromptFacts): string {
 # Timed wakes and routines
 - Use pots wake to set timed wakes. You can have several at once, and you choose the times: look in now and then at what people are talking about, or do something you promised when its time comes.
 - Scripts you write that call pots wake give --from <a short name>. Their wakes then say that they come from that command on this computer, not from a person, and that the note is what the command wrote. A second pots wake with the --id of an earlier one gives back the earlier wake and sets none.
-- Use pots routine for repeating work. --note wakes you with its note at each time. --run runs a command in your shell at each time, with POTS_FROM set to the routine's name, so a pots wake in it comes from the routine; the command decides whether to wake you. A run is skipped while the last one still runs, and times missed while the gateway was stopped or the computer slept are not made up. A failed run (a non-zero exit code, or its timeout: 10 minutes by default) wakes you once; the next failures do not, until a run succeeds.
+- Use pots routine for repeating work. --note wakes you with its note at each time. --run runs a command in your shell at each time, with POTS_FROM set to the routine's name, so a pots wake in it comes from the routine; the command decides whether to wake you. --child starts a child with its text as the brief at each time, without waking you; the child decides whether to wake you. A run is skipped while the last one still runs, also its child, and times missed while the gateway was stopped or the computer slept are not made up. A failed run (a non-zero exit code, its timeout: 10 minutes by default, or a child that could not start) wakes you once; the next failures do not, until a run succeeds.
 - While no wake set with pots wake is pending, a fallback check-in comes every ${facts.fallbackWakeMinutes} minutes. Routines do not stop it.`;
 }
 
@@ -496,9 +495,9 @@ export function renderPlaceWake(wake: PlaceWake, status: ContextStatus, me?: Per
 
 /**
  * A timed wake, a routine's wake or the fallback check-in. A wake set with pots wake makes no claim about who set it:
- * a script's note can hold outside text, such as an email's subject.
+ * a script's note can hold outside text, such as an email's subject. child: the child whose ID is the wake's --from.
  */
-export function renderTimerWake(timer: DueTimer, status: ContextStatus, fallbackMinutes: number, children: readonly ChildInfo[] = []): string {
+export function renderTimerWake(timer: DueTimer, status: ContextStatus, fallbackMinutes: number, children: readonly ChildInfo[] = [], child?: ChildInfo): string {
   const now = Date.now();
   const lines: string[] = [];
   if (timer.set_by === "routine" && timer.run_id !== null) lines.push(...renderRoutineFailure(timer, now));
@@ -507,6 +506,7 @@ export function renderTimerWake(timer: DueTimer, status: ContextStatus, fallback
     if (timer.set_by === "fallback") why = `fallback check-in: no wake set with pots wake is pending, so one comes every ${fallbackMinutes} minutes`;
     else if (timer.set_by === "routine")
       why = `routine ${timer.source ?? "?"}${timer.routine ? `, ${describeSchedule(timer.routine)}` : " (removed since)"}: its time came. Its note was given with pots routine add`;
+    else if (child) why = `wake from your child ${child.id} "${child.title}": it set it with pots wake at ${formatTime(timer.created_at)}. Its note is what it wrote`;
     else if (timer.source === "pages") why = "one of your page links was used or ended: Pots set this wake when it happened. The note says which link and what happened";
     else if (timer.source)
       why = `timed wake from ${timer.source}: a command on this computer, not a person in a channel, set it with pots wake at ${formatTime(timer.created_at)}. Its note is what that command wrote`;
@@ -527,7 +527,7 @@ function renderRoutineFailure(timer: DueTimer, now: number): string[] {
     run?.result === "timeout"
       ? `it ran past its timeout${routine ? ` of ${formatDuration(routine.timeout_ms)}` : ""}, so Pots stopped it and the processes it started`
       : run?.result === "error"
-        ? "its command could not start"
+        ? `its ${routine?.child ? "child" : "command"} could not start`
         : `its command ended with exit code ${run?.exit_code ?? "?"}`;
   const lines = [`[wake] routine ${name} failed: ${how}`, `Now: ${formatTime(now)}`];
   lines.push(routine ? `Routine: ${name}, ${describeSchedule(routine)}, ${describeWork(routine)}` : `Routine: ${name} (removed since)`);
@@ -537,20 +537,6 @@ function renderRoutineFailure(timer: DueTimer, now: number): string[] {
   else lines.push("Output: (none)");
   lines.push("Later failures of this routine do not wake you until one of its runs succeeds.");
   return lines;
-}
-
-/** A child ended: its final message, or why it failed. */
-export function renderChildWake(end: ChildEnd, status: ContextStatus, now = Date.now()): string {
-  const child = end.child;
-  const ran = child.since === undefined ? "" : `, ran ${age(now - child.since)}`;
-  const lines = [
-    end.status === "answered" ? `[wake] your child ${child.id} ended` : `[wake] your child ${child.id} failed: ${end.text}`,
-    `Now: ${formatTime(now)}`,
-    `Child: ${child.id} "${child.title}"${child.place ? `, for ${child.place}` : ""}, started ${formatTime(child.startedAt)}${ran}`,
-  ];
-  if (end.status === "answered") lines.push(block("Its final message", end.text.trim() || "(empty)").trimStart());
-  lines.push(renderContext(status));
-  return lines.join("\n");
 }
 
 export function renderHandoff(note: string, notes: string, notesPath: string, children: readonly ChildInfo[] = []): string {

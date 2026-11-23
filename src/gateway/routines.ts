@@ -2,8 +2,9 @@ import { Cron, Result } from "effect";
 import { formatTime } from "../core/time.ts";
 import { SPAN_RETENTION_DAYS } from "./tracing.ts";
 
-// Routines: repeating work on a schedule. A routine either wakes the bot with a note, or runs a command in the bot's
-// shell, which decides itself whether to wake the bot. Their tables are in the bot's SQLite file, next to bot_timers.
+// Routines: repeating work on a schedule. A routine wakes the bot with a note, runs a command in the bot's shell, or
+// starts a child with a brief; the command and the child decide themselves whether to wake the bot. Their tables are in
+// the bot's SQLite file, next to bot_timers.
 
 export const ROUTINES_SCHEMA = `
 CREATE TABLE IF NOT EXISTS bot_routines (
@@ -12,6 +13,7 @@ CREATE TABLE IF NOT EXISTS bot_routines (
   cron TEXT,
   note TEXT,
   run TEXT,
+  child TEXT,
   timeout_ms INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
   next_at INTEGER NOT NULL,
@@ -30,6 +32,9 @@ CREATE INDEX IF NOT EXISTS bot_routine_runs_routine ON bot_routine_runs (routine
 CREATE INDEX IF NOT EXISTS bot_routine_runs_started ON bot_routine_runs (started_at);
 `;
 
+/** Columns of bot_routines that came after the table, added to a bot.sqlite from before them. */
+export const ROUTINE_ADDED_COLUMNS = [["child", "TEXT"]] as const;
+
 /** A command runs at most this long when its routine gives no timeout. */
 export const DEFAULT_TIMEOUT_MS = 10 * 60_000;
 /** Runs are kept as long as gw_spans. */
@@ -44,10 +49,12 @@ export interface Routine {
   every_ms: number | null;
   /** --cron, in this computer's time zone. */
   cron: string | null;
-  /** --note: what the wake says. Null for --run. */
+  /** --note: what the wake says. Null for the others. */
   note: string | null;
-  /** --run: the command. Null for --note. */
+  /** --run: the command. Null for the others. */
   run: string | null;
+  /** --child: the brief of the child it starts. Null for the others. */
+  child: string | null;
   timeout_ms: number;
   /** When it was added or last replaced. --every counts from here. */
   created_at: number;
@@ -59,10 +66,10 @@ export interface Routine {
 
 /**
  * How a run ended. running: it still runs. exit: the command ended, with exit_code. timeout: Pots stopped it at the
- * timeout. error: the command could not start (output says why). stopped: the gateway stopped it, or a crash cut it
- * off. woke: a --note routine woke the bot.
+ * timeout. error: the command or the child could not start (output says why). stopped: the gateway stopped it, or a
+ * crash cut it off. woke: a --note routine woke the bot. child: a --child routine started a child (output: its ID).
  */
-export type RunResult = "running" | "exit" | "timeout" | "error" | "stopped" | "woke";
+export type RunResult = "running" | "exit" | "timeout" | "error" | "stopped" | "woke" | "child";
 
 export interface RoutineRun {
   id: number;
@@ -82,6 +89,7 @@ export interface RoutineInput {
   cron?: string;
   note?: string;
   run?: string;
+  child?: string;
   timeout?: number;
 }
 
@@ -101,9 +109,10 @@ export function failed(run: Pick<RoutineRun, "result" | "exit_code">): boolean {
 /** Why the routine cannot be added as given, its name aside, or undefined. now: when it is added. */
 export function routineProblem(input: RoutineInput, now: number): string | undefined {
   if ((input.every === undefined) === (input.cron === undefined)) return "give exactly one of --every and --cron";
-  if ((input.note === undefined) === (input.run === undefined)) return "give exactly one of --note and --run";
+  if ([input.note, input.run, input.child].filter((each) => each !== undefined).length !== 1) return "give exactly one of --note, --run and --child";
   if (input.every !== undefined && !(Number.isFinite(input.every) && input.every > 0)) return "--every must be more than 0";
   if (input.run !== undefined && !input.run.trim()) return "--run is empty";
+  if (input.child !== undefined && !input.child.trim()) return "--child is empty";
   if (input.timeout !== undefined) {
     if (input.run === undefined) return "--timeout is for --run";
     if (!(Number.isFinite(input.timeout) && input.timeout > 0)) return "--timeout must be more than 0";
@@ -182,10 +191,10 @@ export function describeSchedule(routine: Pick<Routine, "every_ms" | "cron">): s
 }
 
 /** What the routine does, in one line. */
-export function describeWork(routine: Pick<Routine, "note" | "run" | "timeout_ms">): string {
-  return routine.run !== null
-    ? `runs ${JSON.stringify(routine.run)} (timeout ${formatDuration(routine.timeout_ms)})`
-    : `wakes the bot with the note ${JSON.stringify(routine.note ?? "")}`;
+export function describeWork(routine: Pick<Routine, "note" | "run" | "child" | "timeout_ms">): string {
+  if (routine.run !== null) return `runs ${JSON.stringify(routine.run)} (timeout ${formatDuration(routine.timeout_ms)})`;
+  if (routine.child) return `starts a child with the brief ${JSON.stringify(routine.child)}`;
+  return `wakes the bot with the note ${JSON.stringify(routine.note ?? "")}`;
 }
 
 /** How a run ended, in a few words: "exit code 2 after 3s, failed". */
@@ -197,6 +206,8 @@ export function describeRun(run: RoutineRun, now: number): string {
       return `running since ${formatTime(run.started_at)} (${took(now - run.started_at)})`;
     case "woke":
       return `${formatTime(run.started_at)}, woke the bot`;
+    case "child":
+      return `${formatTime(run.started_at)}, started child ${run.output}`;
     case "exit":
       return `${formatTime(run.started_at)}, exit code ${run.exit_code}${after}${fail}`;
     case "timeout":

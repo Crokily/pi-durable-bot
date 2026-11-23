@@ -33,8 +33,8 @@ export interface GatewayOptions {
   readonly runCommand?: RunCommand;
   /** Start a child for a routine, with its brief: the child's ID, or why it could not start. Without it, routines with --child fail to start. */
   readonly startChild?: (routine: string, brief: string) => Promise<{ child: string } | { error: string }>;
-  /** Whether this child still works. */
-  readonly childWorks?: (child: string) => boolean;
+  /** Whether a child that this routine started still works. */
+  readonly childWorks?: (routine: string) => boolean;
   /** Where the files of messages are saved, one folder per message. What is in it is deleted FILE_DAYS days after it was saved. */
   readonly filesDir: string;
   readonly print: Print;

@@ -258,10 +258,10 @@ export class Bot implements WakeTarget {
       runCommand: commandRunner(paths.workspace, shellEnv, scopes),
       // A routine's child: no place, the main agent's model and the default thinking level.
       startChild: async (routine, brief) => {
-        const started = await self().#agent.startChild(routine, brief, `routine ${routine}`);
+        const started = await self().#agent.startChild(routine, brief);
         return "id" in started ? { child: started.id } : { error: started.refused };
       },
-      childWorks: (child) => self().#workingChildren().some((each) => each.id === child),
+      childWorks: (routine) => self().#workingChildren().some((each) => each.routine === routine),
       filesDir: paths.files,
       print,
     });
@@ -419,7 +419,6 @@ export class Bot implements WakeTarget {
     // Right after the bot took a wake, before the gateway records that. The next start must deliver the same wake again,
     // which the agent counts once, instead of deciding its events anew.
     gateway.waker.afterDeliver = crashTest(paths.crashAfterWake, "crash test: dying after the wake", "wakeId");
-    // Around the report of a child's end to the main agent. The next start must report it once.
     // Right after a stop marked a child stopped, before its work ended. The next start must end that work.
     agent.crashTests.afterStopMark = crashTest(paths.crashAfterChildStop, "crash test: dying after marking the child stopped", "child");
     // Right before a memory pass forks the main conversation. The next start must make the pass.
@@ -555,7 +554,7 @@ export class Bot implements WakeTarget {
     // A wake a child set with its ID as --from.
     const child = timer.set_by === "agent" && timer.source !== null ? this.#agent.children.find((each) => each.id === timer.source) : undefined;
     const text = renderTimerWake(timer, await this.#agent.contextStatus(), this.#definition.settings.fallbackWakeMinutes, children, child);
-    return this.#submit(`timer:${timer.id}`, timer.set_by === "agent" ? "timer" : timer.set_by, undefined, text, false, caller);
+    return this.#submit(`timer:${timer.id}`, timer.set_by === "agent" ? "timer" : timer.set_by, child?.place, text, false, caller);
   }
 
   async #submit(id: string, reason: string, place: Address | undefined, text: string, steer: boolean, caller?: TelemetrySpan): Promise<Delivered> {

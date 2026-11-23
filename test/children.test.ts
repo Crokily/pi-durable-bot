@@ -161,11 +161,15 @@ describe("children", { timeout: 90_000 }, () => {
     await waitFor(() => reports().length === 1, { what: "the report" });
     expect(reports()[0]!.text).toBe("report: the answer is 42, Alice should know");
     const wake = wakes(model).find((text) => text.startsWith("[wake] wake from your child"))!;
-    expect(wakeLine(wake)).toMatch(/^\[wake\] wake from your child c1 "research": it set it with pots wake at .*\. Its note is what it wrote$/);
+    expect(wakeLine(wake)).toMatch(/^\[wake\] wake from your child c1 "research", which works for test:#general: it set it with pots wake at .*\. Its note is what it wrote$/);
     await waitFor(() => ended("c1"), { what: "the child's end" });
     expect(await resultOf("c1")).toMatch(/\nIts last final message:\ntold the main agent$/);
-    // One wake from the child, none for its end.
-    expect(gateway.query<{ reason: string }>("SELECT reason FROM bot_wakes").map((wake) => wake.reason)).toEqual(["mention", "timer", "mention"]);
+    // One wake from the child, for its place, and none for its end.
+    expect(gateway.query<{ reason: string; place: string | null }>("SELECT reason, place FROM bot_wakes").map((wake) => [wake.reason, wake.place])).toEqual([
+      ["mention", "test:#general"],
+      ["timer", "test:#general"],
+      ["mention", "test:#general"],
+    ]);
   });
 
   it("starts a child for a routine without waking the main agent, and skips the routine's time while that child works", async () => {

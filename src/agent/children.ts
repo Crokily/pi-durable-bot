@@ -35,6 +35,8 @@ export type ChildRecord = {
   conversationId: ConversationId;
   /** The place the child works for, when there is one. */
   place?: string;
+  /** The routine that started it, when one did. */
+  routine?: string;
   /** The model the main agent chose for it, "provider/modelId", for its whole life; absent: the main agent's model. */
   model?: string;
   /** Its thinking level, for its whole life. */
@@ -81,6 +83,8 @@ export interface ChildInfo {
   title: string;
   conversationId: string;
   place?: string;
+  /** The routine that started it, when one did. */
+  routine?: string;
   /** The model chosen for it; absent: the main agent's model. */
   model?: string;
   thinking: ModelThinkingLevel;
@@ -200,6 +204,7 @@ export function childInfo(record: Readonly<ChildRecord>): ChildInfo {
     title: record.title,
     conversationId: String(record.conversationId),
     ...(record.place === undefined ? {} : { place: record.place }),
+    ...(record.routine === undefined ? {} : { routine: record.routine }),
     ...(record.model === undefined ? {} : { model: record.model }),
     thinking: record.thinking,
     startedAt: record.startedAt,
@@ -245,6 +250,8 @@ export interface ChildStart {
   /** Who gives the brief, for its first line: "the main agent", or "routine <name>". */
   from: string;
   place?: string;
+  /** The routine that starts it, when one does. */
+  routine?: string;
   /** The model chosen for it, "provider/modelId", already checked; absent: the main agent's model. */
   chosen?: string;
   model: ModelRef;
@@ -379,14 +386,15 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
           const next = { status: "running" as const, checkpoint: { phase: "report" as const } };
           const state = await tx.doc(Children, runtime.conversationId);
           const record = state.children[reporter.input.child];
-          // Stopped, or withdrawn while queued: nothing to keep.
-          if (!record || record.stoppedAt !== undefined) return next;
+          if (!record) return next;
           if (settled.status === "unanswered") {
-            if (settled.reason === "aborted") return next;
+            // Stopped, or withdrawn while queued: nothing to keep.
+            if (settled.reason === "aborted" || record.stoppedAt !== undefined) return next;
             const detail = settled.detail === undefined ? "" : `: ${typeof settled.detail === "string" ? settled.detail : JSON.stringify(settled.detail)}`;
             record.result = { at: runtime.now(), failed: `${settled.reason}${detail}` };
             return next;
           }
+          // An answer is kept also when a stop came after it.
           if (settled.type !== "input" || record.reported.includes(settled.answer)) return next;
           record.reported.push(settled.answer);
           record.result = { at: runtime.now() };
@@ -399,7 +407,7 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
           // An end that an earlier version had not handed to the main agent yet: kept, as now.
           const end = reporter.state.checkpoint.end;
           const record = state.children[reporter.input.child];
-          if (end && record && record.stoppedAt === undefined) record.result = end.status === "failed" ? { at: runtime.now(), failed: end.text } : { at: runtime.now() };
+          if (end && record && (end.status === "answered" || record.stoppedAt === undefined)) record.result = end.status === "failed" ? { at: runtime.now(), failed: end.text } : { at: runtime.now() };
           finish(state, String(reporter.id), runtime.now());
           return { status: "terminal", outcome: { status: "completed", result: null } };
         }, context);
@@ -448,6 +456,7 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
       title: input.title,
       conversationId: conversation.id,
       ...(input.place ? { place: input.place } : {}),
+      ...(input.routine === undefined ? {} : { routine: input.routine }),
       ...(input.chosen === undefined ? {} : { model: input.chosen }),
       thinking: input.thinking,
       startedAt: now,

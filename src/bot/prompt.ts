@@ -53,7 +53,7 @@ export function workSection(facts: PromptFacts): string {
 - You choose each child's model and thinking level when you start it; without a choice, it has your model and thinking xhigh. It can have any model signed in on this computer: a codemode script lists them with models.getAvailableOfType("chat").
 - You talk at the thinking level of bot.json (medium by default); children do the work, at xhigh or max. Which model a person wants for which work is theirs to say; keep what they say in your AGENTS.md.
 - Only one agent can use a screen at a time, so give screen work to one child at a time.
-- For long work, you can set yourself a wake (pots wake) to look in on a child now and then, tell the person briefly how it is going, and set the next one.
+- While a child does long work for a person, look in on it about every 10 minutes: set yourself a wake (pots wake), see how it is going, tell the person briefly, and set the next one. A child's end does not wake you, so these wakes are also how you learn that it is done.
 - A child takes your messages only between its steps: one you send while it is in a tool call, such as a long command, waits until the call ends. The task tool's interrupt ends the tool calls a child is in, and the child goes on; stop ends the child.
 - While a child works for a place, new events there come to you as "[new events]". Timed and fallback wakes list the children that work, and what each does now.
 - Work can also go to a coding agent's command line, such as Claude Code or Codex, run in the background from bash. Unlike a child, it shows you nothing of what it does while it runs; look in on it now and then, as on child work.
@@ -506,7 +506,7 @@ export function renderTimerWake(timer: DueTimer, status: ContextStatus, fallback
     if (timer.set_by === "fallback") why = `fallback check-in: no wake set with pots wake is pending, so one comes every ${fallbackMinutes} minutes`;
     else if (timer.set_by === "routine")
       why = `routine ${timer.source ?? "?"}${timer.routine ? `, ${describeSchedule(timer.routine)}` : " (removed since)"}: its time came. Its note was given with pots routine add`;
-    else if (child) why = `wake from your child ${child.id} "${child.title}": it set it with pots wake at ${formatTime(timer.created_at)}. Its note is what it wrote`;
+    else if (child) why = `wake from your child ${child.id} "${child.title}"${child.place ? `, which works for ${child.place}` : ""}: it set it with pots wake at ${formatTime(timer.created_at)}. Its note is what it wrote`;
     else if (timer.source === "pages") why = "one of your page links was used or ended: Pots set this wake when it happened. The note says which link and what happened";
     else if (timer.source)
       why = `timed wake from ${timer.source}: a command on this computer, not a person in a channel, set it with pots wake at ${formatTime(timer.created_at)}. Its note is what that command wrote`;
@@ -527,7 +527,7 @@ function renderRoutineFailure(timer: DueTimer, now: number): string[] {
     run?.result === "timeout"
       ? `it ran past its timeout${routine ? ` of ${formatDuration(routine.timeout_ms)}` : ""}, so Pots stopped it and the processes it started`
       : run?.result === "error"
-        ? `its ${routine?.child ? "child" : "command"} could not start`
+        ? "it could not start"
         : `its command ended with exit code ${run?.exit_code ?? "?"}`;
   const lines = [`[wake] routine ${name} failed: ${how}`, `Now: ${formatTime(now)}`];
   lines.push(routine ? `Routine: ${name}, ${describeSchedule(routine)}, ${describeWork(routine)}` : `Routine: ${name} (removed since)`);

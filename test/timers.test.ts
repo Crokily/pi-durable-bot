@@ -204,7 +204,7 @@ describe("routines", () => {
         recorder.refuseChildren = "2 children work now, as many as the cap";
         yield* pass(20 * MINUTE);
         assert.deepStrictEqual(routineWakes(recorder), [["mail-watch", "error", 40 * MINUTE]]);
-        assert.strictEqual(recorder.timers[0]!.timer.run?.output, "2 children work now, as many as the cap");
+        assert.strictEqual(recorder.timers[0]!.timer.run?.output, "the child could not start: 2 children work now, as many as the cap");
         recorder.refuseChildren = undefined;
         yield* pass(10 * MINUTE);
         assert.deepStrictEqual(recorder.children.map((child) => child.at), [10 * MINUTE, 30 * MINUTE, 60 * MINUTE]);

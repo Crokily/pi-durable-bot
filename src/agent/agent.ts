@@ -894,13 +894,14 @@ export class Agent {
   }
 
   /**
-   * Start a child for a routine, with the main agent's model and the default thinking level, for no place. Returns its
-   * ID, or why it did not start: at the cap, the children that work.
+   * Start a child for a routine, with the main agent's model and the default thinking level, for no place. The child
+   * keeps the routine's name, in the same commit, so the routine knows while it works. Returns its ID, or why it did
+   * not start: at the cap, the children that work.
    */
-  async startChild(title: string, brief: string, from: string): Promise<{ id: string } | { refused: string }> {
+  async startChild(routine: string, brief: string): Promise<{ id: string } | { refused: string }> {
     const start = this.#startChild;
     if (!start) throw new Error("the agent is still starting");
-    const started = await this.#root.commit((tx) => start(tx, { title, brief, from, model: this.#model, thinking: DEFAULT_CHILD_THINKING }, Date.now()), context);
+    const started = await this.#root.commit((tx) => start(tx, { title: routine, brief, from: `routine ${routine}`, routine, model: this.#model, thinking: DEFAULT_CHILD_THINKING }, Date.now()), context);
     if ("id" in started) return started;
     return { refused: `${started.full.length} children work now, as many as the cap (settings.maxChildren in bot.json)` };
   }

@@ -215,7 +215,7 @@ export class Gateway {
   }
 
   /**
-   * Wake the bot for something of its own, such as a child that ended: deliver hands it to the bot inside a wake span,
+   * Wake the bot for something of its own: deliver hands it to the bot inside a wake span,
    * as a timer does, so pots trace lists it with the agent's run for it.
    */
   wake(attributes: Record<string, string>, deliver: (caller: TelemetrySpan | undefined) => Promise<Delivered>): Promise<Delivered> {

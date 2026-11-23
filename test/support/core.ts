@@ -132,7 +132,7 @@ export const withCore = <A, E, R>(options: CoreOptions, body: (recorder: Recorde
       },
       runCommand: recorder.runCommand,
       startChild: recorder.startChild,
-      childWorks: (child) => recorder.workingChildren.has(child),
+      childWorks: (routine) => recorder.children.some((child) => child.routine === routine && recorder.workingChildren.has(child.id)),
       filesDir: FILES_DIR,
       print: (message, data) => recorder.prints.push({ message, ...(data ? { data } : {}) }),
     };

@@ -295,16 +295,13 @@ export class Timers extends Context.Service<
             Effect.flatMap((started) =>
               "child" in started
                 ? finish(routine.name, routine.created_at, runId, { result: "child", output: started.child })
-                : finish(routine.name, routine.created_at, runId, { result: "error", output: started.error }),
+                : finish(routine.name, routine.created_at, runId, { result: "error", output: `the child could not start: ${started.error}` }),
             ),
             Effect.uninterruptible,
           );
 
-        /** Whether the child the routine's last run started still works. */
-        const childWorks = (routine: string) =>
-          db(() => sql.get<{ output: string }>("SELECT output FROM bot_routine_runs WHERE routine = ? AND result = 'child' ORDER BY id DESC LIMIT 1", routine)).pipe(
-            Effect.map((last) => last !== undefined && (config.childWorks?.(last.output) ?? false)),
-          );
+        /** Whether a child the routine started still works: the child keeps the routine's name, not this table. */
+        const childWorks = (routine: string) => Effect.sync(() => config.childWorks?.(routine) ?? false);
 
         /** Start what is due: a --note routine's wake, a --run routine's command, or a --child routine's child. Missed times are skipped. */
         const routinesDue = Effect.gen(function* () {

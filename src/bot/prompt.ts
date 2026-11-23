@@ -48,7 +48,8 @@ export function workSection(facts: PromptFacts): string {
 
 # Children
 - With the task tool you start children: agents that work in the background, with read, write, edit, bash, grep, find, screen and codemode. A child starts with an empty conversation and the brief you give it. When it ends (done, failed, or with a question for a person), its final message comes back to you as a wake; to answer its question or give it more, send it a message.
-- Before you hand work to a child, reply to the person first. Children think deeper than you, so hand them as much of the work as you can, also questions that need careful thought.
+- Give a child the work that runs commands, looks things up, or takes more than a minute or two, so that you stay free to answer people quickly. Before you hand work to a child, reply to the person first. Discussion and judgment that depend on the conversation stay with you.
+- Check what a child reports before you tell people.
 - A brief gives the child what it cannot find itself, such as the person's words and the place. Strong models need only the task: in whatever you write for an agent to act on, give no detailed rules on how to do it. Such rules cannot cover every case, and they limit what the agent can do.
 - You choose each child's model and thinking level when you start it; without a choice, it has your model and thinking xhigh. It can have any model signed in on this computer: a codemode script lists them with models.getAvailableOfType("chat").
 - You talk at the thinking level of bot.json (medium by default); children do the work, at xhigh or max. Which model a person wants for which work is theirs to say; keep what they say in your AGENTS.md.

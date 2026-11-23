@@ -38,7 +38,8 @@ function chatJudge(models: Models, mainModel: () => string): Judge {
       const reply = await models.completeSimple(
         model,
         { systemPrompt: CHAT_JUDGE_PROMPT, messages: [{ role: "user", content, timestamp: Date.now() }] },
-        { ...(reasoning ? { reasoning } : {}), ...(trace ? { telemetry: trace } : {}) },
+        // The short prompt cache entry by name: a judgment runs once, and PI_CACHE_RETENTION=long would give it the long one.
+        { cacheRetention: "short", ...(reasoning ? { reasoning } : {}), ...(trace ? { telemetry: trace } : {}) },
       );
       if (reply.stopReason === "error" || reply.stopReason === "aborted") throw new Error(reply.errorMessage ?? reply.stopReason);
       const text = reply.content.map((block) => (block.type === "text" ? block.text : "")).join("");

@@ -139,6 +139,8 @@ describe("pi's prompt cache warming", { timeout: 90_000 }, () => {
     // pi warms at 90% of the entry's lifetime, keeping at least 10 seconds: here every 2 seconds.
     await waitFor(() => warms().length >= 2, { timeout: 20_000, what: "two warms" });
     const real = agentRequests(model).filter((request) => request.maxTokens !== 1);
+    // With the long entry the main agent's request asked for: pi times the warms by its lifetime.
+    expect(real.at(-1)!.cacheRetention).toBe("24h");
     for (const warm of warms()) expect(body(warm)).toEqual(body(real.at(-1)!));
     expect(model.requests.filter((request) => request.maxTokens !== 1 && isMemoryPass(request)).length).toBeGreaterThan(0);
     expect(gateway.sent()).toHaveLength(1);

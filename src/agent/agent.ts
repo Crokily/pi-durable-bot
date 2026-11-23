@@ -62,6 +62,7 @@ import { deleteLeftForks, lastAnswer, type MemoryHost, MemoryPasses, readPaths, 
 import { modelRef, POTS_IDENTITY, requireModel } from "./models.ts";
 import type { CommandScopes } from "./scopes.ts";
 import { NO_SCREEN, renderBusy, type Screen, ScreenLeases } from "./screen.ts";
+import { CacheRetentions } from "./retention.ts";
 import { CacheWarming, type CacheWarmingMode } from "./warming.ts";
 
 const context = BACKGROUND_CONTEXT;
@@ -492,11 +493,16 @@ export class Agent {
     const warmable = (conversation: string) =>
       !(agent && agent.#closing) && (conversation === String(ROOT_CONVERSATION_ID) || children.some((each) => each.conversationId === conversation && each.stoppedAt === undefined));
     const warming = options.cacheWarming ? await CacheWarming.open(models, options.cacheWarming, warmable) : undefined;
+    // The long prompt cache entry for the main conversation only, where pi's model data has one: it is woken minutes to an
+    // hour apart, children rarely pause.
+    const retentions = new CacheRetentions((conversation) => conversation === String(ROOT_CONVERSATION_ID));
     // pi-durable hands a hook the task's runtime, whose abort signal is the request's: so the request is known as the
     // conversation's when it goes out.
-    const warmingHooks = hook(GenerationTask, {
+    const requestHooks = hook(GenerationTask, {
       beforeRequest: (_request, api) => {
-        warming?.request(String(api.conversationId), (api as { signal?: AbortSignal }).signal);
+        const signal = (api as { signal?: AbortSignal }).signal;
+        retentions.request(String(api.conversationId), signal);
+        warming?.request(String(api.conversationId), signal);
         return undefined;
       },
       afterResponse: (message, api) => warming?.response(String(api.conversationId), message),
@@ -530,7 +536,7 @@ export class Agent {
         searchTool(createGrepToolDefinition(options.workspace)),
         searchTool(createFindToolDefinition(options.workspace)),
       ],
-      hooks: warming ? [warmingHooks] : [],
+      hooks: [requestHooks],
     });
     // pi's code mode, for the main agent and its children. As in pi, a script waits for the MCP servers it names, or for
     // all of them when it looks tools up, so it sees their tools. A server that connected meanwhile came after this
@@ -601,7 +607,8 @@ export class Agent {
     harness = await Harness.open(
       storage,
       {
-        models: warming ? warming.wrap(models) : models,
+        // The retention first, so a warm repeats the request with it, and pi times the warm by that entry's lifetime.
+        models: retentions.wrap(warming ? warming.wrap(models) : models),
         // pi-durable names pi to providers unless told otherwise.
         identity: POTS_IDENTITY,
         registry,

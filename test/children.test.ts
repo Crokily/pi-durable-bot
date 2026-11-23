@@ -86,7 +86,14 @@ const HANG = "sleep 6131 & echo $! > hang.pid; echo probing 5901; wait";
 
 async function setUp(options: { moreModels?: boolean; definition?: Record<string, unknown>; promptCacheSeconds?: number } = {}): Promise<void> {
   model = await startFakeModel(script);
-  gateway = new TestGateway({ model, moreModels: options.moreModels ?? false, ...(options.promptCacheSeconds ? { promptCacheSeconds: options.promptCacheSeconds } : {}) });
+  // The fake models have pi's long prompt cache entry, and pi is told to use it everywhere: still only the main agent asks.
+  gateway = new TestGateway({
+    model,
+    moreModels: options.moreModels ?? false,
+    longPromptCache: true,
+    env: { PI_CACHE_RETENTION: "long" },
+    ...(options.promptCacheSeconds ? { promptCacheSeconds: options.promptCacheSeconds } : {}),
+  });
   if (options.definition) {
     const file = join(gateway.botDir, "bot.json");
     writeFileSync(file, `${JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), ...options.definition }, null, 2)}\n`);
@@ -136,6 +143,12 @@ describe("children", { timeout: 90_000 }, () => {
     expect(child.tools).toEqual(["read", "write", "edit", "bash", "grep", "find", "codemode", "screen"]);
     expect(child.system).not.toMatch(/pots send|pots react|pots call|ask-secret/);
     expect(gateway.pots("children")).toMatch(/^c1 "research": ended .* ago, waits for a message, for test:#general, thinking xhigh$/m);
+    // The main agent's requests keep the provider's long prompt cache entry, as it is woken minutes to an hour apart; the
+    // child's, which rarely pause, the short one, also with PI_CACHE_RETENTION=long.
+    const main = agentRequests(model).filter((request) => !isChild(request));
+    expect(main.length).toBeGreaterThan(0);
+    expect(main.map((request) => request.cacheRetention)).toEqual(main.map(() => "24h"));
+    expect(model.requests.filter(isChild).map((request) => request.cacheRetention)).toEqual(model.requests.filter(isChild).map(() => undefined));
 
     // The end did not wake the main agent: its only wake is the mention, and it made two requests for it.
     await pause(2_000);

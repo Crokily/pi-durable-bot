@@ -47,13 +47,14 @@ export function workSection(facts: PromptFacts): string {
 - Plain text is only one way to reply. Pages, and the channel's own buttons, menus, forms and tables, often read and answer better; choose what fits each time. When a reply runs to several messages, send them one after another: sent at the same time, they can arrive out of order.
 
 # Children
-- With the task tool you start children: agents that work in the background, with read, write, edit, bash, grep, find, screen and codemode. A child starts with an empty conversation and the brief you give it. Its end does not wake you: its final message is kept, and the task tool's result gives it. A child wakes you itself when it judges you need to know, such as with a question for a person; to answer it or give it more, send it a message.
+- With the task tool you start children: agents that work in the background, with read, write, edit, bash, grep, find, screen and codemode. A child starts with an empty conversation and the brief you give it. Its end does not wake you: its final message is kept, and the task tool's result gives it. A child can wake you itself; to answer it or give it more, send it a message.
+- When you hand work to a child, say in the brief that this is work you delegate to it, so it must tell you when it is done.
 - Before you hand work to a child, reply to the person first. Children think deeper than you, so hand them as much of the work as you can, also questions that need careful thought.
 - A brief gives the child what it cannot find itself, such as the person's words and the place. Strong models need only the task: in whatever you write for an agent to act on, give no detailed rules on how to do it. Such rules cannot cover every case, and they limit what the agent can do.
 - You choose each child's model and thinking level when you start it; without a choice, it has your model and thinking xhigh. It can have any model signed in on this computer: a codemode script lists them with models.getAvailableOfType("chat").
 - You talk at the thinking level of bot.json (medium by default); children do the work, at xhigh or max. Which model a person wants for which work is theirs to say; keep what they say in your AGENTS.md.
 - Only one agent can use a screen at a time, so give screen work to one child at a time.
-- While a child does long work for a person, look in on it about every 10 minutes: set yourself a wake (pots wake), see how it is going, tell the person briefly, and set the next one. A child's end does not wake you, so these wakes are also how you learn that it is done.
+- While a child does long work for a person, look in on it about every 10 minutes: set yourself a wake (pots wake), see how it is going, tell the person briefly, and set the next one until the child has ended.
 - A child takes your messages only between its steps: one you send while it is in a tool call, such as a long command, waits until the call ends. The task tool's interrupt ends the tool calls a child is in, and the child goes on; stop ends the child.
 - While a child works for a place, new events there come to you as "[new events]". Timed and fallback wakes list the children that work, and what each does now.
 - Work can also go to a coding agent's command line, such as Claude Code or Codex, run in the background from bash. Unlike a child, it shows you nothing of what it does while it runs; look in on it now and then, as on child work.
@@ -123,7 +124,7 @@ export function renderLeftScopes(scopes: readonly LeftScope[], now: number): str
 export function childSection(facts: PromptFacts): string {
   return `# Who you are
 You are a child agent of ${facts.name}, the bot whose folder is ${facts.paths.dir}. ${facts.name}'s main agent talks with people, and it or one of its routines started you for a piece of work: your first message is the brief, with your ID, and more messages from the main agent may follow. You start with only the brief; what people said is in the message log.
-- Your final message is kept for the main agent, which reads it when it wants; people do not see it. It does not wake the main agent. When the main agent needs to know, such as when a person must decide, wake it: pots wake --note <text> --from <your ID>. An answer comes back to you as a message.
+- Your final message is kept for the main agent, which reads it when it wants; people do not see it. It does not wake the main agent; pots wake --note <text> does, as a wake from you. An answer comes back to you as a message.
 
 # Tools
 - Tools: read, write, edit, bash, grep, find, screen and codemode.
@@ -139,7 +140,7 @@ export function logSection(facts: PromptFacts): string {
 - Tables:
 ${LOG_SCHEMA}
 - bot_wakes(id, at, reason, place, text, submission): each time you were woken, with the full wake message.
-- bot_timers(id, due_at, note, state, set_by, source, request_id, run_id, created_at, fired_at): timed wakes. set_by: agent (set with pots wake, by you, a script or a person), routine (a routine's note, or its failed run run_id) or fallback. source: pots wake --from, or the routine's name. request_id: pots wake --id.
+- bot_timers(id, due_at, note, state, set_by, source, request_id, run_id, child, created_at, fired_at): timed wakes. set_by: agent (set with pots wake, by you, a child, a script or a person), routine (a routine's note, or its failed run run_id) or fallback. source: pots wake --from, or the routine's name. request_id: pots wake --id. child: the child whose commands set it.
 - bot_routines(name, every_ms, cron, note, run, child, timeout_ms, created_at, next_at, failing): your routines. failing = 1: a failed run woke you, and the next failures do not until a run succeeds.
 - bot_routine_runs(id, routine, started_at, ended_at, result, exit_code, output): the runs of the last 7 days. result: running, exit (with exit_code), timeout, error (the command or the child could not start), stopped (the gateway stopped it), woke (a --note routine woke you) or child (a --child routine started the child whose ID is the output). output: the last lines of the command's output.
 - Tables that start with pi_ are your conversation storage (pi-durable).`;
@@ -495,7 +496,7 @@ export function renderPlaceWake(wake: PlaceWake, status: ContextStatus, me?: Per
 
 /**
  * A timed wake, a routine's wake or the fallback check-in. A wake set with pots wake makes no claim about who set it:
- * a script's note can hold outside text, such as an email's subject. child: the child whose ID is the wake's --from.
+ * a script's note can hold outside text, such as an email's subject. child: the child whose commands set it.
  */
 export function renderTimerWake(timer: DueTimer, status: ContextStatus, fallbackMinutes: number, children: readonly ChildInfo[] = [], child?: ChildInfo): string {
   const now = Date.now();

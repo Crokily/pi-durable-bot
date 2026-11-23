@@ -31,8 +31,11 @@ export interface GatewayOptions {
   readonly fireTimer: (timer: DueTimer, caller?: TelemetrySpan) => Promise<Delivered>;
   /** Run a routine's command as the bot's bash tool runs one, with env added. Without it, routines with --run fail to start. */
   readonly runCommand?: RunCommand;
-  /** Start a child for a routine, with its brief: the child's ID, or why it could not start. Without it, routines with --child fail to start. */
-  readonly startChild?: (routine: string, brief: string) => Promise<{ child: string } | { error: string }>;
+  /**
+   * Start a child for a routine, with its brief: the child's ID; why it could not start; or working: the routine's
+   * earlier child works, so none started. Without it, routines with --child fail to start.
+   */
+  readonly startChild?: (routine: string, brief: string) => Promise<{ child: string } | { error: string } | { working: string }>;
   /** Whether a child that this routine started still works. */
   readonly childWorks?: (routine: string) => boolean;
   /** Where the files of messages are saved, one folder per message. What is in it is deleted FILE_DAYS days after it was saved. */

@@ -173,6 +173,10 @@ export function childActivity(
   };
 }
 
+/** The longest result the task tool gives in its output; a longer one goes to a file. */
+const RESULT_CHARS = 30_000;
+const RESULT_LINES = 1_500;
+
 /** How much of a command or an output line a description shows. */
 const SHOWN_CHARS = 150;
 
@@ -241,6 +245,10 @@ export interface ChildrenHost {
   interrupt(child: ChildInfo): Promise<string>;
   /** A child's work ended: it holds nothing any more, such as the screen. */
   settled(conversationId: string): void;
+  /** Save a child's result that is too long for a tool's output to a file: its path. */
+  saveResult(child: string, text: string): Promise<string>;
+  /** Crash tests: before a reporter keeps how its child ended; ends early when the reporter is aborted. */
+  beforeKeep?(child: string, signal: AbortSignal): Promise<void>;
 }
 
 /** A new child, as the task tool or a routine starts it. */
@@ -258,11 +266,16 @@ export interface ChildStart {
   thinking: ModelThinkingLevel;
 }
 
+export type ChildStarted = { id: string } | { full: ChildInfo[] } | { working: string };
+
 /** The task extension, and how the bot starts a child itself, for a routine. */
 export interface ChildrenTools {
   extension: Extension;
-  /** Start a child in a commit of the main conversation: its ID, or, at the cap, the children that work. */
-  start(tx: Tx, start: ChildStart, now: number): Promise<{ id: string } | { full: ChildInfo[] }>;
+  /**
+   * Start a child in a commit of the main conversation: its ID; at the cap, the children that work; or, for a routine
+   * whose earlier child works again, that child.
+   */
+  start(tx: Tx, start: ChildStart, now: number): Promise<ChildStarted>;
 }
 
 /** How long, in words: "12 s", "4 min", "2.5 h". */
@@ -348,6 +361,13 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
   // end: only in a reporter that an earlier version left in its report phase, which handed the end to the main agent.
   type ReporterState = { phase: "deliver" } | { phase: "report"; end?: { status: "answered" | "failed"; text: string } };
 
+  /** Keep an answer of the child, once: several messages can end in one answer. */
+  const keepAnswer = (record: ChildRecord, answer: EntryId, now: number) => {
+    if (record.reported.includes(answer)) return;
+    record.reported.push(answer);
+    record.result = { at: now };
+  };
+
   /** The reporter ends: it is no longer live, and its child waits for a message once no other reporter is live. */
   const finish = (state: ChildrenState, reporter: string, now: number) => {
     const id = state.live[reporter];
@@ -381,6 +401,7 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
         );
         const settled = await submission.wait(context);
         host.settled(String(conversationId));
+        await host.beforeKeep?.(reporter.input.child, runtime.signal);
         // One commit keeps how the child ended, so a restart does not decide again.
         await runtime.commit(async (tx) => {
           const next = { status: "running" as const, checkpoint: { phase: "report" as const } };
@@ -395,9 +416,7 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
             return next;
           }
           // An answer is kept also when a stop came after it.
-          if (settled.type !== "input" || record.reported.includes(settled.answer)) return next;
-          record.reported.push(settled.answer);
-          record.result = { at: runtime.now() };
+          if (settled.type === "input") keepAnswer(record, settled.answer, runtime.now());
           return next;
         }, context);
       },
@@ -415,7 +434,12 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
     },
     abort: (reporter, runtime, context) =>
       runtime.commit(async (tx) => {
-        finish(await tx.doc(Children, runtime.conversationId), String(reporter.id), runtime.now());
+        const state = await tx.doc(Children, runtime.conversationId);
+        // A stop that came after the child answered, before the reporter kept the answer: the answer is kept.
+        const record = state.children[reporter.input.child];
+        const submission = await tx.submissionByRequest(reporter.input.conversationId, `child:${reporter.id}`);
+        if (record && submission?.type === "input" && submission.status === "done") keepAnswer(record, submission.answer, runtime.now());
+        finish(state, String(reporter.id), runtime.now());
         return { status: "terminal", outcome: { status: "aborted" } };
       }, context),
   });
@@ -439,9 +463,15 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
     (await Promise.all(working.map(withActivity))).map((child) => describeChild(child, at)).join("\n");
   const background = { ownership: { kind: "conversation" }, background: true } as const;
 
-  /** A new child, in a commit of the main conversation; at the cap, none. Its first message says its ID. */
-  const start = async (tx: Tx, input: ChildStart, now: number): Promise<{ id: string } | { full: ChildInfo[] }> => {
+  /**
+   * A new child, in a commit of the main conversation; none at the cap, or for a routine while its earlier child works,
+   * which the routine looked at before, but a message may have made that child work again since. Its first message says
+   * its ID.
+   */
+  const start = async (tx: Tx, input: ChildStart, now: number): Promise<ChildStarted> => {
     const state = await tx.doc(Children, ROOT_CONVERSATION_ID);
+    const earlier = input.routine === undefined ? undefined : Object.values(state.children).find((child) => child.routine === input.routine && isWorking(child));
+    if (earlier) return { working: earlier.id };
     const full = atCap(state);
     if (full !== undefined) return { full };
     const id = `c${state.next++}`;
@@ -478,7 +508,7 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
       "send: a message to a child; a child that waits starts on it " +
       "at once, and one that works takes it when its current tool calls end. interrupt: ends the tool calls a child is in, such as a command " +
       "that hangs; the child goes on, sees that they were aborted, and takes the messages that wait for it. " +
-      "stop: stops a child and what it runs. A child's end does not wake you; a child wakes you itself when it judges you need to know.",
+      "stop: stops a child and what it runs. A child's end does not wake you; a child can wake you itself.",
     parameters: obj(
       {
         action: StringEnum(["start", "list", "result", "send", "interrupt", "stop"] as const),
@@ -521,7 +551,7 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
           (tx) => start(tx, { title, brief: args.brief!, from: "the main agent", ...(place ? { place } : {}), ...(chosen === undefined ? {} : { chosen }), model, thinking: thinkingLevel }, api.now()),
           call,
         );
-        if ("full" in started) return text(await capText("Not started", started.full, api.now()));
+        if (!("id" in started)) return text("full" in started ? await capText("Not started", started.full, api.now()) : "Not started.");
         return text(
           `Started ${started.id} ("${title}")${place ? ` for ${place}` : ""}, model ${model.provider}/${model.modelId}${chosen === undefined ? " (yours)" : ""}, ` +
             `thinking ${thinkingLevel}.`,
@@ -534,7 +564,11 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
       if (args.action === "result") {
         const result = await api.commit((tx) => childResult(tx, child), call);
         const now = describeChild(childInfo(child), api.now());
-        return text(result === undefined ? `${now}\nNo final message yet.` : `${now}\nIts last final message:\n${result}`);
+        if (result === undefined) return text(`${now}\nNo final message yet.`);
+        // Tool output is cut at 2,000 lines or 50 KB: a longer result goes to a file, whole.
+        if (result.length <= RESULT_CHARS && result.split("\n").length <= RESULT_LINES) return text(`${now}\nIts last final message:\n${result}`);
+        const file = await host.saveResult(child.id, result);
+        return text(`${now}\nIts last final message is ${result.length} characters; all of it is in ${file}. Its start:\n${result.split("\n").slice(0, 100).join("\n").slice(0, 4_000)}`);
       }
       if (child.stoppedAt !== undefined) return text(`${child.id} was stopped; start a new child.`);
       if (args.action === "interrupt") {

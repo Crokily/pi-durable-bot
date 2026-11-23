@@ -237,6 +237,15 @@ export class TestGateway {
     writeFileSync(join(this.botDir, "crash-after-child-stop"), "");
   }
 
+  /** Hold each child's reporter after the child answered, before it keeps the answer, until releaseChildKeep. */
+  holdChildKeep(): void {
+    writeFileSync(join(this.botDir, "hold-child-keep"), "");
+  }
+
+  releaseChildKeep(): void {
+    rmSync(join(this.botDir, "hold-child-keep"), { force: true });
+  }
+
   // ---- The test platform ----
 
   /** A person says something. Returns the new message's ID on the platform. */

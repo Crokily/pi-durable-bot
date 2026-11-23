@@ -270,11 +270,13 @@ export class Agent {
   /** The running tool calls that give output as they run, by tool task, with when their last output came. */
   readonly #outputs: Map<string, number | undefined>;
   /**
-   * Crash tests: called right after a stop marked a child stopped, before its work ended, and right before a memory
-   * pass forks the main conversation.
+   * Crash tests: called right after a stop marked a child stopped, before its work ended; before a child's reporter
+   * keeps how the child ended, which it may hold up until its reporter is aborted; and right before a memory pass forks
+   * the main conversation.
    */
   readonly crashTests: {
     afterStopMark?: (child: string) => void;
+    beforeChildKeep?: (child: string, signal: AbortSignal) => Promise<void>;
     beforeMemoryPass?: () => void;
   } = {};
 
@@ -321,6 +323,13 @@ export class Agent {
         execution.inheritEnv = false;
         execution.env = { ...base, ...extra, ...execution.env };
       };
+    // A child's commands also have POTS_CHILD, its ID, which only Pots sets: pots wake in them comes from the child.
+    // Read from the children document, so it holds from a child's first command.
+    const childEnv = async (conversation: ConversationId, read: () => Promise<Readonly<ChildrenState> | undefined>): Promise<Record<string, string>> => {
+      if (conversation === ROOT_CONVERSATION_ID) return {};
+      const child = Object.values((await read())?.children ?? {}).find((each) => each.conversationId === conversation);
+      return child ? { POTS_CHILD: child.id } : {};
+    };
     // When each running call of bash, screen and codemode last gave output, so a child's description can say how old its
     // last output is. Only in memory: a call does not run on after a restart.
     const outputs = new Map<string, number | undefined>();
@@ -406,7 +415,7 @@ export class Agent {
           });
           if (!taken.ok) return { output: text(renderBusy(screen, taken.lease, leases().idleMs, options.screen.bot)), isError: true };
           try {
-            return await createBashTool({ prepare: environment(screen.env) }).execute(args, api, call);
+            return await createBashTool({ prepare: environment({ ...screen.env, ...(await childEnv(api.conversationId, () => api.snapshot(Children, ROOT_CONVERSATION_ID, call))) }) }).execute(args, api, call);
           } finally {
             taken.done();
           }
@@ -517,7 +526,7 @@ export class Agent {
         defineTool({ ...read, execute: async (args, api, call) => withAgeNote(await read.execute(args, api, call), args.path, memoryFolders(), options.workspace) }),
         createWriteTool(),
         createEditTool(),
-        timed(createBashTool({ prepare: environment() })),
+        timed(defineTool({ ...createBashTool(), execute: async (args, api, call) => createBashTool({ prepare: environment(await childEnv(api.conversationId, () => api.snapshot(Children, ROOT_CONVERSATION_ID, call))) }).execute(args, api, call) })),
         searchTool(createGrepToolDefinition(options.workspace)),
         searchTool(createFindToolDefinition(options.workspace)),
       ],
@@ -558,6 +567,14 @@ export class Agent {
       activity: (conversation) => self().#activity(conversation),
       interrupt: (child) => self().interruptChild(child),
       settled: (conversation) => self().#releaseScreen(conversation),
+      saveResult: async (child, result) => {
+        const dir = join(options.workspace, "child-results");
+        await mkdir(dir, { recursive: true });
+        const file = join(dir, `${child}-${Date.now()}.md`);
+        await writeFile(file, result);
+        return file;
+      },
+      beforeKeep: async (child, signal) => agent?.crashTests.beforeChildKeep?.(child, signal),
     });
     const tasks = childrenTools.extension;
     // A child has the main agent's extensions without its channel actions and its task tool, and with its own prompt.
@@ -895,14 +912,14 @@ export class Agent {
 
   /**
    * Start a child for a routine, with the main agent's model and the default thinking level, for no place. The child
-   * keeps the routine's name, in the same commit, so the routine knows while it works. Returns its ID, or why it did
-   * not start: at the cap, the children that work.
+   * keeps the routine's name, in the same commit, so the routine knows while it works. Returns its ID; why it did not
+   * start at the cap; or the routine's earlier child, which works again.
    */
-  async startChild(routine: string, brief: string): Promise<{ id: string } | { refused: string }> {
+  async startChild(routine: string, brief: string): Promise<{ id: string } | { refused: string } | { working: string }> {
     const start = this.#startChild;
     if (!start) throw new Error("the agent is still starting");
     const started = await this.#root.commit((tx) => start(tx, { title: routine, brief, from: `routine ${routine}`, routine, model: this.#model, thinking: DEFAULT_CHILD_THINKING }, Date.now()), context);
-    if ("id" in started) return started;
+    if (!("full" in started)) return started;
     return { refused: `${started.full.length} children work now, as many as the cap (settings.maxChildren in bot.json)` };
   }
 

@@ -82,7 +82,9 @@ const wake = Command.make(
       if (Option.isSome(input.cancel)) return yield* printResult(yield* control(id, "POST", "/wakes/cancel", { id: input.cancel.value }));
       const at = Option.isSome(input.in) ? Date.now() + (yield* duration(input.in.value)) : Option.isSome(input.at) ? yield* time(input.at.value) : Date.now();
       const from = Option.getOrUndefined(input.from) ?? process.env.POTS_FROM;
-      const body = { at, note: input.note, ...(from ? { from } : {}), ...(Option.isSome(input.id) ? { id: input.id.value } : {}) };
+      // In a child's commands, Pots sets POTS_CHILD to its ID: the wake comes from that child.
+      const child = process.env.POTS_CHILD;
+      const body = { at, note: input.note, ...(from ? { from } : {}), ...(child ? { child } : {}), ...(Option.isSome(input.id) ? { id: input.id.value } : {}) };
       yield* printResult(yield* control(id, "POST", "/wake", body));
     }),
 ).pipe(Command.withDescription("Set a timed wake. With no time, the bot is woken now."));

@@ -40,9 +40,10 @@ const ADDED_COLUMNS = [
   ["source", "TEXT"],
   ["request_id", "TEXT"],
   ["run_id", "INTEGER"],
+  ["child", "TEXT"],
 ] as const;
 
-const COLUMNS = "id, due_at, note, set_by, source, request_id, run_id, created_at";
+const COLUMNS = "id, due_at, note, set_by, source, request_id, run_id, child, created_at";
 
 export interface Timer {
   id: number;
@@ -59,6 +60,8 @@ export interface Timer {
   request_id: string | null;
   /** The routine's failed run that this wake is about. */
   run_id: number | null;
+  /** The child whose commands set it with pots wake: $POTS_CHILD, which Pots sets only in a child's commands. */
+  child: string | null;
   created_at: number;
 }
 
@@ -72,6 +75,8 @@ export interface DueTimer extends Timer {
 export interface WakeOptions {
   source?: string;
   requestId?: string;
+  /** The child that sets it, from its own commands. */
+  child?: string;
 }
 
 /** A timer that add made, or the first one with the same request ID, with repeated set. */
@@ -141,15 +146,16 @@ export class Timers extends Context.Service<
 
         const pending = db(() => sql.all<Timer>(`SELECT ${COLUMNS} FROM bot_timers WHERE state = 'pending' ORDER BY due_at`));
 
-        const insertWake = async (tx: SqlExecutor, wake: { dueAt: number; note: string; setBy: Timer["set_by"]; now: number; source?: string; requestId?: string; runId?: number }) => {
+        const insertWake = async (tx: SqlExecutor, wake: { dueAt: number; note: string; setBy: Timer["set_by"]; now: number; source?: string; requestId?: string; runId?: number; child?: string }) => {
           await tx.run(
-            "INSERT INTO bot_timers (due_at, note, state, set_by, source, request_id, run_id, created_at) VALUES (?, ?, 'pending', ?, ?, ?, ?, ?)",
+            "INSERT INTO bot_timers (due_at, note, state, set_by, source, request_id, run_id, child, created_at) VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?)",
             wake.dueAt,
             wake.note,
             wake.setBy,
             wake.source ?? null,
             wake.requestId ?? null,
             wake.runId ?? null,
+            wake.child ?? null,
             wake.now,
           );
           return (await tx.get<Timer>(`SELECT ${COLUMNS} FROM bot_timers WHERE id = last_insert_rowid()`))!;
@@ -286,6 +292,17 @@ export class Timers extends Context.Service<
             );
           });
 
+        /**
+         * The routine's earlier child works again, since a message came to it after the routine looked: this time is
+         * skipped, as when the routine sees it, so the run is not kept.
+         */
+        const skipChild = (name: string, runId: number, working: string) =>
+          db(() => sql.run("DELETE FROM bot_routine_runs WHERE id = ?", runId)).pipe(
+            lock.withPermits(1),
+            Effect.andThen(Effect.sync(() => config.print("routine skipped: its last run still runs", { routine: name, run: runId, child: working }))),
+            Effect.catch((error) => Effect.sync(() => config.print("routine run failed", { routine: name, run: runId, error: error.message }))),
+          );
+
         /** Start a --child routine's child, and keep its ID, or why it could not start. */
         const startChild = (routine: Routine & { child: string }, runId: number) =>
           Effect.promise(async () => {
@@ -295,7 +312,9 @@ export class Timers extends Context.Service<
             Effect.flatMap((started) =>
               "child" in started
                 ? finish(routine.name, routine.created_at, runId, { result: "child", output: started.child })
-                : finish(routine.name, routine.created_at, runId, { result: "error", output: `the child could not start: ${started.error}` }),
+                : "working" in started
+                  ? skipChild(routine.name, runId, started.working)
+                  : finish(routine.name, routine.created_at, runId, { result: "error", output: `the child could not start: ${started.error}` }),
             ),
             Effect.uninterruptible,
           );

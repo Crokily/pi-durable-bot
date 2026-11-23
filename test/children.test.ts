@@ -34,11 +34,9 @@ function script(request: FakeRequest): FakeReply {
   if (isChild(request)) {
     if (last?.role === "tool" && last.content.includes('"id"')) return { text: "told the main agent" };
     if (last?.role !== "user") return { text: "done waiting" };
-    if (last.content.includes("and tell")) {
-      const id = /you are child (c\d+)/.exec(request.messages[0]!.content)?.[1] ?? "?";
-      return { call: { name: "bash", arguments: { command: `pots wake --note "the answer is 42, Alice should know" --from ${id}` } } };
-    }
+    if (last.content.includes("and tell")) return { call: { name: "bash", arguments: { command: `pots wake --note "the answer is 42, Alice should know"` } } };
     if (last.content.includes("wrap up")) return { text: "wrapped up" };
+    if (last.content.includes("answer at length")) return { text: `${Array.from({ length: 2_100 }, (_, line) => `line ${line + 1}`).join("\n")}\nTHE END` };
     if (last.content.includes("hang in bash")) return { call: { name: "bash", arguments: { command: HANG } } };
     if (last.content.includes("hang in a script")) return { call: { name: "codemode", arguments: { code: `return await tools.bash({ command: ${JSON.stringify(HANG)} });` } } };
     if (last.content.includes("wait long")) return { call: { name: "bash", arguments: { command: "sleep 60" } } };
@@ -73,6 +71,7 @@ function script(request: FakeRequest): FakeReply {
     const choice = on ? { model: on, thinking: "low" } : {};
     return { call: { name: "task", arguments: { action: "start", title: "waiter", brief: `wait for go, then answer (${on ?? "no model"})`, ...choice } } };
   }
+  if (last.content.includes("please write at length")) return { call: { name: "task", arguments: { action: "start", title: "long", brief: "answer at length" } } };
   if (last.content.includes("please nap")) return { call: { name: "task", arguments: { action: "start", title: "nap", brief: "nap first, then answer" } } };
   if (last.content.includes("please note")) return { call: { name: "task", arguments: { action: "start", title: "note", brief: "save a memory", thinking: "max" } } };
   if (last.content.includes("please research")) {
@@ -155,6 +154,18 @@ describe("children", { timeout: 90_000 }, () => {
     expect(gateway.pots("trace", "mention:test:#general:1")).toMatch(/^child run, trace [^\n]*\nsubmission \d+ \(placed\)[\s\S]*model fake\/coworker, 100 in \(80% cached\), 10 out, stop/m);
   });
 
+  it("gives a result too long for a tool's output whole, in a file", async () => {
+    await setUp();
+    gateway.say("general", "alice", `@${ME} please write at length`);
+    await waitFor(() => ended("c1"), { what: "the child's end" });
+    const result = await resultOf("c1");
+    const file = /all of it is in (\S+)\. Its start:\nline 1\n/.exec(result)?.[1];
+    expect(file).toBeDefined();
+    const saved = readFileSync(file!, "utf8");
+    expect(saved.split("\n")).toHaveLength(2_101);
+    expect(saved.endsWith("line 2100\nTHE END")).toBe(true);
+  });
+
   it("wakes the main agent itself when it judges that the main agent needs to know", async () => {
     await setUp();
     gateway.say("general", "alice", `@${ME} please research and tell`);
@@ -164,11 +175,20 @@ describe("children", { timeout: 90_000 }, () => {
     expect(wakeLine(wake)).toMatch(/^\[wake\] wake from your child c1 "research", which works for test:#general: it set it with pots wake at .*\. Its note is what it wrote$/);
     await waitFor(() => ended("c1"), { what: "the child's end" });
     expect(await resultOf("c1")).toMatch(/\nIts last final message:\ntold the main agent$/);
+    // A script outside the child that names itself c1 is a script, not the child, and gets no place.
+    gateway.pots("wake", "--note", "from a script", "--from", "c1");
+    await waitFor(() => wakes(model).some((text) => text.includes("Note: from a script")), { what: "the script's wake" });
+    expect(wakeLine(wakes(model).find((text) => text.includes("Note: from a script"))!)).toMatch(/^\[wake\] timed wake from c1: a command on this computer, not a person in a channel/);
     // One wake from the child, for its place, and none for its end.
     expect(gateway.query<{ reason: string; place: string | null }>("SELECT reason, place FROM bot_wakes").map((wake) => [wake.reason, wake.place])).toEqual([
       ["mention", "test:#general"],
       ["timer", "test:#general"],
       ["mention", "test:#general"],
+      ["timer", null],
+    ]);
+    expect(gateway.query<{ child: string | null; source: string | null }>("SELECT child, source FROM bot_timers WHERE set_by = 'agent' ORDER BY id")).toEqual([
+      { child: "c1", source: null },
+      { child: null, source: "c1" },
     ]);
   });
 
@@ -283,6 +303,17 @@ describe("children", { timeout: 90_000 }, () => {
     await pause(2_000);
     expect(model.requests.filter(isChild)).toHaveLength(2);
     expect(wakeLine(gateway.pots("children"))).toMatch(/^c1 "research": stopped/);
+  });
+
+  it("keeps a child's answer when a stop comes after the answer, before its reporter kept it", async () => {
+    await setUp();
+    gateway.holdChildKeep();
+    gateway.say("general", "alice", `@${ME} please research`);
+    await waitFor(() => gateway.output.some((line) => line.message === "crash test: holding the child's end"), { what: "the held answer" });
+    gateway.say("general", "alice", `@${ME} stop the research`);
+    await waitFor(() => /^c1 "research": stopped/m.test(gateway.pots("children")), { what: "the stop" });
+    gateway.releaseChildKeep();
+    expect(await resultOf("c1")).toMatch(/^c1 "research": stopped \d+ s ago, for test:#general\nIts last final message:\nthe answer is 42$/);
   });
 
   it("has its prompt cache warmed while it works, as pi warms its session, and no more once it is stopped", async () => {

@@ -210,6 +210,17 @@ describe("routines", () => {
         assert.deepStrictEqual(recorder.children.map((child) => child.at), [10 * MINUTE, 30 * MINUTE, 60 * MINUTE]);
         assert.strictEqual((yield* timers.routines).routines[0]?.failing, 0);
         assert.strictEqual(recorder.timers.length, 1);
+
+        // A message made the earlier child work again after the routine looked: that time is skipped, as when the
+        // routine sees it, and leaves no run and no wake.
+        recorder.workingChildren.clear();
+        recorder.workingAgain = "c3";
+        yield* pass(10 * MINUTE);
+        assert.strictEqual(recorder.children.length, 3);
+        assert.isTrue(recorder.prints.some((print) => print.message === "routine skipped: its last run still runs" && print.data?.child === "c3"));
+        const runs = (yield* timers.routines).routines[0]?.last;
+        assert.deepStrictEqual([runs?.result, runs?.output], ["child", "c3"]);
+        assert.strictEqual(recorder.timers.length, 1);
       }),
     ));
 

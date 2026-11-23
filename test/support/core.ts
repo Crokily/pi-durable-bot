@@ -45,6 +45,8 @@ export class Recorder {
   readonly workingChildren = new Set<string>();
   /** Why the next children cannot start, while set. */
   refuseChildren?: string;
+  /** The routine's earlier child, which works again when a start comes, while set: no child starts. */
+  workingAgain?: string;
   readonly prints: { message: string; data?: Record<string, unknown> }[] = [];
   /** Places the bot works on now. */
   readonly working = new Set<Address>();
@@ -80,8 +82,9 @@ export class Recorder {
       this.commands.push(entry);
     });
 
-  readonly startChild = async (routine: string, brief: string): Promise<{ child: string } | { error: string }> => {
+  readonly startChild = async (routine: string, brief: string): Promise<{ child: string } | { error: string } | { working: string }> => {
     if (this.refuseChildren !== undefined) return { error: this.refuseChildren };
+    if (this.workingAgain !== undefined) return { working: this.workingAgain };
     const id = `c${this.children.length + 1}`;
     this.children.push({ id, routine, brief, at: this.now() });
     this.workingChildren.add(id);

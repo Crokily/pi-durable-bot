@@ -230,8 +230,8 @@ export class Bot implements WakeTarget {
     const judge = createJudge(definition.judge, env.models, () => current().model);
     // The environment of bash commands, of routines' commands and of the stdio MCP servers. Without the screen's variables: a command that uses
     // the screen goes through the screen tool, which holds the screen for one agent at a time. Without POTS_FROM, which
-    // only a routine's command has.
-    const without = new Set<string>([...SCREEN_VARIABLES, "POTS_FROM"]);
+    // only a routine's command has, and POTS_CHILD, which only a child's commands have.
+    const without = new Set<string>([...SCREEN_VARIABLES, "POTS_FROM", "POTS_CHILD"]);
     const shellEnv: Record<string, string> = {
       ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && !without.has(entry[0]))),
       POTS_BOT: id,
@@ -259,7 +259,7 @@ export class Bot implements WakeTarget {
       // A routine's child: no place, the main agent's model and the default thinking level.
       startChild: async (routine, brief) => {
         const started = await self().#agent.startChild(routine, brief);
-        return "id" in started ? { child: started.id } : { error: started.refused };
+        return "id" in started ? { child: started.id } : "working" in started ? started : { error: started.refused };
       },
       childWorks: (routine) => self().#workingChildren().some((each) => each.routine === routine),
       filesDir: paths.files,
@@ -421,6 +421,14 @@ export class Bot implements WakeTarget {
     gateway.waker.afterDeliver = crashTest(paths.crashAfterWake, "crash test: dying after the wake", "wakeId");
     // Right after a stop marked a child stopped, before its work ended. The next start must end that work.
     agent.crashTests.afterStopMark = crashTest(paths.crashAfterChildStop, "crash test: dying after marking the child stopped", "child");
+    // After a child answered, before its reporter keeps the answer: held while the file is there, or until the reporter
+    // is aborted. A stop then must still keep the answer.
+    agent.crashTests.beforeChildKeep = async (child, signal) => {
+      if (!existsSync(paths.holdChildKeep)) return;
+      print("crash test: holding the child's end", { child });
+      while (existsSync(paths.holdChildKeep) && !signal.aborted) await new Promise((resolve) => setTimeout(resolve, 100));
+      signal.throwIfAborted();
+    };
     // Right before a memory pass forks the main conversation. The next start must make the pass.
     agent.crashTests.beforeMemoryPass = () => crashTest(paths.crashBeforeMemoryPass, "crash test: dying before the memory pass", "bot")(id);
     for (const row of await sql.all<{ submission: string; place: string }>(
@@ -551,8 +559,8 @@ export class Bot implements WakeTarget {
 
   async #deliverTimer(timer: DueTimer, caller?: TelemetrySpan): Promise<Delivered> {
     const children = await this.#agent.childrenNow(this.#workingChildren());
-    // A wake a child set with its ID as --from.
-    const child = timer.set_by === "agent" && timer.source !== null ? this.#agent.children.find((each) => each.id === timer.source) : undefined;
+    // A wake a child set from its own commands, which have its ID in POTS_CHILD.
+    const child = timer.set_by === "agent" && timer.child !== null ? this.#agent.children.find((each) => each.id === timer.child) : undefined;
     const text = renderTimerWake(timer, await this.#agent.contextStatus(), this.#definition.settings.fallbackWakeMinutes, children, child);
     return this.#submit(`timer:${timer.id}`, timer.set_by === "agent" ? "timer" : timer.set_by, child?.place, text, false, caller);
   }
@@ -671,6 +679,7 @@ export class Bot implements WakeTarget {
         const at = typeof body.at === "number" ? body.at : Date.now();
         const options = {
           ...(typeof body.from === "string" && body.from ? { source: body.from } : {}),
+          ...(typeof body.child === "string" && body.child ? { child: body.child } : {}),
           ...(typeof body.id === "string" && body.id ? { requestId: body.id } : {}),
         };
         return this.#timers.add(at, typeof body.note === "string" ? body.note : "", options);

@@ -123,6 +123,12 @@ describe("children", { timeout: 90_000 }, () => {
     expect(child.tools).toEqual(["read", "write", "edit", "bash", "grep", "find", "codemode", "screen"]);
     expect(child.system).not.toMatch(/pots send|pots react|pots call|ask-secret/);
     expect(gateway.pots("children")).toMatch(/^c1 "research": ended .* ago, waits for a message, for test:#general, thinking xhigh$/m);
+    // The main agent's requests keep the provider's long prompt cache entry, as it is woken minutes to an hour apart; the
+    // child's, which rarely pause, keep the default one.
+    const main = agentRequests(model).filter((request) => !isChild(request));
+    expect(main.length).toBeGreaterThan(0);
+    expect(main.map((request) => request.cacheRetention)).toEqual(main.map(() => "24h"));
+    expect(model.requests.filter(isChild).map((request) => request.cacheRetention)).toEqual(model.requests.filter(isChild).map(() => undefined));
 
     // On Windows a stop ends the process at once, as a kill does, before the gateway writes the spans of its last second:
     // there, wait until the last model request is written (with it, all that ended before it).

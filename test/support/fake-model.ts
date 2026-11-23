@@ -19,6 +19,8 @@ export interface FakeRequest {
   readonly session?: string;
   /** The longest answer the request asks for, in tokens, when it says: 1 for a prompt cache warm. */
   readonly maxTokens?: number;
+  /** The prompt cache retention the request asks for (prompt_cache_retention), when it asks: "24h" for pi-ai's long one. */
+  readonly cacheRetention?: string;
   /** The app the request names to OpenRouter (X-OpenRouter-Title and HTTP-Referer), when it names one. */
   readonly app?: { readonly title?: string; readonly referer?: string };
 }
@@ -192,7 +194,7 @@ interface OpenAiMessage {
   tool_calls?: { function: { name: string } }[];
 }
 
-function toRequest(body: { model: string; messages: OpenAiMessage[]; tools?: { function: { name: string } }[]; max_tokens?: number; max_completion_tokens?: number }): FakeRequest {
+function toRequest(body: { model: string; messages: OpenAiMessage[]; tools?: { function: { name: string } }[]; max_tokens?: number; max_completion_tokens?: number; prompt_cache_retention?: string }): FakeRequest {
   const text = (content: OpenAiMessage["content"]) =>
     typeof content === "string" ? content : (content ?? []).map((part) => (part.type === "text" ? (part.text ?? "") : "")).join("");
   const isSystem = (message: OpenAiMessage | undefined) => message?.role === "system" || message?.role === "developer";
@@ -211,6 +213,7 @@ function toRequest(body: { model: string; messages: OpenAiMessage[]; tools?: { f
       })),
     tools: (body.tools ?? []).map((tool) => tool.function.name),
     ...(body.max_tokens !== undefined || body.max_completion_tokens !== undefined ? { maxTokens: body.max_tokens ?? body.max_completion_tokens } : {}),
+    ...(body.prompt_cache_retention !== undefined ? { cacheRetention: body.prompt_cache_retention } : {}),
   };
 }
 

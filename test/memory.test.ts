@@ -67,6 +67,9 @@ describe("memory", { timeout: 90_000 }, () => {
     expect(pass[0]!.messages.slice(0, main.messages.length)).toEqual(main.messages);
     expect(pass[0]!.session).toBeDefined();
     expect(pass[0]!.session).toBe(main.session);
+    // The main agent's requests keep the long prompt cache entry; a pass, which runs once, the default one.
+    expect(main.cacheRetention).toBe("24h");
+    expect(pass.map((request) => request.cacheRetention)).toEqual(pass.map(() => undefined));
     expect(lastUser(pass[0]!)).toMatch(/^You are now acting as the memory extraction subagent\. Analyze the most recent ~4 messages above/);
     expect(lastUser(pass[0]!)).not.toContain("## Existing memory files");
     // Code refused the command that writes outside the memory and the send; the files it wrote are there.

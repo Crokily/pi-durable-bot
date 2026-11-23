@@ -38,6 +38,11 @@ export interface BotOptions {
    * it worth its cost. Without it they have no prompt cache, and nothing is warmed.
    */
   readonly promptCacheSeconds?: number;
+  /**
+   * pi's model data gives the fake models a long prompt cache entry (5 minutes short, 1 hour long), as Anthropic's have,
+   * so the main agent asks for it. Unpriced: nothing is warmed. promptCacheSeconds goes first.
+   */
+  readonly longPromptCache?: boolean;
   /** Changes to the gateway's environment; undefined takes a variable out. */
   readonly env?: Record<string, string | undefined>;
 }
@@ -85,7 +90,11 @@ export class TestGateway {
     writeFileSync(join(this.botDir, "bot.json"), JSON.stringify(definition, null, 2));
     // Dollars per million tokens: a missed cache entry of the fake model's 100 input tokens costs $100. The short entry
     // (the children's) and the long one (the main agent's) last as long here.
-    const cache = options.promptCacheSeconds ? { promptCache: { short: options.promptCacheSeconds, long: options.promptCacheSeconds }, cost: { input: 1_000_000, output: 0, cacheRead: 1_000, cacheWrite: 0 } } : {};
+    const cache = options.promptCacheSeconds
+      ? { promptCache: { short: options.promptCacheSeconds, long: options.promptCacheSeconds }, cost: { input: 1_000_000, output: 0, cacheRead: 1_000, cacheWrite: 0 } }
+      : options.longPromptCache
+        ? { promptCache: { short: 300, long: 3_600 } }
+        : {};
     // pi's model layer reads its endpoints from here instead of ~/.pi/agent.
     const models = {
       providers: {

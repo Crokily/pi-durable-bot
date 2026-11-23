@@ -488,7 +488,8 @@ export class Agent {
     const warmable = (conversation: string) =>
       !(agent && agent.#closing) && (conversation === String(ROOT_CONVERSATION_ID) || children.some((each) => each.conversationId === conversation && each.stoppedAt === undefined));
     const warming = options.cacheWarming ? await CacheWarming.open(models, options.cacheWarming, warmable) : undefined;
-    // The long prompt cache entry for the main conversation only: it is woken minutes to an hour apart, children rarely pause.
+    // The long prompt cache entry for the main conversation only, where pi's model data has one: it is woken minutes to an
+    // hour apart, children rarely pause.
     const retentions = new CacheRetentions((conversation) => conversation === String(ROOT_CONVERSATION_ID));
     // pi-durable hands a hook the task's runtime, whose abort signal is the request's: so the request is known as the
     // conversation's when it goes out.

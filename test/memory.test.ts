@@ -24,7 +24,8 @@ afterEach(async () => {
 
 async function setUp(memory?: (request: FakeRequest) => FakeReply | Promise<FakeReply>, script = coworker, settings?: Record<string, unknown>): Promise<void> {
   model = await startFakeModel(script, memory ? { memory } : {});
-  gateway = new TestGateway({ model, ...(settings ? { settings } : {}) });
+  // The fake model has pi's long prompt cache entry, and pi is told to use it everywhere: still only the main agent asks.
+  gateway = new TestGateway({ model, longPromptCache: true, env: { PI_CACHE_RETENTION: "long" }, ...(settings ? { settings } : {}) });
   await gateway.start();
 }
 
@@ -67,7 +68,8 @@ describe("memory", { timeout: 90_000 }, () => {
     expect(pass[0]!.messages.slice(0, main.messages.length)).toEqual(main.messages);
     expect(pass[0]!.session).toBeDefined();
     expect(pass[0]!.session).toBe(main.session);
-    // The main agent's requests keep the long prompt cache entry; a pass, which runs once, the default one.
+    // The main agent's requests keep the long prompt cache entry; a pass, which runs once, the short one, also with
+    // PI_CACHE_RETENTION=long.
     expect(main.cacheRetention).toBe("24h");
     expect(pass.map((request) => request.cacheRetention)).toEqual(pass.map(() => undefined));
     expect(lastUser(pass[0]!)).toMatch(/^You are now acting as the memory extraction subagent\. Analyze the most recent ~4 messages above/);

@@ -9,7 +9,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { TeamsFormatConverter } from "@chat-adapter/teams";
 import type { InvokeResponse } from "@microsoft/teams.api";
 import { convertEmojiPlaceholders } from "chat";
-import { linkBareUrls } from "../links.ts";
+import { separateBareUrls } from "../links.ts";
 import type {
   Address,
   ChannelAdapter,
@@ -998,10 +998,18 @@ export class TeamsChannel implements ChannelAdapter {
    * Teams mention, with the person's name from what the channel has seen.
    */
   #outgoing(text: string): { text: string; entities: Record<string, unknown>[] } {
+    // A bare URL against CJK text gets a space to set it apart, unless that would take the text over Teams' limit.
+    const spaced = this.#render(separateBareUrls(text));
+    if (!refusal(spaced.text)) return spaced;
+    const plain = this.#render(text);
+    return refusal(plain.text) ? spaced : plain;
+  }
+
+  #render(text: string): { text: string; entities: Record<string, unknown>[] } {
     const prefix = this.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const people: string[] = [];
     const marked = text.replace(new RegExp(`<${prefix}:@([^>\\s/]+)>`, "g"), (_token, id: string) => `${people.push(id) - 1}`);
-    const rendered = convertEmojiPlaceholders(converter.renderPostable({ markdown: linkBareUrls(marked) }), "teams");
+    const rendered = convertEmojiPlaceholders(converter.renderPostable({ markdown: marked }), "teams");
     const entities: Record<string, unknown>[] = [];
     const content = rendered.replace(/(\d+)/g, (_token, index: string) => {
       const id = people[Number(index)]!;

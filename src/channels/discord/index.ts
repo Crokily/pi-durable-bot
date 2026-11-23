@@ -7,7 +7,7 @@ import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { setTimeout as sleep } from "node:timers/promises";
 import { DiscordFormatConverter } from "@chat-adapter/discord";
 import { convertEmojiPlaceholders, defaultEmojiResolver } from "chat";
-import { linkBareUrls } from "../links.ts";
+import { separateBareUrls } from "../links.ts";
 import { Client, DiscordAPIError, Events, GatewayIntentBits, HTTPError, MessageType, type REST, type RequestMethod } from "discord.js";
 import type {
   Address,
@@ -1163,8 +1163,11 @@ async function explained<T>(work: Promise<T>): Promise<T> {
 function outgoing(id: string, text: string): string {
   const prefix = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const mentions = text.replace(new RegExp(`<${prefix}:@(\\d+)>`, "g"), "<@$1>").replace(new RegExp(`<${prefix}:#(\\d+)>`, "g"), "<#$1>");
-  // After the converter, which writes a link to its own URL as a bare URL.
-  return convertEmojiPlaceholders(linkBareUrls(converter.renderPostable({ markdown: mentions }), "after"), "discord");
+  const rendered = converter.renderPostable({ markdown: mentions });
+  // After the converter, which writes a link to its own URL as a bare URL; not when the space would take it over the limit.
+  const spaced = convertEmojiPlaceholders(separateBareUrls(rendered, "after"), "discord");
+  const plain = convertEmojiPlaceholders(rendered, "discord");
+  return refusal(spaced) && !refusal(plain) ? plain : spaced;
 }
 
 function refusal(content: string): string | undefined {

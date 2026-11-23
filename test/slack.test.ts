@@ -742,9 +742,9 @@ describe("sending", () => {
       expect.objectContaining({ kind: "message", message: sent.message, fromMe: true, person: { address: "slack:@UBOT", name: "Pots" }, sendId: "tool:1", mentions: ["slack:@U0BOB"] }),
     ]);
 
-    // A bare URL after "：" is no link in Slack, so it is sent as one.
-    await channel.send("slack:#C0GENERAL", "这页好了：https://example.com/p/a_b/", "tool:url");
-    expect(posted()).toMatchObject({ markdown_text: "这页好了：[https://example.com/p/a_b/](https://example.com/p/a_b/)" });
+    // A bare URL after "：" is no link in Slack, so a space sets it apart; a Slack <url|label> is left as it is.
+    await channel.send("slack:#C0GENERAL", "这页好了：https://example.com/p/a_b/，<https://example.com/a|Read this>", "tool:url");
+    expect(posted()).toMatchObject({ markdown_text: "这页好了： https://example.com/p/a_b/ ，<https://example.com/a|Read this>" });
 
     // A reply in a thread: in the thread of its first message.
     const reply = await channel.send("slack:#C0GENERAL/1793080261.000100", "on it", "tool:2");

@@ -19,7 +19,7 @@ import type {
   SentMessage,
 } from "../../core/channel.ts";
 import { expandHome, readSecrets } from "../../core/env-file.ts";
-import { linkBareUrls } from "../links.ts";
+import { separateBareUrls } from "../links.ts";
 import { GatewayTelegramAdapter, markdownV2 } from "./sdk.ts";
 
 // Addresses (only this file parses them):
@@ -617,6 +617,13 @@ class TelegramChannel implements ChannelAdapter {
    * link that mentions them; a chat without a username becomes its title. Each line break stays a line break.
    */
   #outgoing(text: string): string {
+    // A bare URL against CJK text gets a space to set it apart, unless that would take the text over Telegram's limit.
+    const spaced = this.#rendered(separateBareUrls(text));
+    const plain = this.#rendered(text);
+    return tooLong(richLength(spaced), MAX_RICH) && !tooLong(richLength(plain), MAX_RICH) ? plain : spaced;
+  }
+
+  #rendered(text: string): string {
     const named = text.replace(this.#named, (whole, sign: string, id: string) => {
       const user = sign === "@" && !id.startsWith("-") ? this.#people.get(id) : undefined;
       if (user) return user.username ? `@${user.username}` : `[${escapeMarkdown(fullName(user) || id)}](tg://user?id=${id})`;
@@ -624,7 +631,7 @@ class TelegramChannel implements ChannelAdapter {
       const chat = this.#chats.get(id);
       return chat?.username ? `@${chat.username}` : chat?.title ? escapeMarkdown(chat.title) : whole;
     });
-    return keepLineBreaks(linkBareUrls(named));
+    return keepLineBreaks(named);
   }
 
   /** Look up the people and chats a text names that this adapter has not seen: a person as a member of the chat sent to. */

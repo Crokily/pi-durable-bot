@@ -655,9 +655,13 @@ describe("Discord channel", () => {
     expect(dm).toMatchObject({ place: "discord:#700", message: "discord:#700/907" });
     expect(await channel.findSent("discord:#20", "tool:abc", 0)).toBeUndefined();
 
-    // A bare URL with text right after it: Discord would run the URL into the text, so it is sent as a link.
-    await channel.send("discord:#20", "这页：https://example.com/p/a_b/，看看; and https://example.com/p/a_b/ ok", "s-url");
-    expect(body().body.content).toBe("这页：[https://example.com/p/a_b/](https://example.com/p/a_b/)，看看; and https://example.com/p/a_b/ ok");
+    // A bare URL with CJK punctuation right after it: Discord would run the URL into it, so a space sets it apart.
+    await channel.send("discord:#20", "这页：https://example.com/p/a_b/，看看; and [https://example.com/東京](https://example.com/東京)。", "s-url");
+    expect(body().body.content).toBe("这页：https://example.com/p/a_b/ ，看看; and https://example.com/東京 。");
+    // Not when the space would take the text over the limit.
+    const long = `https://example.com/${"a".repeat(1979)}`;
+    await channel.send("discord:#20", `${long}。`, "s-long");
+    expect(body().body.content).toBe(`${long}。`);
   });
 
   it("reacts with Unicode, custom and named emoji, in the message's own channel", async () => {

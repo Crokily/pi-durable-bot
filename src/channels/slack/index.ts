@@ -21,7 +21,7 @@ import type {
 } from "../../core/channel.ts";
 import { expandHome, readSecrets } from "../../core/env-file.ts";
 import { noForm, parseFormId } from "../../core/forms.ts";
-import { linkBareUrls } from "../links.ts";
+import { separateBareUrls } from "../links.ts";
 import { GatewaySlackAdapter, SEND_EVENT_TYPE } from "./sdk.ts";
 
 // Addresses (only this file parses them):
@@ -799,10 +799,19 @@ class SlackChannel implements ChannelAdapter {
     return { channel: parsed.channel, threadTs: first?.thread_ts ?? parsed.ts };
   }
 
-  /** Person and place addresses in angle brackets become Slack mentions. */
+  /**
+   * Person and place addresses in angle brackets become Slack mentions, and a bare URL against CJK text gets a space to
+   * set it apart, unless that space would take the text over Slack's limit.
+   */
   #outgoing(text: string): string {
+    const spaced = this.#addressed(separateBareUrls(text));
+    const plain = this.#addressed(text);
+    return refusal(spaced) && !refusal(plain) ? plain : spaced;
+  }
+
+  #addressed(text: string): string {
     const prefix = this.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return linkBareUrls(text)
+    return text
       .replace(new RegExp(`<${prefix}:@([A-Z0-9]+)>`, "g"), "<@$1>")
       .replace(new RegExp(`<${prefix}:#([A-Z0-9]+)>`, "g"), "<#$1>");
   }

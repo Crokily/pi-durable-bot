@@ -264,9 +264,9 @@ describe("sending", () => {
     await channel.send("telegram:#-100300/7", "next", "s2");
     expect(methods("sendRichMessage")[1]!.params).toEqual({ chat_id: "-100300", message_thread_id: 7, rich_message: { markdown: "next" } });
 
-    // A bare URL against CJK text: sent as a link, so that it ends where the URL ends.
+    // A bare URL against CJK text: a space sets it apart, so that the link ends where the URL ends.
     await channel.send("telegram:#-100300/7", "这页：https://example.com/p/a_b/，看看", "s3");
-    expect(methods("sendRichMessage")[2]!.params.rich_message).toEqual({ markdown: "这页：[https://example.com/p/a_b/](https://example.com/p/a_b/)，看看" });
+    expect(methods("sendRichMessage")[2]!.params.rich_message).toEqual({ markdown: "这页： https://example.com/p/a_b/ ，看看" });
   });
 
   it("keeps each line break of the text: Telegram reads a single one in rich Markdown as a space", async () => {

@@ -65,11 +65,8 @@ const childResult = (text: string) =>
     .filter(isChild)
     .flatMap((request) => request.messages.filter((message) => message.role === "tool" && message.content.includes(text)))
     .at(0);
-/** Wait until the main agent took the report of its child's last work. */
-const reported = (count: number) =>
-  waitFor(() => mainRequests().filter((request) => request.messages.at(-1)?.content.startsWith("[wake] your child c1 ended")).length >= count, {
-    what: "the child's report",
-  });
+/** Wait until the child c1 ended its last work: called once its work started, so an earlier end does not count. */
+const reported = () => waitFor(() => /^c1 "[^"]*": ended/m.test(gateway.pots("children")), { what: "the child's end" });
 
 /**
  * Give the children of the stopped gateway's bot the extensions as pots 0.8.7 stored them: a list of names, with one
@@ -115,7 +112,7 @@ function script(request: FakeRequest): FakeReply {
     return { text: "the answer is 42" };
   }
   // On an OpenAI-style API a tool result's images follow it in a user message.
-  if (last?.role !== "user" || last.content.startsWith("[wake] your child") || last.content.startsWith("Attached image")) return { text: "done" };
+  if (last?.role !== "user" || last.content.startsWith("Attached image")) return { text: "done" };
   const ask = /ask (c\d+) to (\w+)/.exec(last.content);
   if (ask) return { call: { name: "task", arguments: { action: "send", child: ask[1]!, message: `please ${ask[2]!}` } } };
   if (last.content.includes("please research")) return { call: { name: "task", arguments: { action: "start", title: "research", brief: "find the answer" } } };
@@ -199,11 +196,11 @@ describe("code mode and MCP servers", { timeout: 90_000 }, () => {
   it("gives a child the servers added after it started, and fits its images", async () => {
     await setUp();
     gateway.say("general", "alice", `@${ME} please research`);
-    await reported(1);
+    await reported();
     expect((await mcp("add", "shouter", "--", process.execPath, SERVER)).status).toBe(0);
     gateway.say("general", "alice", `@${ME} ask c1 to shout`);
     await waitFor(() => childResult("HELLO!") !== undefined, { what: "the child's script result" });
-    await reported(2);
+    await reported();
     gateway.say("general", "alice", `@${ME} ask c1 to draw`);
     await waitFor(() => childResult("here it is") !== undefined, { what: "the child's image" });
     expect(childResult("here it is")!.content).toContain("Resized from 3000x30 to 2000x20.");
@@ -213,7 +210,7 @@ describe("code mode and MCP servers", { timeout: 90_000 }, () => {
     await setUp();
     expect((await mcp("add", "shouter", "--", process.execPath, SERVER)).status).toBe(0);
     gateway.say("general", "alice", `@${ME} please research`);
-    await reported(1);
+    await reported();
     await gateway.stop();
     expect(await storeOldChildExtensions()).toBe(1);
 
@@ -221,7 +218,7 @@ describe("code mode and MCP servers", { timeout: 90_000 }, () => {
     gateway.say("general", "alice", `@${ME} ask c1 to shout`);
     await waitFor(() => childResult("HELLO!") !== undefined, { what: "the child's script result" });
     expect(childResult("HELLO!")!.content).not.toMatch(/not a function|is not defined/);
-    await reported(2);
+    await reported();
     gateway.say("general", "alice", `@${ME} ask c1 to draw`);
     await waitFor(() => childResult("here it is") !== undefined, { what: "the child's image" });
     expect(childResult("here it is")!.content).toContain("Resized from 3000x30 to 2000x20.");

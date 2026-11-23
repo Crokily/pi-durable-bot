@@ -9,6 +9,7 @@ import {
   nameProblem,
   nextAfter,
   OutputTail,
+  ROUTINE_ADDED_COLUMNS,
   ROUTINES_SCHEMA,
   RUN_DAYS,
   type Routine,
@@ -39,9 +40,10 @@ const ADDED_COLUMNS = [
   ["source", "TEXT"],
   ["request_id", "TEXT"],
   ["run_id", "INTEGER"],
+  ["child", "TEXT"],
 ] as const;
 
-const COLUMNS = "id, due_at, note, set_by, source, request_id, run_id, created_at";
+const COLUMNS = "id, due_at, note, set_by, source, request_id, run_id, child, created_at";
 
 export interface Timer {
   id: number;
@@ -58,6 +60,8 @@ export interface Timer {
   request_id: string | null;
   /** The routine's failed run that this wake is about. */
   run_id: number | null;
+  /** The child whose commands set it with pots wake: $POTS_CHILD, which Pots sets only in a child's commands. */
+  child: string | null;
   created_at: number;
 }
 
@@ -71,6 +75,8 @@ export interface DueTimer extends Timer {
 export interface WakeOptions {
   source?: string;
   requestId?: string;
+  /** The child that sets it, from its own commands. */
+  child?: string;
 }
 
 /** A timer that add made, or the first one with the same request ID, with repeated set. */
@@ -91,8 +97,9 @@ const noRunner: RunCommand = async () => ({ error: "this gateway cannot run comm
 /**
  * Timed wakes and routines. The agent sets as many wakes as it likes. While no wake set with pots wake is pending, one
  * fallback wake is kept, fallbackMinutes after the moment there was none left (the start, the last firing, or a
- * cancel); routines do not count. A routine wakes the bot with its note at its times, or runs its command, which
- * decides itself whether to wake the bot; a failed run wakes the bot once, until a run succeeds.
+ * cancel); routines do not count. A routine wakes the bot with its note at its times, runs its command, or starts a
+ * child with its brief; the command and the child decide themselves whether to wake the bot. A failed run, or a child
+ * that could not start, wakes the bot once, until a run succeeds.
  */
 export class Timers extends Context.Service<
   Timers,
@@ -126,6 +133,8 @@ export class Timers extends Context.Service<
           for (const [name, type] of ADDED_COLUMNS) if (!columns.has(name)) await sql.exec(`ALTER TABLE bot_timers ADD COLUMN ${name} ${type}`);
           await sql.exec("CREATE UNIQUE INDEX IF NOT EXISTS bot_timers_request ON bot_timers (request_id) WHERE request_id IS NOT NULL");
           await sql.exec(ROUTINES_SCHEMA);
+          const routineColumns = new Set((await sql.all<{ name: string }>("PRAGMA table_info(bot_routines)")).map((column) => column.name));
+          for (const [name, type] of ROUTINE_ADDED_COLUMNS) if (!routineColumns.has(name)) await sql.exec(`ALTER TABLE bot_routines ADD COLUMN ${name} ${type}`);
         });
         const loop = yield* FiberHandle.make();
         const routineLoop = yield* FiberHandle.make();
@@ -137,15 +146,16 @@ export class Timers extends Context.Service<
 
         const pending = db(() => sql.all<Timer>(`SELECT ${COLUMNS} FROM bot_timers WHERE state = 'pending' ORDER BY due_at`));
 
-        const insertWake = async (tx: SqlExecutor, wake: { dueAt: number; note: string; setBy: Timer["set_by"]; now: number; source?: string; requestId?: string; runId?: number }) => {
+        const insertWake = async (tx: SqlExecutor, wake: { dueAt: number; note: string; setBy: Timer["set_by"]; now: number; source?: string; requestId?: string; runId?: number; child?: string }) => {
           await tx.run(
-            "INSERT INTO bot_timers (due_at, note, state, set_by, source, request_id, run_id, created_at) VALUES (?, ?, 'pending', ?, ?, ?, ?, ?)",
+            "INSERT INTO bot_timers (due_at, note, state, set_by, source, request_id, run_id, child, created_at) VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?)",
             wake.dueAt,
             wake.note,
             wake.setBy,
             wake.source ?? null,
             wake.requestId ?? null,
             wake.runId ?? null,
+            wake.child ?? null,
             wake.now,
           );
           return (await tx.get<Timer>(`SELECT ${COLUMNS} FROM bot_timers WHERE id = last_insert_rowid()`))!;
@@ -282,7 +292,37 @@ export class Timers extends Context.Service<
             );
           });
 
-        /** Start what is due: a --note routine's wake, or a --run routine's command. Missed times are skipped. */
+        /**
+         * The routine's earlier child works again, since a message came to it after the routine looked: this time is
+         * skipped, as when the routine sees it, so the run is not kept.
+         */
+        const skipChild = (name: string, runId: number, working: string) =>
+          db(() => sql.run("DELETE FROM bot_routine_runs WHERE id = ?", runId)).pipe(
+            lock.withPermits(1),
+            Effect.andThen(Effect.sync(() => config.print("routine skipped: its last run still runs", { routine: name, run: runId, child: working }))),
+            Effect.catch((error) => Effect.sync(() => config.print("routine run failed", { routine: name, run: runId, error: error.message }))),
+          );
+
+        /** Start a --child routine's child, and keep its ID, or why it could not start. */
+        const startChild = (routine: Routine & { child: string }, runId: number) =>
+          Effect.promise(async () => {
+            if (!config.startChild) return { error: "this gateway cannot start children" };
+            return config.startChild(routine.name, routine.child).catch((cause: unknown) => ({ error: message(cause) }));
+          }).pipe(
+            Effect.flatMap((started) =>
+              "child" in started
+                ? finish(routine.name, routine.created_at, runId, { result: "child", output: started.child })
+                : "working" in started
+                  ? skipChild(routine.name, runId, started.working)
+                  : finish(routine.name, routine.created_at, runId, { result: "error", output: `the child could not start: ${started.error}` }),
+            ),
+            Effect.uninterruptible,
+          );
+
+        /** Whether a child the routine started still works: the child keeps the routine's name, not this table. */
+        const childWorks = (routine: string) => Effect.sync(() => config.childWorks?.(routine) ?? false);
+
+        /** Start what is due: a --note routine's wake, a --run routine's command, or a --child routine's child. Missed times are skipped. */
         const routinesDue = Effect.gen(function* () {
           // The time it woke up for: before any read of the database, which lets the clock move on.
           const now = yield* Clock.currentTimeMillis;
@@ -293,16 +333,18 @@ export class Timers extends Context.Service<
             const next = nextAfter(routine, now) ?? NEVER;
             const setNext = (tx: SqlExecutor) => tx.run("UPDATE bot_routines SET next_at = ? WHERE name = ?", next, routine.name);
             const late = now - routine.next_at > LATE_MS;
-            // The last run still runs: its command, or its wake that the bot has not taken yet.
+            // The last run still runs: its command, its child, or its wake that the bot has not taken yet.
             const busy =
               !late &&
               (routine.run !== null
                 ? yield* FiberMap.has(runs, routine.name)
-                : (yield* db(() => sql.get("SELECT 1 AS x FROM bot_timers WHERE state = 'pending' AND set_by = 'routine' AND source = ? AND run_id IS NULL", routine.name))) !== undefined);
+                : routine.child !== null
+                  ? (yield* FiberMap.has(runs, routine.name)) || (yield* childWorks(routine.name))
+                  : (yield* db(() => sql.get("SELECT 1 AS x FROM bot_timers WHERE state = 'pending' AND set_by = 'routine' AND source = ? AND run_id IS NULL", routine.name))) !== undefined);
             if (late || busy) {
               yield* db(() => setNext(sql));
               config.print(late ? "routine missed" : "routine skipped: its last run still runs", { routine: routine.name, due: routine.next_at, next });
-            } else if (routine.run === null) {
+            } else if (routine.run === null && routine.child === null) {
               yield* db(() =>
                 sql.transaction(async (tx) => {
                   await setNext(tx);
@@ -321,7 +363,7 @@ export class Timers extends Context.Service<
                 }),
               );
               config.print("routine started", { routine: routine.name, run: runId });
-              yield* FiberMap.run(runs, routine.name)(execute({ ...routine, run: routine.run }, runId));
+              yield* FiberMap.run(runs, routine.name)(routine.run !== null ? execute({ ...routine, run: routine.run }, runId) : startChild({ ...routine, child: routine.child! }, runId));
             }
           }
           return woke;
@@ -425,6 +467,7 @@ export class Timers extends Context.Service<
                 ...schedule,
                 note: input.note ?? null,
                 run: input.run ?? null,
+                child: input.child ?? null,
                 timeout_ms: input.timeout ?? DEFAULT_TIMEOUT_MS,
                 next_at: nextAfter(schedule, now) ?? NEVER,
                 failing: 0,
@@ -439,12 +482,13 @@ export class Timers extends Context.Service<
                     routine.next_at = nextAfter({ ...schedule, created_at: routine.created_at }, now) ?? NEVER;
                   }
                   await tx.run(
-                    "INSERT OR REPLACE INTO bot_routines (name, every_ms, cron, note, run, timeout_ms, created_at, next_at, failing) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)",
+                    "INSERT OR REPLACE INTO bot_routines (name, every_ms, cron, note, run, child, timeout_ms, created_at, next_at, failing) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
                     routine.name,
                     routine.every_ms,
                     routine.cron,
                     routine.note,
                     routine.run,
+                    routine.child,
                     routine.timeout_ms,
                     routine.created_at,
                     routine.next_at,

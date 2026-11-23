@@ -8,7 +8,7 @@ import type { Models } from "@earendil-works/pi-ai";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import type { TelemetrySpan } from "@earendil-works/pi-telemetry";
 import { Agent, type Database, openDatabase } from "../agent/agent.ts";
-import { type ChildEnd, describeChild, reportRequestId } from "../agent/children.ts";
+import { describeChild } from "../agent/children.ts";
 import type { MemoryNote } from "../agent/memory.ts";
 import { createCodemode } from "../agent/codemode.ts";
 import { SCREEN_VARIABLES, screenOf } from "../agent/screen.ts";
@@ -46,7 +46,6 @@ import {
   memorySection,
   type PromptFacts,
   renderCacheUse,
-  renderChildWake,
   renderContext,
   renderDream,
   renderExtraction,
@@ -231,8 +230,8 @@ export class Bot implements WakeTarget {
     const judge = createJudge(definition.judge, env.models, () => current().model);
     // The environment of bash commands, of routines' commands and of the stdio MCP servers. Without the screen's variables: a command that uses
     // the screen goes through the screen tool, which holds the screen for one agent at a time. Without POTS_FROM, which
-    // only a routine's command has.
-    const without = new Set<string>([...SCREEN_VARIABLES, "POTS_FROM"]);
+    // only a routine's command has, and POTS_CHILD, which only a child's commands have.
+    const without = new Set<string>([...SCREEN_VARIABLES, "POTS_FROM", "POTS_CHILD"]);
     const shellEnv: Record<string, string> = {
       ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && !without.has(entry[0]))),
       POTS_BOT: id,
@@ -257,6 +256,12 @@ export class Bot implements WakeTarget {
       fallbackWakeMinutes: () => settings().fallbackWakeMinutes,
       fireTimer: (timer, caller) => self().#deliverTimer(timer, caller),
       runCommand: commandRunner(paths.workspace, shellEnv, scopes),
+      // A routine's child: no place, the main agent's model and the default thinking level.
+      startChild: async (routine, brief) => {
+        const started = await self().#agent.startChild(routine, brief);
+        return "id" in started ? { child: started.id } : "working" in started ? started : { error: started.refused };
+      },
+      childWorks: (routine) => self().#workingChildren().some((each) => each.routine === routine),
       filesDir: paths.files,
       print,
     });
@@ -366,7 +371,6 @@ export class Bot implements WakeTarget {
           { name: "remembered", render: async () => (memoryOn() ? childMemorySection(facts(), await indexes()) : undefined), pin: true },
         ],
         place: () => (bot ? bot.#currentPlace() : undefined),
-        ended: (end) => self().#deliverChildEnd(end),
       },
       // What a new version says counts at once; without an upgrade, the sections stay as the page began.
       ...(shownVersion === VERSION
@@ -415,11 +419,16 @@ export class Bot implements WakeTarget {
     // Right after the bot took a wake, before the gateway records that. The next start must deliver the same wake again,
     // which the agent counts once, instead of deciding its events anew.
     gateway.waker.afterDeliver = crashTest(paths.crashAfterWake, "crash test: dying after the wake", "wakeId");
-    // Around the report of a child's end to the main agent. The next start must report it once.
-    agent.crashTests.beforeReport = crashTest(paths.crashBeforeChildReport, "crash test: dying before the child's report", "reporter");
-    agent.crashTests.afterReport = crashTest(paths.crashAfterChildReport, "crash test: dying after the child's report", "reporter");
     // Right after a stop marked a child stopped, before its work ended. The next start must end that work.
     agent.crashTests.afterStopMark = crashTest(paths.crashAfterChildStop, "crash test: dying after marking the child stopped", "child");
+    // After a child answered, before its reporter keeps the answer: held while the file is there, or until the reporter
+    // is aborted. A stop then must still keep the answer.
+    agent.crashTests.beforeChildKeep = async (child, signal) => {
+      if (!existsSync(paths.holdChildKeep)) return;
+      print("crash test: holding the child's end", { child });
+      while (existsSync(paths.holdChildKeep) && !signal.aborted) await new Promise((resolve) => setTimeout(resolve, 100));
+      signal.throwIfAborted();
+    };
     // Right before a memory pass forks the main conversation. The next start must make the pass.
     agent.crashTests.beforeMemoryPass = () => crashTest(paths.crashBeforeMemoryPass, "crash test: dying before the memory pass", "bot")(id);
     for (const row of await sql.all<{ submission: string; place: string }>(
@@ -550,21 +559,10 @@ export class Bot implements WakeTarget {
 
   async #deliverTimer(timer: DueTimer, caller?: TelemetrySpan): Promise<Delivered> {
     const children = await this.#agent.childrenNow(this.#workingChildren());
-    const text = renderTimerWake(timer, await this.#agent.contextStatus(), this.#definition.settings.fallbackWakeMinutes, children);
-    return this.#submit(`timer:${timer.id}`, timer.set_by === "agent" ? "timer" : timer.set_by, undefined, text, false, caller);
-  }
-
-  /** A child ended: a wake for the main agent, once per reporter, also when this runs again after a restart. */
-  async #deliverChildEnd(end: ChildEnd): Promise<string> {
-    // Handed over before a restart: the same submission, and no second wake in the trace.
-    const id = reportRequestId(end.reporter);
-    const before = (await this.#sql.all<{ submission: string }>("SELECT submission FROM bot_wakes WHERE id = ?", id))[0];
-    if (before) return before.submission;
-    const text = renderChildWake(end, await this.#agent.contextStatus());
-    const delivered = await this.#gateway.wake({ reason: "child", child: end.child.id, ...(end.child.place ? { place: end.child.place } : {}) }, (caller) =>
-      this.#submit(id, "child", end.child.place, text, false, caller),
-    );
-    return delivered.submission;
+    // A wake a child set from its own commands, which have its ID in POTS_CHILD.
+    const child = timer.set_by === "agent" && timer.child !== null ? this.#agent.children.find((each) => each.id === timer.child) : undefined;
+    const text = renderTimerWake(timer, await this.#agent.contextStatus(), this.#definition.settings.fallbackWakeMinutes, children, child);
+    return this.#submit(`timer:${timer.id}`, timer.set_by === "agent" ? "timer" : timer.set_by, child?.place, text, false, caller);
   }
 
   async #submit(id: string, reason: string, place: Address | undefined, text: string, steer: boolean, caller?: TelemetrySpan): Promise<Delivered> {
@@ -681,6 +679,7 @@ export class Bot implements WakeTarget {
         const at = typeof body.at === "number" ? body.at : Date.now();
         const options = {
           ...(typeof body.from === "string" && body.from ? { source: body.from } : {}),
+          ...(typeof body.child === "string" && body.child ? { child: body.child } : {}),
           ...(typeof body.id === "string" && body.id ? { requestId: body.id } : {}),
         };
         return this.#timers.add(at, typeof body.note === "string" ? body.note : "", options);
@@ -700,6 +699,7 @@ export class Bot implements WakeTarget {
         if (typeof body.cron === "string") input.cron = body.cron;
         if (typeof body.note === "string") input.note = body.note;
         if (typeof body.run === "string") input.run = body.run;
+        if (typeof body.child === "string") input.child = body.child;
         if (typeof body.timeout === "number") input.timeout = body.timeout;
         const { routine, replaced } = await this.#timers.addRoutine(input);
         return `${replaced ? "Replaced" : "Added"} routine ${routine.name}: ${describeSchedule(routine)}, ${describeWork(routine)}\n  next: ${formatTime(routine.next_at)}`;

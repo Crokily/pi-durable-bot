@@ -82,7 +82,9 @@ const wake = Command.make(
       if (Option.isSome(input.cancel)) return yield* printResult(yield* control(id, "POST", "/wakes/cancel", { id: input.cancel.value }));
       const at = Option.isSome(input.in) ? Date.now() + (yield* duration(input.in.value)) : Option.isSome(input.at) ? yield* time(input.at.value) : Date.now();
       const from = Option.getOrUndefined(input.from) ?? process.env.POTS_FROM;
-      const body = { at, note: input.note, ...(from ? { from } : {}), ...(Option.isSome(input.id) ? { id: input.id.value } : {}) };
+      // In a child's commands, Pots sets POTS_CHILD to its ID: the wake comes from that child.
+      const child = process.env.POTS_CHILD;
+      const body = { at, note: input.note, ...(from ? { from } : {}), ...(child ? { child } : {}), ...(Option.isSome(input.id) ? { id: input.id.value } : {}) };
       yield* printResult(yield* control(id, "POST", "/wake", body));
     }),
 ).pipe(Command.withDescription("Set a timed wake. With no time, the bot is woken now."));
@@ -116,7 +118,7 @@ const children = Command.make(
       const result = (yield* control(id, "GET", "/children")) as { text: string };
       yield* printResult(result.text);
     }),
-).pipe(Command.withDescription("List the children the bot's main agent started, with each one's thinking level, the model it chose for it, and what each one that works does now, or stop one or all. A stopped child reports nothing."));
+).pipe(Command.withDescription("List the bot's children, started by its main agent or its routines, with each one's thinking level, the model it chose for it, and what each one that works does now, or stop one or all."));
 
 const routineAdd = Command.make(
   "add",
@@ -129,6 +131,10 @@ const routineAdd = Command.make(
       Flag.optional,
       Flag.withDescription("Run this command in the bot's shell, with POTS_FROM set to the routine's name. It decides itself whether to wake the bot."),
     ),
+    child: Flag.String("child").pipe(
+      Flag.optional,
+      Flag.withDescription("Start a child with this brief, without waking the bot. The child decides itself whether to wake the bot."),
+    ),
     timeout: Flag.String("timeout").pipe(Flag.optional, Flag.withDescription("For --run: stop the command and what it started after this long. Default: 10m.")),
     bot,
   },
@@ -140,10 +146,11 @@ const routineAdd = Command.make(
       if (Option.isSome(input.cron)) body.cron = input.cron.value;
       if (Option.isSome(input.note)) body.note = input.note.value;
       if (Option.isSome(input.run)) body.run = input.run.value;
+      if (Option.isSome(input.child)) body.child = input.child.value;
       if (Option.isSome(input.timeout)) body.timeout = yield* duration(input.timeout.value);
       yield* printResult(yield* control(id, "POST", "/routines/add", body));
     }),
-).pipe(Command.withDescription("Add a routine: a note that wakes the bot, or a command that runs, at each time of its schedule."));
+).pipe(Command.withDescription("Add a routine: a note that wakes the bot, a command that runs, or a child that starts, at each time of its schedule."));
 
 const routineList = Command.make("list", { bot }, (input) =>
   Effect.gen(function* () {
@@ -161,7 +168,7 @@ const routineRemove = Command.make("remove", { name: Argument.String("name"), bo
 ).pipe(Command.withDescription("Remove a routine. A command of it that runs now goes on until it ends."));
 
 const routine = Command.make("routine").pipe(
-  Command.withDescription("Repeating work: a note that wakes the bot, or a command that runs, on a schedule."),
+  Command.withDescription("Repeating work: a note that wakes the bot, a command that runs, or a child that starts, on a schedule."),
   Command.withSubcommands([routineAdd, routineList, routineRemove]),
 );
 

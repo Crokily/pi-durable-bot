@@ -242,14 +242,18 @@ export class TestGateway {
     writeFileSync(join(this.botDir, "crash-before-memory-pass"), "");
   }
 
-  /** Make the gateway die just before, or just after, the next child's end is handed to the main agent. */
-  crashAroundNextChildReport(when: "before" | "after"): void {
-    writeFileSync(join(this.botDir, `crash-${when}-child-report`), "");
-  }
-
   /** Make the gateway die right after the next stop marks a child stopped, before the child's work ends. */
   crashAfterNextChildStop(): void {
     writeFileSync(join(this.botDir, "crash-after-child-stop"), "");
+  }
+
+  /** Hold each child's reporter after the child answered, before it keeps the answer, until releaseChildKeep. */
+  holdChildKeep(): void {
+    writeFileSync(join(this.botDir, "hold-child-keep"), "");
+  }
+
+  releaseChildKeep(): void {
+    rmSync(join(this.botDir, "hold-child-keep"), { force: true });
   }
 
   // ---- The test platform ----

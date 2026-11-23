@@ -161,10 +161,16 @@ describe("pots", { timeout: 120_000 }, () => {
     expect(plain(await pots("routine", "add", "backup", "--every", "2h", "--run", "./backup.sh"))).toBe(
       'Replaced routine backup: every 2h, runs "./backup.sh" (timeout 10m)\n  next: <time>\n',
     );
+    expect(plain(await pots("routine", "add", "mail", "--every", "2h", "--child", "look at the new mail"))).toBe(
+      'Added routine mail: every 2h, starts a child with the brief "look at the new mail"\n  next: <time>\n',
+    );
     expect(plain(await pots("routine", "list"))).toBe(
       [
-        "Routines (2):",
+        "Routines (3):",
         '- backup: every 2h, runs "./backup.sh" (timeout 10m)',
+        "  next: <time>",
+        "  last: none in the last 7 days",
+        '- mail: every 2h, starts a child with the brief "look at the new mail"',
         "  next: <time>",
         "  last: none in the last 7 days",
         '- standup: cron "0 9 * * 1-5", wakes the bot with the note "prepare the standup"',
@@ -181,14 +187,15 @@ describe("pots", { timeout: 120_000 }, () => {
 
     expect(await fails("routine", "add", "x", "--every", "1h", "--cron", "0 9 * * *", "--note", "")).toBe("ERROR\n  give exactly one of --every and --cron");
     expect(await fails("routine", "add", "x", "--note", "hi")).toBe("ERROR\n  give exactly one of --every and --cron");
-    expect(await fails("routine", "add", "x", "--every", "1h")).toBe("ERROR\n  give exactly one of --note and --run");
-    expect(await fails("routine", "add", "x", "--every", "1h", "--note", "hi", "--run", "true")).toBe("ERROR\n  give exactly one of --note and --run");
+    expect(await fails("routine", "add", "x", "--every", "1h")).toBe("ERROR\n  give exactly one of --note, --run and --child");
+    expect(await fails("routine", "add", "x", "--every", "1h", "--note", "hi", "--run", "true")).toBe("ERROR\n  give exactly one of --note, --run and --child");
     expect(await fails("routine", "add", "x", "--cron", "every morning", "--note", "hi")).toBe('ERROR\n  bad cron expression "every morning": Invalid number of segments in cron expression');
     expect(await fails("routine", "add", "x", "--every", "3q", "--note", "hi")).toBe('ERROR\n  bad duration "3q"; use for example 90s, 30m, 2h or 1d');
     expect(await fails("routine", "add", "no/slash", "--every", "1h", "--note", "hi")).toBe('ERROR\n  bad routine name "no/slash": use letters, digits, "-" and "_", at most 64 characters');
     expect(await fails("routine", "remove", "nope")).toBe('ERROR\n  there is no routine "nope"');
 
     expect(await pots("routine", "remove", "backup")).toBe("Removed routine backup.\n");
+    expect(await pots("routine", "remove", "mail")).toBe("Removed routine mail.\n");
     expect(await pots("routine", "remove", "standup")).toBe("Removed routine standup.\n");
     expect(plain(await pots("routine", "list"))).toBe(`No routines added.\n${fallback}`);
   });

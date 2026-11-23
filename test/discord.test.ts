@@ -654,6 +654,10 @@ describe("Discord channel", () => {
     expect(body().path).toBe("/channels/700/messages");
     expect(dm).toMatchObject({ place: "discord:#700", message: "discord:#700/907" });
     expect(await channel.findSent("discord:#20", "tool:abc", 0)).toBeUndefined();
+
+    // A bare URL with text right after it: Discord would run the URL into the text, so it is sent as a link.
+    await channel.send("discord:#20", "这页：https://example.com/p/a_b/，看看; and https://example.com/p/a_b/ ok", "s-url");
+    expect(body().body.content).toBe("这页：[https://example.com/p/a_b/](https://example.com/p/a_b/)，看看; and https://example.com/p/a_b/ ok");
   });
 
   it("reacts with Unicode, custom and named emoji, in the message's own channel", async () => {

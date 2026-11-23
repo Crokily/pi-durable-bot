@@ -7,6 +7,7 @@ import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { setTimeout as sleep } from "node:timers/promises";
 import { DiscordFormatConverter } from "@chat-adapter/discord";
 import { convertEmojiPlaceholders, defaultEmojiResolver } from "chat";
+import { linkBareUrls } from "../links.ts";
 import { Client, DiscordAPIError, Events, GatewayIntentBits, HTTPError, MessageType, type REST, type RequestMethod } from "discord.js";
 import type {
   Address,
@@ -1162,7 +1163,8 @@ async function explained<T>(work: Promise<T>): Promise<T> {
 function outgoing(id: string, text: string): string {
   const prefix = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const mentions = text.replace(new RegExp(`<${prefix}:@(\\d+)>`, "g"), "<@$1>").replace(new RegExp(`<${prefix}:#(\\d+)>`, "g"), "<#$1>");
-  return convertEmojiPlaceholders(converter.renderPostable({ markdown: mentions }), "discord");
+  // After the converter, which writes a link to its own URL as a bare URL.
+  return convertEmojiPlaceholders(linkBareUrls(converter.renderPostable({ markdown: mentions }), "after"), "discord");
 }
 
 function refusal(content: string): string | undefined {

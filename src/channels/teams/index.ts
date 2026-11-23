@@ -9,6 +9,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { TeamsFormatConverter } from "@chat-adapter/teams";
 import type { InvokeResponse } from "@microsoft/teams.api";
 import { convertEmojiPlaceholders } from "chat";
+import { linkBareUrls } from "../links.ts";
 import type {
   Address,
   ChannelAdapter,
@@ -1000,7 +1001,7 @@ export class TeamsChannel implements ChannelAdapter {
     const prefix = this.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const people: string[] = [];
     const marked = text.replace(new RegExp(`<${prefix}:@([^>\\s/]+)>`, "g"), (_token, id: string) => `${people.push(id) - 1}`);
-    const rendered = convertEmojiPlaceholders(converter.renderPostable({ markdown: marked }), "teams");
+    const rendered = convertEmojiPlaceholders(converter.renderPostable({ markdown: linkBareUrls(marked) }), "teams");
     const entities: Record<string, unknown>[] = [];
     const content = rendered.replace(/(\d+)/g, (_token, index: string) => {
       const id = people[Number(index)]!;

@@ -19,6 +19,7 @@ import type {
   SentMessage,
 } from "../../core/channel.ts";
 import { expandHome, readSecrets } from "../../core/env-file.ts";
+import { linkBareUrls } from "../links.ts";
 import { GatewayTelegramAdapter, markdownV2 } from "./sdk.ts";
 
 // Addresses (only this file parses them):
@@ -623,7 +624,7 @@ class TelegramChannel implements ChannelAdapter {
       const chat = this.#chats.get(id);
       return chat?.username ? `@${chat.username}` : chat?.title ? escapeMarkdown(chat.title) : whole;
     });
-    return keepLineBreaks(named);
+    return keepLineBreaks(linkBareUrls(named));
   }
 
   /** Look up the people and chats a text names that this adapter has not seen: a person as a member of the chat sent to. */

@@ -21,6 +21,7 @@ import type {
 } from "../../core/channel.ts";
 import { expandHome, readSecrets } from "../../core/env-file.ts";
 import { noForm, parseFormId } from "../../core/forms.ts";
+import { linkBareUrls } from "../links.ts";
 import { GatewaySlackAdapter, SEND_EVENT_TYPE } from "./sdk.ts";
 
 // Addresses (only this file parses them):
@@ -801,7 +802,7 @@ class SlackChannel implements ChannelAdapter {
   /** Person and place addresses in angle brackets become Slack mentions. */
   #outgoing(text: string): string {
     const prefix = this.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return text
+    return linkBareUrls(text)
       .replace(new RegExp(`<${prefix}:@([A-Z0-9]+)>`, "g"), "<@$1>")
       .replace(new RegExp(`<${prefix}:#([A-Z0-9]+)>`, "g"), "<#$1>");
   }

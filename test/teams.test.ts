@@ -473,6 +473,10 @@ describe("Teams: sending", () => {
       "/teams/v3/conversations/a:new-dm/activities",
       "/teams/v3/conversations/a:new-dm/activities",
     ]);
+
+    // A bare URL against CJK text: sent as a link, so that it ends where the URL ends.
+    await channel.send(`teams:#${CHANNEL}`, "这页：https://example.com/p/a_b/，看看", "s-url");
+    expect(fake.requested("POST", "/teams/v3/conversations/.*/activities").at(-1)!.body.text).toBe("这页：[https://example.com/p/a_b/](https://example.com/p/a_b/)，看看");
   });
 
   it("refuses a text over the limit, never cuts it, and finds no sent message by its send ID", async () => {

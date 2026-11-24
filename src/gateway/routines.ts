@@ -118,7 +118,7 @@ export function routineProblem(input: RoutineInput, now: number): string | undef
     if (!(Number.isFinite(input.timeout) && input.timeout > 0)) return "--timeout must be more than 0";
   }
   if (input.cron !== undefined) {
-    const parsed = Cron.parse(input.cron);
+    const parsed = Cron.parse(input.cron, localZone());
     if (Result.isFailure(parsed)) return `bad cron expression ${JSON.stringify(input.cron)}: ${parsed.failure.message}`;
     try {
       Cron.next(parsed.success, new Date(now));
@@ -130,6 +130,12 @@ export function routineProblem(input: RoutineInput, now: number): string | undef
 }
 
 /**
+ * This computer's time zone, read each time, so a change shows at the next start. Cron needs it by name: without one it
+ * counts in UTC offsets and fires an hour off, or twice, on the mornings the clocks change.
+ */
+const localZone = (): string => Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+/**
  * The routine's first time strictly after `after`. --every counts from when the routine was added; --cron is in this
  * computer's time zone. Undefined when its time never comes.
  */
@@ -138,7 +144,7 @@ export function nextAfter(routine: Pick<Routine, "every_ms" | "cron" | "created_
     const steps = Math.max(0, Math.floor((after - routine.created_at) / routine.every_ms)) + 1;
     return routine.created_at + steps * routine.every_ms;
   }
-  const parsed = Cron.parse(routine.cron ?? "");
+  const parsed = Cron.parse(routine.cron ?? "", localZone());
   if (Result.isFailure(parsed)) return undefined;
   try {
     return Cron.next(parsed.success, new Date(after)).getTime();

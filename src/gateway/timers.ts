@@ -373,7 +373,8 @@ export class Timers extends Context.Service<
 
         /**
          * At the start: runs a stop or a crash cut off are stopped, and times that passed while the gateway was stopped
-         * are missed, so each routine's next time is its next one from now.
+         * are missed, so each routine's next time is its next one from now. A cron's next time is counted again in the
+         * computer's time zone now.
          */
         const settleRoutines = Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis;
@@ -383,6 +384,9 @@ export class Timers extends Context.Service<
               await tx.run("DELETE FROM bot_routine_runs WHERE started_at < ?", now - RUN_DAYS * DAY_MS);
               const missed = await tx.all<Routine>("SELECT * FROM bot_routines WHERE next_at <= ?", now);
               for (const routine of missed) await tx.run("UPDATE bot_routines SET next_at = ? WHERE name = ?", nextAfter(routine, now) ?? NEVER, routine.name);
+              // The computer's time zone may have changed while the gateway was stopped: a cron's next time is counted again.
+              const crons = await tx.all<Routine>("SELECT * FROM bot_routines WHERE cron IS NOT NULL AND next_at > ?", now);
+              for (const routine of crons) await tx.run("UPDATE bot_routines SET next_at = ? WHERE name = ?", nextAfter(routine, now) ?? NEVER, routine.name);
               return missed;
             }),
           );

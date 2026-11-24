@@ -1,5 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import { Effect } from "effect";
+import { TestClock } from "effect/testing";
 import { Timers } from "../src/gateway/timers.ts";
 import { advance, type Recorder, settle, withCore } from "./support/core.ts";
 
@@ -135,6 +136,70 @@ describe("routines", () => {
         assert.deepStrictEqual(routineWakes(recorder), [["quarter", "note", 15 * MINUTE], ["quarter", "note", 30 * MINUTE], ["quarter", "note", 45 * MINUTE]]);
       }),
     ));
+
+  // Sydney's clocks go forward at 2:00 on 4 October 2026 and back at 3:00 on 5 April 2026. From 20:00 the night
+  // before, the look's cron comes at 8:00 local time on the morning of the change, once.
+  for (const [change, evening] of [
+    ["forward", "2026-10-03T20:00:00+10:00"],
+    ["back", "2026-04-04T20:00:00+11:00"],
+  ] as const) {
+    it.effect(`follow a cron expression across Sydney's clocks going ${change}`, () =>
+      Effect.gen(function* () {
+        const zone = process.env.TZ;
+        process.env.TZ = "Australia/Sydney";
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            if (zone === undefined) delete process.env.TZ;
+            else process.env.TZ = zone;
+          }),
+        );
+        yield* TestClock.setTime(Date.parse(evening));
+        yield* withCore({}, (recorder) =>
+          Effect.gen(function* () {
+            const timers = yield* Timers;
+            yield* timers.start;
+            yield* timers.addRoutine({ name: "look", cron: "0 8-22/3 * * *", note: "" });
+            yield* advance(16 * 60 * MINUTE, MINUTE);
+            const local = (at: number) => new Date(at).toLocaleTimeString("en-AU", { hour12: false, timeZone: "Australia/Sydney" });
+            assert.deepStrictEqual(routineWakes(recorder).map(([, , at]) => local(at as number)), ["08:00:00", "11:00:00"]);
+          }),
+        );
+      }).pipe(Effect.scoped),
+    );
+  }
+
+  it.effect("count a cron's next time again in the computer's time zone at the start", () =>
+    Effect.gen(function* () {
+      const zone = process.env.TZ;
+      process.env.TZ = "UTC";
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (zone === undefined) delete process.env.TZ;
+          else process.env.TZ = zone;
+        }),
+      );
+      // Kathmandu was 5:30 ahead of UTC in 1970, where the TestClock starts.
+      const midnight = Date.parse("2026-11-24T00:00:00Z");
+      yield* TestClock.setTime(midnight);
+      yield* withCore({}, (recorder) =>
+        Effect.gen(function* () {
+          const timers = yield* Timers;
+          yield* timers.start;
+          yield* timers.addRoutine({ name: "morning", cron: "0 8 * * *", note: "" });
+          assert.strictEqual((yield* timers.routines).routines[0]?.next_at, midnight + 8 * 60 * MINUTE);
+          yield* timers.stop;
+          // The computer moves to Kathmandu, 5:45 ahead of UTC, while the gateway is stopped.
+          process.env.TZ = "Asia/Kathmandu";
+          yield* timers.start;
+          yield* settle;
+          const morning = midnight + 8 * 60 * MINUTE - (5 * 60 + 45) * MINUTE;
+          assert.strictEqual((yield* timers.routines).routines[0]?.next_at, morning);
+          yield* advance(morning - midnight, MINUTE);
+          assert.deepStrictEqual(routineWakes(recorder), [["morning", "note", morning]]);
+        }),
+      );
+    }).pipe(Effect.scoped),
+  );
 
   it.effect("run a routine's command with POTS_FROM, skip a time while it still runs, and keep each run's end", () =>
     withCore({}, (recorder) =>

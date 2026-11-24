@@ -1,3 +1,4 @@
+import { DatabaseSync } from "node:sqlite";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -127,15 +128,41 @@ describe("bot.json while running", { timeout: 90_000 }, () => {
     expect(look).toMatch(/next: \d{4}-\d{2}-\d{2} (08|11|14|17|20):00:00 /);
     gateway.say("general", "alice", `@${ME} hello`);
     await waitFor(() => gateway.sent().length === 1, { what: "the reply" });
-    expect(lastPrompt()).toContain("Your routine look starts a child at its times");
+    expect(lastPrompt()).toContain("Pots added a default routine named look to each bot once");
     expect(lastPrompt()).not.toContain("fallback check-in");
     expect(existsSync(join(gateway.botDir, "bot.json.error"))).toBe(false);
 
-    // A person or the bot removed it: a restart does not bring it back.
+    // A person or the bot removed it: a restart does not bring it back, and the prompt does not say that it runs.
     expect((await gateway.run(["routine", "remove", "look"])).stdout).toBe("Removed routine look.\n");
     await gateway.stop();
     await gateway.start();
     expect(await list()).toBe("No routines added.\n");
+    gateway.say("general", "alice", `@${ME} still there?`);
+    await waitFor(() => gateway.sent().length === 2, { what: "the reply after the restart" });
+    expect(lastPrompt()).toContain("It may since have been changed or removed, and Pots does not add it again; pots routine list says what runs now.");
+    expect(lastPrompt()).not.toMatch(/Your routine look starts/);
+  });
+
+  it("keeps a bot's own routine named look at the upgrade, and adds no look beside it", async () => {
+    model = await startFakeModel();
+    gateway = new TestGateway({ model, look: true });
+    await gateway.start();
+    // A bot of an earlier version, which had a --note routine of its own named look.
+    expect((await gateway.run(["routine", "remove", "look"])).status).toBe(0);
+    expect((await gateway.run(["routine", "add", "look", "--every", "1d", "--note", "look at the build"])).status).toBe(0);
+    await gateway.stop();
+    const db = new DatabaseSync(join(gateway.botDir, "bot.sqlite"));
+    db.exec("DELETE FROM bot_state WHERE key = 'look_added'");
+    db.close();
+    await gateway.start();
+    const listed = (await gateway.run(["routine", "list"])).stdout;
+    expect(listed).toContain('- look: every 1d, wakes the bot with the note "look at the build"');
+    expect(listed).not.toContain("starts a child");
+    gateway.say("general", "alice", `@${ME} hello`);
+    await waitFor(() => gateway.sent().length === 1, { what: "the reply" });
+    // The prompt points to the routine list, not to a look that this routine is not.
+    expect(lastPrompt()).toContain("pots routine list says what runs now");
+    expect(lastPrompt()).not.toMatch(/Your routine look starts/);
   });
 
   it("starts a bot whose folder appears and stops one whose folder goes", async () => {

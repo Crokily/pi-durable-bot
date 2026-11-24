@@ -140,7 +140,8 @@ describe("masking in a running bot", { timeout: 90_000 }, () => {
       if (last.content.includes("please cat")) return { call: { name: "bash", arguments: { command: `cat '${file}'; printf 'sk-live-01234'; sleep 0.5; printf '56789ABCDEFghij\\n'` } } };
       if (last.content.includes("please look")) return { call: { name: "bash", arguments: { command: `grep -o 'chat-[a-z0-9-]*' '${chat}'; printf 'vnc ${VNC.slice(0, 6)}'; printf '${VNC.slice(6)}\\n'` } } };
       if (last.content.includes("please script")) {
-        return { call: { name: "codemode", arguments: { code: `const r = await tools.bash({ command: "cat '${file}'" }); return "script saw " + JSON.stringify(r);` } } };
+        // JSON.stringify, so the backslashes of a Windows path stay in the script's string.
+        return { call: { name: "codemode", arguments: { code: `const r = await tools.bash({ command: ${JSON.stringify(`cat '${file}'`)} }); return "script saw " + JSON.stringify(r);` } } };
       }
       return { text: "done" };
     });

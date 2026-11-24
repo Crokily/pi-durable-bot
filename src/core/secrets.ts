@@ -1,13 +1,11 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { expandHome } from "./env-file.ts";
-import { SECRETS_DIR } from "./home.ts";
 
 // The secrets Pots knows, and their masking: a known secret in a tool's output becomes [secret] before the model and
-// the log get it. Known: the values in the secrets folder, pi's logins, API keys and MCP settings (also the workspace's
-// .pi/mcp.json), and the files bot.json names (channel tokens, the VNC password). Read again when a file changes,
-// looked at at most once a second, so a tool call costs one regular expression over its output.
+// the log get it. Known: the values of Pots' own secrets, the files of the secrets folder and the files bot.json names
+// (channel tokens, the VNC password). Read again when a file changes, looked at at most once a second, so a tool call
+// costs one regular expression over its output.
 
 /** What a known secret becomes in tool output. */
 export const MASK = "[secret]";
@@ -18,78 +16,18 @@ const MAX_FILE_BYTES = 1_000_000;
 /** How often the files are looked at for changes. */
 const CHECK_MS = 1_000;
 
-/** pi's folder: ~/.pi/agent, or $PI_CODING_AGENT_DIR. */
-export function piAgentDir(): string {
-  const dir = process.env.PI_CODING_AGENT_DIR;
-  return dir ? expandHome(dir) : join(homedir(), ".pi", "agent");
-}
+/** Keys whose values name or describe something rather than unlock it, such as BANK_ACCOUNT_NAME or BW_CLIENTID. */
+const NAMING_KEY = /(?:^|_)(?:NAME|USER|USERNAME|LOGIN|EMAIL|URL|URI|HOST|PORT|REGION|DOMAIN|ENDPOINT|DIR|PATH|FILE|(?:CLIENT|APP|ACCOUNT|TENANT|PROJECT|ORG|USER)?_?ID)$/i;
 
-/** A file or folder of secrets, and how to read one of its files when not as Pots reads its own. */
-export type SecretSource = string | { readonly path: string; readonly read: (file: string) => readonly string[] };
-
-/** A file of pi's: JSON whose values may be references to an environment variable or a command. */
-export const piSource = (path: string): SecretSource => ({ path, read: (file) => secretsOfText(readFileSync(file, "utf8"), { pi: true }) });
-
-/** The secrets folder, and pi's logins, API keys and MCP sign-ins and settings. */
-export function defaultSecretSources(): SecretSource[] {
-  const pi = piAgentDir();
-  return [SECRETS_DIR, ...["auth.json", "models.json", "mcp.json", "mcp-auth.json"].map((name) => piSource(join(pi, name)))];
-}
-
-/** Keys whose values name or describe something rather than unlock it. */
-const NAMING_KEY = /(?:^|_)(?:NAME|USER|USERNAME|LOGIN|EMAIL|URL|URI|HOST|PORT|REGION|ID|DOMAIN|ENDPOINT|DIR|PATH|FILE|MODEL|TYPE|PROVIDER|SCOPE|EXPIRES|METHOD)$/i;
-/** Keys of JSON values that are secrets: API keys, tokens, passwords, headers such as Authorization. */
-const SECRET_KEY = /key|token|secret|passw|access|refresh|credential|session|cookie|authorization/i;
-
-/** Whether a JSON key holds a secret: tokenUrl, token_type and X-Request-Id name things. */
-const secretKey = (key: string) => SECRET_KEY.test(key) && !NAMING_KEY.test(key.replace(/([a-z0-9])([A-Z])/g, "$1_$2").replace(/-/g, "_"));
-
-/** Whether a value is long and varied enough to mask without hitting other text. */
-function maskable(value: string): boolean {
-  return value.length >= MIN_SECRET_LENGTH && new Set(value).size >= 4;
-}
-
-/** A value, and each of its lines when it has several, as a file shows them; of "Bearer <token>", the token. */
+/** A value, when it is long and varied enough to mask without hitting other text. */
 function add(values: Set<string>, value: string): void {
-  for (const each of [value, ...(value.includes("\n") ? value.split("\n") : [])]) {
-    const text = each.trim();
-    const credential = /^(?:Bearer|Basic|Token|Bot)\s+(\S+)$/i.exec(text)?.[1] ?? text;
-    if (maskable(credential)) values.add(credential);
-  }
+  const text = value.trim();
+  if (text.length >= MIN_SECRET_LENGTH && new Set(text).size >= 4) values.add(text);
 }
 
-/** A value of pi's: "!command" runs a command, $NAME and ${NAME} are environment variables, a bare NAME too in older pi. */
-function addPi(values: Set<string>, value: string): void {
-  if (value.startsWith("!") || /^[A-Z][A-Z0-9_]*$/.test(value)) return;
-  for (const part of value.split(/\$\{[A-Za-z_]\w*\}|\$[A-Za-z_]\w*/)) add(values, part.replace(/\$([$!])/g, "$1"));
-}
-
-function walkJson(values: Set<string>, value: unknown, secret: boolean, pi: boolean): void {
-  if (typeof value === "string") {
-    if (secret) (pi ? addPi : add)(values, value);
-  } else if (Array.isArray(value)) {
-    for (const item of value) walkJson(values, item, secret, pi);
-  } else if (value && typeof value === "object") {
-    // Each value by its own key, so { "auth": { "provider": "anthropic" } } does not make a word a secret.
-    for (const [key, item] of Object.entries(value)) walkJson(values, item, secretKey(key), pi);
-  }
-}
-
-/**
- * The secret values of one file: JSON under secret-looking keys, KEY=value values, or the file's other lines. Values
- * are literal; with pi, those of JSON may be pi's references, which are not secrets themselves.
- */
-export function secretsOfText(text: string, options: { pi?: boolean } = {}): string[] {
+/** The secret values of a text file, taken literally: KEY=value values, except of keys that name a thing, and other lines. */
+export function secretsOfText(text: string): string[] {
   const values = new Set<string>();
-  const trimmed = text.trim();
-  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-    try {
-      walkJson(values, JSON.parse(trimmed), false, options.pi === true);
-      return [...values];
-    } catch {
-      // Not JSON: lines.
-    }
-  }
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim() || line.trimStart().startsWith("#")) continue;
     const match = /^\s*(?:export\s+)?([A-Za-z0-9_]+)\s*=\s*(.*?)\s*$/.exec(line);
@@ -101,8 +39,19 @@ export function secretsOfText(text: string, options: { pi?: boolean } = {}): str
   return [...values];
 }
 
-/** A file of Pots or of a person: its values are literal. */
-const readLiteral = (file: string) => secretsOfText(readFileSync(file, "utf8"));
+const text = new TextDecoder("utf-8", { fatal: true });
+
+/** The secret values of a file: of a text file, its values; of another, what binary makes of it, such as a VNC password. */
+function secretsOfFile(file: string, binary: (data: Buffer) => string | undefined): string[] {
+  const data = readFileSync(file);
+  try {
+    const decoded = text.decode(data);
+    if (!/[\0-\x08\x0e-\x1f]/.test(decoded)) return secretsOfText(decoded);
+  } catch {
+    // Not UTF-8.
+  }
+  return secretsOfText(binary(data) ?? "");
+}
 
 const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -126,7 +75,8 @@ export interface MaskedStream {
  * and relative ones as the channels read them, called at each look, so a new file in bot.json counts.
  */
 export class KnownSecrets {
-  readonly #sources: () => readonly SecretSource[];
+  readonly #sources: () => readonly string[];
+  readonly #binary: (data: Buffer) => string | undefined;
   #checked = -Infinity;
   /** Each file's values as last read, and its mtime and size then; none when reading it failed. */
   #read = new Map<string, { signature: string; values: readonly string[] }>();
@@ -135,8 +85,10 @@ export class KnownSecrets {
   #longest = 0;
   #firsts = new Set<string>();
 
-  constructor(sources: () => readonly SecretSource[] = defaultSecretSources) {
+  /** binary: the secret in a file that is not text, such as a VNC password file. */
+  constructor(sources: () => readonly string[], binary: (data: Buffer) => string | undefined = () => undefined) {
     this.#sources = sources;
+    this.#binary = binary;
   }
 
   /** The values, longest first. */
@@ -243,7 +195,7 @@ export class KnownSecrets {
       }
       changed = true;
       try {
-        read.set(file.path, { signature: file.signature, values: file.read(file.path) });
+        read.set(file.path, { signature: file.signature, values: secretsOfFile(file.path, this.#binary) });
       } catch {
         // Gone or unreadable: tried again at the next look, which a chmod alone would not show. Meanwhile its values as
         // last read.
@@ -258,23 +210,23 @@ export class KnownSecrets {
     this.#firsts = new Set(this.#values.map((value) => value[0]!));
   }
 
-  /** The files to read, each once: a file a source names keeps that source's reader, also when it is in a folder. */
-  #files(): { path: string; signature: string; read: (file: string) => readonly string[] }[] {
-    const files = new Map<string, { path: string; signature: string; read: (file: string) => readonly string[] }>();
-    const take = (path: string, read: (file: string) => readonly string[], named: boolean) => {
+  /** The files to read, each once, with their mtime and size. */
+  #files(): { path: string; signature: string }[] {
+    const files = new Map<string, { path: string; signature: string }>();
+    const take = (path: string) => {
       try {
         const stat = statSync(path);
-        if (stat.isFile() && stat.size > 0 && stat.size <= MAX_FILE_BYTES && (named || !files.has(path))) files.set(path, { path, signature: `${named}:${stat.mtimeMs}:${stat.size}`, read });
+        if (stat.isFile() && stat.size > 0 && stat.size <= MAX_FILE_BYTES) files.set(path, { path, signature: `${stat.mtimeMs}:${stat.size}` });
         return stat.isDirectory();
       } catch {
         return false;
       }
     };
     for (const source of this.#sources()) {
-      const path = resolve(expandHome(typeof source === "string" ? source : source.path));
-      if (!take(path, typeof source === "string" ? readLiteral : source.read, true)) continue;
+      const path = resolve(expandHome(source));
+      if (!take(path)) continue;
       try {
-        for (const name of readdirSync(path).sort()) take(join(path, name), readLiteral, false);
+        for (const name of readdirSync(path)) take(join(path, name));
       } catch {
         // Unreadable folder.
       }

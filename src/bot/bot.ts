@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, unlinkSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, join } from "node:path";
@@ -21,7 +21,7 @@ import type { CacheWarmingMode } from "../agent/warming.ts";
 import { loadChannel } from "../channels/load.ts";
 import type { Address, ChannelAdapter, ChannelConfig } from "../core/channel.ts";
 import { MEMORY_DIR, POTS_HOME, SECRETS_DIR } from "../core/home.ts";
-import { defaultSecretSources, KnownSecrets, piSource, secretsOfText } from "../core/secrets.ts";
+import { KnownSecrets } from "../core/secrets.ts";
 import { VERSION } from "../core/version.ts";
 import type { Judge } from "../core/judge.ts";
 import { formatTime } from "../core/time.ts";
@@ -34,7 +34,7 @@ import type { DueTimer } from "../gateway/timers.ts";
 import type { PageHost } from "../pages/host.ts";
 import { BotPages, secretCrashTests } from "../pages/store.ts";
 import { vncPasswordPath } from "../pages/desktop.ts";
-import { readVncPassword } from "../pages/rfb.ts";
+import { decodeVncPasswordFile } from "../pages/rfb.ts";
 import { ControlServer } from "./control.ts";
 import { type BotDefinition, type BotPaths, botPaths } from "./definition.ts";
 import { describeMachine } from "./machine.ts";
@@ -254,21 +254,15 @@ export class Bot implements WakeTarget {
     });
     if (recovered?.stopped.length) print("stopped the scopes of commands the last gateway waited on", { scopes: recovered.stopped });
     const left = recovered?.left.length ? renderLeftScopes(recovered.left, Date.now()) : undefined;
-    // The secrets of this computer, the workspace's MCP settings, and the files bot.json names: its channels' tokens and
-    // its VNC password, from the same paths and with the same readers as the code that uses them.
-    const vncSecrets = (file: string) => {
-      const text = readFileSync(file, "utf8");
-      return /(^|\n)\s*(export\s+)?VNC_PASSWORD\s*=/.test(text) ? secretsOfText(text) : secretsOfText(readVncPassword(file).toString("utf8"));
-    };
-    const secrets = new KnownSecrets(() => {
-      const { channels, vnc } = current();
-      return [
-        ...defaultSecretSources(),
-        piSource(join(paths.workspace, ".pi", "mcp.json")),
-        ...channels.flatMap((channel) => (typeof channel.secrets === "string" ? [channel.secrets] : [])),
-        ...(vnc?.passwordFile ? [{ path: vncPasswordPath(vnc.passwordFile, SECRETS_DIR), read: vncSecrets }] : []),
-      ];
-    });
+    // Pots' own secrets: the secrets folder, and the files bot.json names, its channels' tokens and its VNC password,
+    // from the same paths as the code that uses them. A VNC password file as vncpasswd writes it is decoded.
+    const secrets = new KnownSecrets(
+      () => {
+        const { channels, vnc } = current();
+        return [SECRETS_DIR, ...channels.flatMap((channel) => (typeof channel.secrets === "string" ? [channel.secrets] : [])), ...(vnc?.passwordFile ? [vncPasswordPath(vnc.passwordFile, SECRETS_DIR)] : [])];
+      },
+      (data) => decodeVncPasswordFile(data)?.toString("utf8"),
+    );
     const gateway = await Gateway.open(sql, {
       bot: id,
       judge: () => (bot ? bot.#judge : judge),

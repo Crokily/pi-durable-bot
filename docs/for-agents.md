@@ -8,7 +8,7 @@ If you are here to change Pots' own code, read [AGENTS.md](../AGENTS.md) instead
 
 Pots (the npm package `pi-durable-bot`, the command `pots`) is an open-source AI coworker. It lives on a computer of its own and works in the chat apps a team already uses. It is not a chat bot that answers when someone @s it:
 
-- **It sees everything in the places it has joined.** That covers channel messages that never mention it, DMs, edits, reactions and people joining. All of it goes into one local SQLite log, and the bot reads that log with SQL when it needs context.
+- **It sees everything in the places it is invited to.** That covers channel messages that never mention it, DMs, edits, reactions and people joining. All of it goes into one local SQLite log, and the bot reads that log with SQL when it needs context.
 - **It decides when to act.** A mention or a DM wakes it at once. Every other message comes to it too, and it decides whether it is about its work; a judge can read those first and ask "is this about me, and should I respond?", using the bot's own list of responsibilities. The bot also sets its own timed wakes, such as "check Acme's pricing every Monday", and keeps them. Being woken does not mean speaking: most of the time the right answer is to stay quiet.
 - **It works on its own computer.** It has a shell, files, the internet and, when there is one, the screen, mouse and keyboard. It writes and runs the code it needs instead of waiting for someone to add a plugin. That covers research, reports, watching a web page, filling forms, and code.
 - **It remembers.** One long conversation runs across every channel. The bot saves what is worth keeping (preferences, rules, facts about people and the work, decisions) to its memory by itself, as Claude Code's automatic memory does: plain markdown files with an index, in its folder, and one more memory that the bots of the computer share about the person. People change that memory by talking to it. When the context gets full, the bot writes notes for itself and "turns the page"; its memory comes along. Its persona and responsibilities are plain files it edits itself.
@@ -19,11 +19,11 @@ Slack, Discord and Telegram work today, and so does the person's own terminal (`
 
 ## The one thing to get right: the bot sets itself up
 
-Once the bot is made, **it connects its chat apps itself**. For each app, it creates what that platform needs (on Slack, a Slack app), gets the tokens, writes its own `bot.json` and asks the person to do only the steps that need them, such as entering a code from their phone, or getting an admin's approval.
+Once the bot is made, **it connects its chat apps itself**. For each app, it creates what that platform needs (on Slack, a Slack app), gets the tokens, writes its own `bot.json` and asks the person only for what it cannot do, such as a code that comes to their phone, or an admin's approval.
 
 So do not create the chat app (such as a Slack app), write a manifest, collect tokens or edit `~/.pots/` by hand for your person, and do not tell them to do any of that first. Your job is to install Pots and make the bot, as below. After that, hand the person over to their bot: they say "join our Slack" in `pots chat`, and the bot does the rest.
 
-The same goes for its other tools: the bot adds its own routines, and skills for the command line tools it uses. Run `pots mcp add` only when your person asks for an MCP server; the bot signs in to it itself: `pots mcp list` shows how each server signs in, and for one that signs in with `pots mcp login <server>`, the bot runs it and uses the link it prints.
+The same goes for its other tools: the bot adds its own routines, and skills for the command line tools it uses. Run `pots mcp add` only when your person asks for an MCP server; the bot signs in to it itself with `pots mcp login <server>`, in the browser on its screen.
 
 On a computer without a desktop, such as a cloud server reached over SSH, the bot still does this. It explains the choices and lets the person pick:
 
@@ -69,7 +69,7 @@ A person without an AI agent runs `pots init` alone instead: it asks the same th
 Tell your person:
 
 - **Talk to the bot:** `pots chat`. Leave with Ctrl+C; the bot keeps working.
-- **Tell it where to work.** For example, "join our Slack". It sets the app up itself. On Slack it joins the right public channels itself and can create channels; an existing private channel needs a member to invite it (`/invite @its-name`).
+- **Tell it where to work.** For example, "join our Slack". It sets the app up itself. On Slack it joins the right public channels itself and can create channels; invite it to private ones (`/invite @its-name`).
 - **Which models do which work is theirs to say.** The bot talks at `medium` thinking and hands longer work to children at `xhigh` or `max`, on its own model unless it chooses another one for a child. At its first start it asks your person which models they want for which work, and keeps the answer in its AGENTS.md.
 - **Sign in from anywhere.** When a login expires, or they want another model or Jev, they ask the bot, for example "sign me in to Claude". It sends a one-time link to a login page of Pots' own, where they sign in from any device; the bot is told which models it can use, never the login. When the bot cannot think because its only login expired, `pots login --link` on its computer prints such a link.
 - **Change it by talking to it.** Its persona, responsibilities, model and judge live in its folder, `~/.pots/bots/<id>/`, and the bot edits them itself. People can edit them too; changes apply within seconds.
@@ -78,7 +78,7 @@ Tell your person:
 |---|---|
 | `pots login` | Sign in to models and judges, or add API keys or local servers, one after another (in a terminal); `--list` shows what can be used; `--link` prints a link to a login page for any device instead |
 | `pots mcp add` / `list` / `remove` | MCP servers for every bot and pi on this computer, in pi's `~/.pi/agent/mcp.json`, with the options of `pi mcp` (`pots mcp --help`); the bot calls their tools from code mode scripts: short JavaScript programs it writes to call its tools |
-| `pots mcp login <server>` | Sign in to an MCP server: it prints a link to open in a browser. In a terminal, when the browser is on another computer, paste the address the browser was sent to |
+| `pots mcp login <server>` | Sign in to an MCP server in the browser |
 | `pots status` | The gateway, the service and each bot |
 | `pots service logs` | The gateway's output |
 | `pots trace` | What a bot did: its last wakes, or one wake from its events to the messages it sent |

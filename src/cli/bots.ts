@@ -93,7 +93,7 @@ export function firstWake(bot: { id: string; about?: string }, maker: Maker, oth
     );
   }
   lines.push(
-    `Then find out which chat apps you should work in, for example Slack, and connect them yourself with this computer${others.length > 0 ? ", as an app of your own with a token file of your own: the other bots' are theirs" : ""}. Ask ${them} to do only the step that needs them, such as entering a code on the sign-in page or getting an admin's approval.`,
+    `Then find out which chat apps you should work in, for example Slack, and connect them yourself with this computer${others.length > 0 ? ", as an app of your own with a token file of your own: the other bots' are theirs" : ""}. Ask ${them} only for what you cannot do yourself, such as a code that comes to their phone, or an admin's approval.`,
   );
   lines.push(
     `Also ask ${them} whether they want particular models for particular work. You do longer work in children and choose each child's model when you start it; without a choice, it has your model. Write what they say in your AGENTS.md.`,

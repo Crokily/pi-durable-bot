@@ -1,6 +1,6 @@
 ---
 name: teams-channel
-description: Microsoft Teams for a Pots bot (preview). How to connect Teams yourself with Microsoft's Teams CLI (the admin note, the device-code sign-in, the app, its permissions, the install link, bot.json), send and edit messages, call Teams' API and Microsoft Graph, files and limits, and how to post Adaptive Cards with buttons and inputs, get clicks and mark a question answered. Use when you connect Teams, or need more in Teams than plain text.
+description: Microsoft Teams for a Pots bot (preview). How to connect Teams yourself with Microsoft's Teams CLI (the admin note, the person's device-code sign-in, the app, its permissions, the install link, bot.json), send and edit messages, call Teams' API and Microsoft Graph, files and limits, and how to post Adaptive Cards with buttons and inputs, get clicks and mark a question answered. Use when you connect Teams, or need more in Teams than plain text.
 ---
 
 # Microsoft Teams (preview)
@@ -9,7 +9,7 @@ The Teams channel is a preview. It was tested with fakes of Microsoft's services
 
 ## Connect
 
-Written for a bot that connects itself. You run Microsoft's Teams CLI; the person adds the app in Teams, and signs in only when their work account is not available here. The CLI runs with npx, without a global install. In the commands below, `teams` stands for:
+Written for a bot that connects itself. You run Microsoft's Teams CLI; the person only signs in on their phone or computer and adds the app in Teams. The CLI runs with npx, without a global install. In the commands below, `teams` stands for:
 
 ```sh
 TEAMS_NO_INTERACTIVE=1 npx -y @microsoft/teams.cli@3.1.0 --disable-auto-update
@@ -18,7 +18,7 @@ TEAMS_NO_INTERACTIVE=1 npx -y @microsoft/teams.cli@3.1.0 --disable-auto-update
 By default Teams sends you events over a socket that you open (Socket Mode), so this computer needs no public address. Microsoft calls Socket Mode a preview, "recommended for developing agents"; that is fine for a bot of the person's own organisation, which is not published in Teams' store.
 
 1. **The account.** Teams for a bot needs a work or school Microsoft 365 account with Teams. A personal Microsoft account or free Teams cannot add a custom app. Ask the person which they have; with a personal one, stop and say why.
-2. **The sign-in.** Run `teams login --device-code` in the background with its output in a file, and read the file: the CLI prints a link (https://microsoft.com/devicelogin) and a code, then waits. Use the intended account if the person has made it available here, such as their work account signed in in the browser on your screen: open the link and type the code yourself. Otherwise ask them to do that step; send both in chat: "Open https://microsoft.com/devicelogin and type ABCD-1234, then sign in with your work account." The code alone is not enough to sign in, and it works for 15 minutes. When the command ends, `teams status --json` says `"loggedIn": true`.
+2. **The person signs in.** Run `teams login --device-code` in the background with its output in a file, and read the file: the CLI prints a link (https://microsoft.com/devicelogin) and a code, then waits. Send both to the person in chat: "Open https://microsoft.com/devicelogin and type ABCD-1234, then sign in with your work account." The code alone is not enough to sign in, and it works for 15 minutes. When the command ends, `teams status --json` says `"loggedIn": true`.
 3. **Custom apps allowed?** `teams status --json` also gives `tdp.sideloading`: `tenant` (the organisation lets custom apps be uploaded) and `user` (this person may). When either is `false`, the person needs their admin. Write them this note to forward:
    > Please allow custom apps for <person>: in the Teams admin center, Teams apps → Setup policies → (their policy) → turn on **Upload custom apps**; and Teams apps → Manage apps → Org-wide app settings → turn on **Custom apps**. It can take up to 24 hours.
 

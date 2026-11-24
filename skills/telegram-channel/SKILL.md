@@ -9,9 +9,9 @@ description: Telegram for a Pots bot. How to connect a Telegram bot yourself (Bo
 
 Written for a bot that connects itself; a person can follow it too. The bot gets its messages by long polling, so the computer needs no public address.
 
-1. Only a Telegram account can make a bot. Use the intended account if the person has made it available here, such as Telegram Web signed in in the browser. Otherwise ask them to do this step in their own Telegram app. In a chat with [@BotFather](https://t.me/BotFather), send `/newbot`, and give a name (what people see, for example your name) and a username that ends in `bot`. BotFather answers with the token (`123456789:AA…`).
-2. In the same chat, send `/setprivacy`, choose the bot, and choose **Disable**. Without this, you get only the group messages that mention you, reply to you or are commands. The change counts only in groups the bot joins after it: in a group the bot is already in, they remove it and add it again.
-3. When you made the bot, write the token to the file below yourself. When the person made it, ask for the token with ask-secret in the terminal channel:
+1. The person makes the Telegram bot in their own Telegram app. Only a Telegram account can make a bot, and you cannot use theirs. Ask them to open a chat with [@BotFather](https://t.me/BotFather), send `/newbot`, and give a name (what people see, for example your name) and a username that ends in `bot`. BotFather answers with the token (`123456789:AA…`).
+2. In the same chat, ask them to send `/setprivacy`, choose the bot, and choose **Disable**. Without this, you get only the group messages that mention you, reply to you or are commands. The change counts only in groups the bot joins after it: in a group the bot is already in, they remove it and add it again.
+3. Ask for the token with ask-secret in the terminal channel:
    `call <terminal channel id> ask-secret {"text": "…", "file": "telegram-<your bot ID>.env", "keys": ["TELEGRAM_BOT_TOKEN"]}`.
    `pots chat` writes it to `telegram-<your bot ID>.env` in the secrets folder (`~/.pots/secrets/`), readable only by this user, without showing it to you. Your bot ID is the name of your folder, so for the bot `ada` the file is `telegram-ada.env`. Other bots on this computer keep their tokens in the same folder, so never use a file that is not yours, such as a `telegram.env` that is already there:
    ```sh

@@ -1,6 +1,6 @@
 ---
 name: desktop-page
-description: "The desktop page, a one-time link with which a person sees and controls your screen from their phone or computer, does one step, and hands it back to you. Use when a step needs a person on your screen, such as entering a code from their phone, an identity check, a CAPTCHA you cannot pass, or a choice only they can make. A passkey on their own device does not work through it. Also how to set up the VNC server it needs, on Linux, macOS and Windows, how to set up a screen of your own on a Linux computer whose desktop other bots already use, and what to know when you drive a Linux desktop."
+description: "The desktop page, a one-time link with which a person sees and controls your screen from their phone or computer, does one step, and hands it back to you. Use when a step needs a person on your screen, such as a code that comes to their phone, an identity check, a CAPTCHA you cannot pass, or a choice only they can make. Also how to set up the VNC server it needs, on Linux, macOS and Windows, how to set up a screen of your own on a Linux computer whose desktop other bots already use, and what to know when you drive a Linux desktop."
 ---
 
 # The desktop page
@@ -18,7 +18,7 @@ description: "The desktop page, a one-time link with which a person sees and con
 ## Make a link
 
 ```sh
-pots page desktop --text "Enter the code from your phone, then press Done." --for slack:@U123 --input code
+pots page desktop --text "Sign in to LinkedIn with your password. If a check comes, solve it. Then press Done." --for slack:@U123 --input password
 ```
 
 | Flag | What it does |

@@ -299,8 +299,8 @@ describe("the prompt", () => {
     }
     expect(folderSection(facts)).toContain('"file": "<app>-ada.env"');
     expect(workSection(facts)).toContain("bots that share a screen wait for each other");
-    expect(workSection(facts)).toContain("Keep the approvals the person has asked for. Before an action that may cost money, get their OK to do it at that cost. Then do it yourself.");
-    expect(workSection(facts)).toContain("You can look things up, measure and draft without asking first. When someone asks for that work, give them the result.");
+    expect(workSection(facts)).toContain("Your actions need no approval, with one exception: before an action, make sure whether it may cost money; if it may, get the person's OK on what it costs, then do it yourself.");
+    expect(workSection(facts)).toContain("such as looking something up, measuring or drafting, needs no OK");
     expect(workSection(facts)).toContain("When you need them, ask once, first in your message, and go on with the rest.");
   });
 

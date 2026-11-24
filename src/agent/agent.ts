@@ -587,8 +587,8 @@ export class Agent {
         const last = await lastStep(await self().#harness.conversation(Number(failure.child.conversationId) as ConversationId, context), context).catch(() => undefined);
         return options.children.failed(last === undefined ? failure : { ...failure, last }, context);
       },
-      withdraw: async (submission) => {
-        await self().#harness.abortSubmission(Number(submission) as SubmissionId, context, ROOT_CONVERSATION_ID);
+      withdraw: async (submission, conversation = ROOT_CONVERSATION_ID) => {
+        await self().#harness.abortSubmission(Number(submission) as SubmissionId, context, conversation);
       },
       stop: (id) => self().stopChild(id),
       activity: (conversation) => self().#activity(conversation),

@@ -20,6 +20,8 @@ const isChild = (request: FakeRequest) => request.system.includes("You are a chi
 /** Whether a person put the file go in the workspace. */
 const go = () => existsSync(join(gateway.botDir, "workspace", "go"));
 const putGo = () => writeFileSync(join(gateway.botDir, "workspace", "go"), "");
+const go2 = () => existsSync(join(gateway.botDir, "workspace", "go2"));
+const putGo2 = () => writeFileSync(join(gateway.botDir, "workspace", "go2"), "");
 const bash = (command: string): FakeReply => ({ call: { name: "bash", arguments: { command } } });
 const task = (args: Record<string, unknown>): FakeReply => ({ call: { name: "task", arguments: args } });
 
@@ -54,6 +56,18 @@ const LEADS: Record<string, FakeReply[]> = {
   "wait for all": [task({ action: "start", title: "one", brief: "wait for go" }), task({ action: "wait", children: ["c2"] })],
   "fail below": [task({ action: "start", title: "doomed", brief: "fail after a step" }), bash("until [ -e go ]; do sleep 0.2; done")],
   "fail later": [task({ action: "start", title: "doomed", brief: "fail after a nap" })],
+  "parallel waits": [
+    {
+      call: {
+        name: "codemode",
+        arguments: {
+          code:
+            'const ids = [];\nfor (const title of ["one", "two", "three", "four"]) ids.push(/Started (c\\d+)/.exec(JSON.stringify(await tools.task({ action: "start", title, brief: "answer huge" })))[1]);\n' +
+            'return await Promise.all(ids.map((id) => tools.task({ action: "wait", children: [id] })));',
+        },
+      },
+    },
+  ],
 };
 
 /**
@@ -66,14 +80,26 @@ function script(request: FakeRequest): FakeReply {
   const brief = request.messages[0]?.content ?? "";
   const step = request.messages.filter((message) => message.role === "tool").length;
   if (isChild(request) && brief.startsWith("[brief from child")) {
+    if (request.messages.some((message) => message.content === "[message from the main agent]\nhold on")) return go2() ? { text: "held" } : bash("until [ -e go2 ]; do sleep 0.2; done");
     if (last?.role === "user" && last.content.startsWith("[message from")) return { text: last.content.split("\n")[1] ?? "" };
     if (brief.includes("answer one")) return { text: "one" };
+    if (brief.includes("answer huge")) {
+      const id = /you are child (c\d+)/.exec(brief)?.[1];
+      return { text: Array.from({ length: 2_100 }, (_, index) => `${id} line ${index + 1}`).join("\n") };
+    }
     if (brief.includes("answer long")) return { text: Array.from({ length: 900 }, (_, index) => `line ${index + 1}`).join("\n") };
     if (brief.includes("wait for go")) return go() ? { text: "two" } : bash("until [ -e go ]; do sleep 0.2; done");
     const fail: FakeReply = { fail: { status: 401, message: "the login expired" } };
     if (brief.includes("fail after a step")) return step === 0 ? bash("echo step one") : fail;
     if (brief.includes("fail after a nap")) return step === 0 ? bash("sleep 3") : fail;
     return { text: "?" };
+  }
+  if (isChild(request) && brief.split("\n")[1] === "answer, then handle a failure") {
+    // Answers, then stops the child whose failure it hears of, and works on until go is there.
+    if (last?.role === "user" && last.content.startsWith("[your child")) return task({ action: "stop", child: "c2" });
+    if (last?.role === "tool" && last.content.startsWith("Stopped c2")) return bash("until [ -e go ]; do sleep 0.2; done");
+    if (step === 0) return task({ action: "start", title: "doomed", brief: "fail after a nap" });
+    return { text: step === 1 ? "first answer" : "handled" };
   }
   if (isChild(request)) {
     if (last?.role === "user" && last.content.startsWith("[your child")) return { text: `heard: ${wakeLine(last.content)}` };
@@ -121,8 +147,8 @@ const leadAnswer = () => new RegExp(`^c1 "lead": ended`, "m").test(gateway.pots(
 const leadRequests = (id = "c1") => model.requests.filter((request) => isChild(request) && request.messages[0]?.content.startsWith(`[brief from the main agent; you are child ${id}]`));
 /** Whether the gateway printed this line. */
 const printed = (message: string) => gateway.output.some((line) => line.message === message);
-/** A hold of the gateway's, while its file is in the bot's folder. */
-const hold = (name: "child-start" | "after-child-stop" | "child-keep") => writeFileSync(join(gateway.botDir, `hold-${name}`), "");
+/** A hold of the gateway's, while its file is in the bot's folder; for child-keep, of only the child `only`. */
+const hold = (name: "child-start" | "after-child-stop" | "child-keep", only = "") => writeFileSync(join(gateway.botDir, `hold-${name}`), only);
 const release = (name: "child-start" | "after-child-stop" | "child-keep") => rmSync(join(gateway.botDir, `hold-${name}`), { force: true });
 const reports = () => gateway.sent().filter((record) => record.text?.startsWith("report:"));
 const failureWakes = () => gateway.query<{ text: string }>("SELECT text FROM bot_wakes WHERE reason = 'child'");
@@ -258,6 +284,29 @@ describe("children that start children", { timeout: 90_000 }, () => {
     expect(saved).toMatch(/c4 "three": ended [^\n]*\nIts final message:\nline 1\n/);
   });
 
+  it("shows each child of a batch as it ended, also one that works again since", async () => {
+    await setUp();
+    gateway.say("general", "alice", `@${ME} please lead again`);
+    await waitFor(() => leadRequests().length === 3 && /^c2 "one": ended/m.test(gateway.pots("children")), { what: "the lead's wait" });
+    await pause(500);
+    gateway.say("general", "alice", `@${ME} tell c2: hold on`);
+    await waitFor(() => /^c2 "one": working/m.test(gateway.pots("children")), { what: "c2's new work" });
+    putGo();
+    await waitFor(leadAnswer, { what: "the lead's end" });
+    expect(await said("c1")).toMatch(/lead got: All of them ended: c2, c3\.\n\nc2 "one": ended [^\n]*\nIts final message:\none\n\nc3 "two": ended [^\n]*\nIts final message:\ntwo$/);
+    putGo2();
+  });
+
+  it("saves the long batches of waits at the same time each in its own file", async () => {
+    await setUp();
+    gateway.say("general", "alice", `@${ME} please lead parallel waits`);
+    await waitFor(leadAnswer, { what: "the lead's end" });
+    const files = [...(await said("c1")).matchAll(/all of it is in (\S+?\.md)\./g)].map((match) => match[1]!);
+    expect(files).toHaveLength(4);
+    // Each file has the answer of its own child only.
+    expect(files.map((file) => [...new Set(readFileSync(file, "utf8").match(/^c\d+(?= line 2100$)/gm))])).toEqual([["c2"], ["c3"], ["c4"], ["c5"]]);
+  });
+
   it("gives a stopped child's answer to its waits when the stop came after the answer, before its reporter kept it", async () => {
     await setUp();
     gateway.say("general", "alice", `@${ME} please lead wait for all`);
@@ -350,6 +399,23 @@ describe("children that start children", { timeout: 90_000 }, () => {
     await waitFor(leadAnswer, { what: "the lead's end" });
     expect(leadRequests().some((request) => request.messages.some((message) => message.content.includes("[your child c2")))).toBe(false);
     expect(failureWakes()).toHaveLength(0);
+    forgetFailures();
+  });
+
+  it("keeps the answer of a child to a failure's message across a restart, after it stopped the failed child", async () => {
+    await setUp();
+    // The lead's first answer is held until the failure came as a new run: the lead still works.
+    hold("child-keep", "c1");
+    gateway.say("general", "alice", `@${ME} please lead answer, then handle a failure`);
+    await waitFor(() => leadRequests().some((request) => request.messages.at(-1)?.content.startsWith("[your child c2")), { what: "the failure's message" });
+    release("child-keep");
+    await waitFor(() => leadRequests().some((request) => request.messages.at(-1)?.content.startsWith("Stopped c2")), { what: "the stop" });
+    await pause(500);
+    await gateway.stop();
+    putGo();
+    await gateway.start();
+    await waitFor(leadAnswer, { what: "the lead's end" });
+    expect(await said("c1")).toMatch(/Its last final message:\nhandled$/);
     forgetFailures();
   });
 

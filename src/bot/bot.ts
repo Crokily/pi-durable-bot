@@ -440,9 +440,11 @@ export class Bot implements WakeTarget {
     agent.crashTests.holdAfterStopMark = hold(paths.holdAfterChildStop, "crash test: holding after the stop mark", "child");
     agent.crashTests.holdChildStart = hold(paths.holdChildStart, "crash test: holding the start of a child", "starter");
     // After a child answered, before its reporter keeps the answer: held while the file is there, or until the reporter
-    // is aborted. A stop then must still keep the answer.
+    // is aborted. A stop then must still keep the answer. A file with a child's ID holds only that child.
     agent.crashTests.beforeChildKeep = async (child, signal) => {
       if (!existsSync(paths.holdChildKeep)) return;
+      const only = (await readFile(paths.holdChildKeep, "utf8").catch(() => "")).trim();
+      if (only !== "" && only !== child) return;
       print("crash test: holding the child's end", { child });
       while (existsSync(paths.holdChildKeep) && !signal.aborted) await new Promise((resolve) => setTimeout(resolve, 100));
       signal.throwIfAborted();

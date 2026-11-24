@@ -96,12 +96,17 @@ export function readVncPassword(file: string): Buffer {
     const password = readSecrets(file, ["VNC_PASSWORD"]).VNC_PASSWORD!;
     return Buffer.from(password, "utf8").subarray(0, 8);
   }
-  if (data.length === 8 || data.length === 16) {
-    const plain = des(PASSWD_FILE_KEY, data.subarray(0, 8), true);
-    const end = plain.indexOf(0);
-    return end === -1 ? plain : plain.subarray(0, end);
-  }
+  const password = decodeVncPasswordFile(data);
+  if (password) return password;
   throw new VncError(`${file} is neither KEY=value lines with VNC_PASSWORD nor a VNC password file as vncpasswd writes it (8 bytes)`);
+}
+
+/** The password in a file as vncpasswd writes it (8 bytes, or 16 with a view-only one); undefined for other data. */
+export function decodeVncPasswordFile(data: Buffer): Buffer | undefined {
+  if (data.length !== 8 && data.length !== 16) return undefined;
+  const plain = des(PASSWD_FILE_KEY, data.subarray(0, 8), true);
+  const end = plain.indexOf(0);
+  return end === -1 ? plain : plain.subarray(0, end);
 }
 
 // ---- Reading ----

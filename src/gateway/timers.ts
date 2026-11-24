@@ -230,7 +230,7 @@ export class Timers extends Context.Service<
             const ended = { result: end.result, exit_code: end.exitCode ?? null };
             const woke = yield* db(() =>
               sql.transaction(async (tx) => {
-                await tx.run("UPDATE bot_routine_runs SET ended_at = ?, result = ?, exit_code = ?, output = ? WHERE id = ?", now, ended.result, ended.exit_code, end.output, runId);
+                await tx.run("UPDATE bot_routine_runs SET ended_at = ?, result = ?, exit_code = ?, output = ? WHERE id = ?", now, ended.result, ended.exit_code, config.mask?.(end.output) ?? end.output, runId);
                 await pruneRuns(tx, now);
                 if (end.result === "stopped") return false;
                 const routine = await tx.get<{ failing: number; created_at: number }>("SELECT failing, created_at FROM bot_routines WHERE name = ?", name);

@@ -263,6 +263,20 @@ describe("Gateway", () => {
     await sql.close();
   });
 
+  it("masks known secrets in a span's error before it keeps it", async () => {
+    const sql = await openDatabase(":memory:");
+    const gateway = await Gateway.open(sql, { bot: "coworker", judge: () => undefined, settings: () => SETTINGS, fireTimer: async () => ({ submission: "t" }), filesDir: FILES_DIR, mask: (text) => text.replaceAll("xoxb-secret-0123456789", "[secret]"), print: () => {} });
+    const channel = new MemoryChannel();
+    Object.assign(channel, { send: () => Promise.reject(new Error("refused token xoxb-secret-0123456789")) });
+    await gateway.start(target, [channel]);
+    await expect(gateway.send("id-1", "mem:#general", "hello")).rejects.toThrow();
+    await gateway.stop();
+    const errors = (await sql.all<{ error: string }>("SELECT error FROM gw_spans WHERE error IS NOT NULL")).map((row) => row.error);
+    expect(errors.some((error) => error.includes("refused token [secret]"))).toBe(true);
+    expect(errors.join("\n")).not.toContain("xoxb-secret");
+    await sql.close();
+  });
+
   it("deletes spans older than 7 days when it starts", async () => {
     const { sql, gateway } = await openGateway();
     await gateway.stop();

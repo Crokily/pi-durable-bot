@@ -31,7 +31,7 @@ On a computer without a desktop, such as a cloud server reached over SSH, the bo
 - a browser-only tool, which is lighter but cannot be watched;
 - the person clicks through a few browser steps on their own computer while the bot guides them.
 
-When it needs tokens the person copied, it asks for them in `pots chat` with hidden input, and they go straight to the secrets folder.
+When it needs tokens the person copied, it asks for them in `pots chat` with hidden input, and they go straight to the secrets folder. Known secrets in its tools' output reach it as `[secret]`.
 
 ## Before you start
 

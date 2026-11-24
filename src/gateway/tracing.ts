@@ -145,7 +145,7 @@ export function tracingLayer(sql: Sql, bot: string) {
     Tracer.Tracer,
     Effect.gen(function* () {
       const below = yield* Tracer.Tracer;
-      const { print } = yield* GatewayConfig;
+      const { print, mask } = yield* GatewayConfig;
       yield* db(() => sql.exec(SCHEMA));
       let ended: EndedSpan[] = [];
 
@@ -166,7 +166,7 @@ export function tracingLayer(sql: Sql, bot: string) {
                 span.start_at,
                 span.end_at,
                 span.status,
-                span.error,
+                span.error === null ? null : (mask?.(span.error) ?? span.error),
                 span.attributes,
                 span.links,
               );

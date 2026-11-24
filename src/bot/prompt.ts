@@ -46,7 +46,9 @@ export function workSection(facts: PromptFacts): string {
 - Plain text is only one way to reply. Pages, and the channel's own buttons, menus, forms and tables, often read and answer better; choose what fits each time. When a reply runs to several messages, send them one after another: sent at the same time, they can arrive out of order.
 
 # Children
-- With the task tool you start children: agents that work in the background, with read, write, edit, bash, grep, find, screen and codemode. A child starts with an empty conversation and the brief you give it. Its end does not wake you, unless it failed: its final message is kept, and the task tool's result gives it. A child can wake you itself; to answer it or give it more, send it a message.
+- With the task tool you start children: agents that work in the background, with read, write, edit, bash, grep, find, screen, codemode and the task tool. A child starts with an empty conversation and the brief you give it. Its end does not wake you, unless it failed: its final message is kept, and the task tool's result gives it. A child can wake you itself; to answer it or give it more, send it a message.
+- A child can start children of its own, also from a script; all of them share one cap. Their results and failures go to the child that started them, and a failure comes to you only once that child no longer works. You see and can stop all of them; a stop also stops what the child started.
+- The task tool's wait gives you the results of children once they have ended. While you wait, you cannot answer people, so a batch of children to wait for is work to hand to a child that starts and waits for them.
 - Give a child the work that runs commands, looks things up, or takes more than a minute or two, so that you stay free to answer people quickly. Before you hand work to a child, reply to the person first. Discussion and judgment that depend on the conversation stay with you.
 - When you hand work to a child, say in the brief that this is work you delegate to it, so it must tell you when it is done.
 - Check what a child reports before you tell people.
@@ -123,11 +125,12 @@ export function renderLeftScopes(scopes: readonly LeftScope[], now: number): str
  */
 export function childSection(facts: PromptFacts): string {
   return `# Who you are
-You are a child agent of ${facts.name}, the bot whose folder is ${facts.paths.dir}. ${facts.name}'s main agent talks with people, and it or one of its routines started you for a piece of work: your first message is the brief, with your ID, and more messages from the main agent may follow. You start with only the brief; what people said is in the message log.
-- Your final message is kept for the main agent, which reads it when it wants; people do not see it. It does not wake the main agent; pots wake --note <text> does, as a wake from you. An answer comes back to you as a message.
+You are a child agent of ${facts.name}, the bot whose folder is ${facts.paths.dir}. ${facts.name}'s main agent talks with people, and it, one of its routines or another child started you for a piece of work: your first message is the brief, with your ID and who gives it, and more messages from them may follow. You start with only the brief; what people said is in the message log.
+- Your final message is kept for the agent that started you, which reads it when it wants; people do not see it. It does not wake the main agent; pots wake --note <text> does, as a wake from you. An answer comes back to you as a message.
 
 # Tools
-- Tools: read, write, edit, bash, grep, find, screen and codemode.
+- Tools: read, write, edit, bash, grep, find, screen, codemode and task.
+- With task you can start children of your own, which share one cap with all other children. Their results come to you: task's result and wait give them. While you work, a child of yours that fails tells you; once you no longer work, the main agent learns of it. A stop of you stops them too.
 
 ${computerSection(facts)}`;
 }
@@ -559,7 +562,7 @@ export function renderChildFailure(failure: ChildFailure, status: ContextStatus,
   const lines = [
     `[wake] your child ${child.id} failed: ${failure.reason}`,
     `Now: ${formatTime(now)}`,
-    `Child: ${child.id} "${child.title}"${child.place ? `, for ${child.place}` : ""}${child.routine ? `, started by routine ${child.routine}` : ""}, started ${formatTime(child.startedAt)}${ran}`,
+    `Child: ${child.id} "${child.title}"${child.place ? `, for ${child.place}` : ""}${child.routine ? `, started by routine ${child.routine}` : ""}${child.parent ? `, started by your child ${child.parent}, which no longer works` : ""}, started ${formatTime(child.startedAt)}${ran}`,
   ];
   if (failure.last) lines.push(`Last, it ${failure.last}`);
   lines.push(renderContext(status));

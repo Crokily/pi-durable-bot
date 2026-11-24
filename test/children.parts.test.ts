@@ -1,6 +1,6 @@
 import type { InboxState, LiveState, TaskId } from "@earendil-works/pi-durable";
 import { describe, expect, it } from "vitest";
-import { type CallTask, type ChildInfo, childActivity, describeChild } from "../src/agent/children.ts";
+import { type CallTask, type ChildInfo, childActivity, describeChild, shownChildren } from "../src/agent/children.ts";
 
 // How a working child is described from its conversation's live state, on its own: the gateway tests in
 // children.test.ts show the same lines from outside, for a command that hangs.
@@ -100,5 +100,28 @@ describe("describing a working child", () => {
     const { since: _, ...waiting } = child;
     expect(describeChild({ ...waiting, endedAt: NOW - 60_000, activity }, NOW)).toBe('c5 "Remote desktop": ended 1 min ago, waits for a message, for slack:#C1');
     expect(describeChild({ ...waiting, stoppedAt: NOW - 60_000, activity }, NOW)).toBe('c5 "Remote desktop": stopped 1 min ago, for slack:#C1');
+  });
+});
+
+describe("which children a list shows", () => {
+  const info = (id: string, parent?: string, working = false): ChildInfo => ({
+    id,
+    title: id,
+    conversationId: id,
+    thinking: "xhigh",
+    startedAt: NOW,
+    ...(parent === undefined ? {} : { parent }),
+    ...(working ? { since: NOW } : { endedAt: NOW }),
+  });
+
+  it("shows those that work, the last of the others, and the chain that started each shown one", () => {
+    const old = [info("c1"), info("c2", "c1")];
+    const ended = Array.from({ length: 25 }, (_, index) => info(`c${index + 3}`));
+    const listed = [...old, info("c99", "c2", true), ...ended];
+    const shown = shownChildren(listed, 20).map((child) => child.id);
+    expect(shown.slice(0, 3)).toEqual(["c1", "c2", "c99"]);
+    expect(shown).toHaveLength(23);
+    expect(shown).not.toContain("c3");
+    expect(shown).toContain("c27");
   });
 });

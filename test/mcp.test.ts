@@ -46,7 +46,7 @@ function png(width: number, height: number): Buffer {
 const WIDE_IMAGE = `image("data:image/png;base64,${png(3000, 30).toString("base64")}");\nreturn "here it is";`;
 const MAIN_TOOLS = ["read", "write", "edit", "bash", "grep", "find", "send", "react", "call", "screen", "task", "codemode"];
 // A child has the main agent's extensions with its own added last: its screen comes after codemode.
-const CHILD_TOOLS = ["read", "write", "edit", "bash", "grep", "find", "codemode", "screen"];
+const CHILD_TOOLS = ["read", "write", "edit", "bash", "grep", "find", "task", "codemode", "screen"];
 
 let model: FakeModel;
 let gateway: TestGateway;
@@ -138,12 +138,11 @@ describe("code mode and MCP servers", { timeout: 90_000 }, () => {
     const child = model.requests.find(isChild)!;
     expect(main!.tools).toEqual(MAIN_TOOLS);
     expect(child.tools).toEqual(CHILD_TOOLS);
-    // The codemode section lists the tools scripts can call: a child's has no channel action and no task tool.
+    // The codemode section lists the tools scripts can call: a child's has no channel action, and has the task tool.
     expect(section(main!, "codemode")).toMatch(/^Tools scripts can call \(`await tools\.<name>\(args\)`\):/);
-    for (const tool of ["send", "react", "call", "task"]) {
-      expect(section(main!, "codemode")).toContain(`### \`${tool}\``);
-      expect(section(child, "codemode")).not.toContain(`### \`${tool}\``);
-    }
+    for (const tool of ["send", "react", "call", "task"]) expect(section(main!, "codemode")).toContain(`### \`${tool}\``);
+    for (const tool of ["send", "react", "call"]) expect(section(child, "codemode")).not.toContain(`### \`${tool}\``);
+    expect(section(child, "codemode")).toContain("### `task`");
     expect(section(child, "codemode")).toContain("### `screen`");
     expect(section(main!, "mcp_servers")).toBe("MCP servers whose tools are not declared to you: none.");
     expect(section(child, "mcp_servers")).toBe("MCP servers whose tools are not declared to you: none.");

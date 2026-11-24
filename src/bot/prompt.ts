@@ -47,7 +47,7 @@ export function workSection(facts: PromptFacts): string {
 - Plain text is only one way to reply. Pages, and the channel's own buttons, menus, forms and tables, often read and answer better; choose what fits each time. When a reply runs to several messages, send them one after another: sent at the same time, they can arrive out of order.
 
 # Children
-- With the task tool you start children: agents that work in the background, with read, write, edit, bash, grep, find, screen and codemode. A child starts with an empty conversation and the brief you give it. Its end does not wake you: its final message is kept, and the task tool's result gives it. A child can wake you itself; to answer it or give it more, send it a message.
+- With the task tool you start children: agents that work in the background, with read, write, edit, bash, grep, find, screen and codemode. A child starts with an empty conversation and the brief you give it. Its answer does not wake you: its final message is kept, and the task tool's result gives it. A child can wake you itself; to answer it or give it more, send it a message. A child that cannot go on, such as when its model keeps failing, wakes you; children that fail close together come in one wake.
 - Give a child the work that runs commands, looks things up, or takes more than a minute or two, so that you stay free to answer people quickly. Before you hand work to a child, reply to the person first. Discussion and judgment that depend on the conversation stay with you.
 - When you hand work to a child, say in the brief that this is work you delegate to it, so it must tell you when it is done.
 - Check what a child reports before you tell people.
@@ -141,7 +141,7 @@ export function logSection(facts: PromptFacts): string {
 - Tables:
 ${LOG_SCHEMA}
 - bot_wakes(id, at, reason, place, text, submission): each time you were woken, with the full wake message.
-- bot_timers(id, due_at, note, state, set_by, source, request_id, run_id, child, created_at, fired_at): timed wakes. set_by: agent (set with pots wake, by you, a child, a script or a person), routine (a routine's note, or its failed run run_id) or fallback. source: pots wake --from, or the routine's name. request_id: pots wake --id. child: the child whose commands set it.
+- bot_timers(id, due_at, note, state, set_by, source, request_id, run_id, child, created_at, fired_at): timed wakes. set_by: agent (set with pots wake, by you, a child, a script or a person), routine (a routine's note, or its failed run run_id), child (a child that could not go on: the note says why; source and run_id: its routine and run) or fallback. source: pots wake --from, or the routine's name. request_id: pots wake --id. child: the child whose commands set it.
 - bot_routines(name, every_ms, cron, note, run, child, timeout_ms, created_at, next_at, failing): your routines. failing = 1: a failed run woke you, and the next failures do not until a run succeeds.
 - bot_routine_runs(id, routine, started_at, ended_at, result, exit_code, output): the runs of the last 7 days. result: running, exit (with exit_code), timeout, error (the command or the child could not start), stopped (the gateway stopped it), woke (a --note routine woke you) or child (a --child routine started the child whose ID is the output). output: the last lines of the command's output.
 - Tables that start with pi_ are your conversation storage (pi-durable).`;
@@ -178,7 +178,7 @@ export function contextSection(facts: PromptFacts): string {
 # Timed wakes and routines
 - Use pots wake to set timed wakes. You can have several at once, and you choose the times: look in now and then at what people are talking about, or do something you promised when its time comes.
 - Scripts you write that call pots wake give --from <a short name>. Their wakes then say that they come from that command on this computer, not from a person, and that the note is what the command wrote. A second pots wake with the --id of an earlier one gives back the earlier wake and sets none.
-- Use pots routine for repeating work. --note wakes you with its note at each time. --run runs a command in your shell at each time, with POTS_FROM set to the routine's name, so a pots wake in it comes from the routine; the command decides whether to wake you. --child starts a child with its text as the brief at each time, without waking you; the child decides whether to wake you. A run is skipped while the last one still runs, also its child, and times missed while the gateway was stopped or the computer slept are not made up. A failed run (a non-zero exit code, its timeout: 10 minutes by default, or a child that could not start) wakes you once; the next failures do not, until a run succeeds.
+- Use pots routine for repeating work. --note wakes you with its note at each time. --run runs a command in your shell at each time, with POTS_FROM set to the routine's name, so a pots wake in it comes from the routine; the command decides whether to wake you. --child starts a child with its text as the brief at each time, without waking you; the child decides whether to wake you. A run is skipped while the last one still runs, also its child, and times missed while the gateway was stopped or the computer slept are not made up. A failed run (a non-zero exit code, its timeout: 10 minutes by default, or a child that could not start or could not go on) wakes you once; the next failures do not, until a run succeeds.
 - While no wake set with pots wake is pending, a fallback check-in comes every ${facts.fallbackWakeMinutes} minutes. Routines do not stop it.`;
 }
 
@@ -517,6 +517,32 @@ export function renderTimerWake(timer: DueTimer, status: ContextStatus, fallback
     if (timer.note) lines.push(`Note: ${timer.note.replace(/\r?\n/g, "\n  ")}`);
   }
   lines.push(...renderChildren(children, "Your children working now"));
+  lines.push(renderContext(status));
+  return lines.join("\n");
+}
+
+/**
+ * Children that could not go on, in one wake: each one's place, why, what it did last, and for a routine's child that
+ * this was the routine's failed run. children: all the children, to find each one's title and place.
+ */
+export function renderChildFailures(failures: readonly DueTimer[], children: readonly ChildInfo[], status: ContextStatus, working: readonly ChildInfo[] = []): string {
+  const now = Date.now();
+  const first = failures.length === 1 ? children.find((child) => child.id === failures[0]!.child) : undefined;
+  const lines = [
+    failures.length === 1
+      ? `[wake] your child ${failures[0]!.child ?? "?"}${first ? ` "${first.title}"` : ""} could not go on`
+      : `[wake] ${failures.length} of your children could not go on`,
+    `Now: ${formatTime(now)}`,
+  ];
+  for (const failure of failures) {
+    const child = children.find((each) => each.id === failure.child);
+    const [why = "", ...rest] = failure.note.split(/\r?\n/);
+    const about = [child ? `"${child.title}"` : undefined, failure.source ? `started by routine ${failure.source}` : undefined, child?.place ? `for ${child.place}` : "for no place"];
+    lines.push(`- ${failure.child ?? "?"} ${about.filter((part) => part !== undefined).join(", ")}, at ${formatTime(failure.created_at)}: ${why}`);
+    for (const line of rest) lines.push(`  ${line}`);
+    if (failure.routine) lines.push(`  This is a failed run of routine ${failure.source}: its later failures do not wake you until one of its runs succeeds.`);
+  }
+  lines.push(...renderChildren(working, "Your children working now"));
   lines.push(renderContext(status));
   return lines.join("\n");
 }

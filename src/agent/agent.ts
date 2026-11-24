@@ -47,6 +47,7 @@ import {
   type ChildCall,
   type ChildInfo,
   type ChildRecord,
+  type ChildEnd,
   type ChildrenState,
   type ChildrenTools,
   Children,
@@ -259,6 +260,9 @@ export class Agent {
   readonly #runListeners = new Set<(inputs: readonly string[] | undefined) => void>();
   #disposeView?: () => void;
   #children: readonly ChildInfo[] = [];
+  #childEnds: readonly ChildEnd[] = [];
+  /** Called when there are children's ends that the bot has not handed to its timers. */
+  onChildEnds: (() => void) | undefined;
   #disposeChildren?: () => void;
   #memory: MemoryPasses | undefined;
   #warming: CacheWarming | undefined;
@@ -774,8 +778,23 @@ export class Agent {
         .map(childInfo)
         .sort((a, b) => a.startedAt - b.startedAt);
       this.#children = list;
+      this.#childEnds = Object.values(value.ends ?? {});
       changed(list);
+      if (this.#childEnds.length > 0) this.onChildEnds?.();
     });
+  }
+
+  /** Children's ends that the bot has not handed to its timers yet. */
+  get childEnds(): readonly ChildEnd[] {
+    return this.#childEnds;
+  }
+
+  /** The bot handed these ends to its timers. */
+  async dropChildEnds(keys: readonly string[]): Promise<void> {
+    await this.#root.commit(async (tx) => {
+      const state = await tx.doc(Children, ROOT_CONVERSATION_ID);
+      for (const key of keys) delete state.ends?.[key];
+    }, context);
   }
 
   /** The main agent's children, oldest first. */

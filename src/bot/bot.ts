@@ -46,6 +46,7 @@ import {
   memorySection,
   type PromptFacts,
   renderCacheUse,
+  renderChildFailures,
   renderContext,
   renderDream,
   renderExtraction,
@@ -442,6 +443,9 @@ export class Bot implements WakeTarget {
       await gateway.start(bot, adapters);
       await agent.resume();
       await timers.start();
+      // Children's ends go to the timers, those the last process had not handed over first.
+      agent.onChildEnds = () => bot!.#handChildEnds();
+      bot.#handChildEnds();
       if (existsSync(paths.firstWake)) {
         await timers.add(Date.now(), await readFile(paths.firstWake, "utf8"));
         unlinkSync(paths.firstWake);
@@ -475,6 +479,8 @@ export class Bot implements WakeTarget {
       this.#pages.login.stop();
       await this.#control.stop();
       await this.#gateway.pauseWakes();
+      this.#agent.onChildEnds = undefined;
+      await this.#handing;
       await this.#agent.close();
     } finally {
       // Also when a step above failed: a bot that is stopped must not keep its channels or its file open.
@@ -557,7 +563,32 @@ export class Bot implements WakeTarget {
     return readFile(this.paths.responsibilities, "utf8").catch(() => "");
   }
 
+  /** The ends of children handed over now. */
+  #handing: Promise<void> = Promise.resolve();
+
+  /**
+   * Hand the children's ends to the timers, then drop them from the children document. A crash between the two hands
+   * them over again at the next start, which the timers take once.
+   */
+  #handChildEnds(): void {
+    this.#handing = this.#handing
+      .then(async () => {
+        const ends = this.#agent.childEnds;
+        if (ends.length === 0) return;
+        await this.#timers.childEnds(ends);
+        await this.#agent.dropChildEnds(ends.map((end) => end.key));
+      })
+      .catch((error: unknown) => this.#print("could not hand children's ends to the timers", { error: String(error) }));
+  }
+
   async #deliverTimer(timer: DueTimer, caller?: TelemetrySpan): Promise<Delivered> {
+    if (timer.set_by === "child") {
+      const failures = timer.failures ?? [timer];
+      const places = new Set(failures.map((each) => this.#agent.children.find((child) => child.id === each.child)?.place));
+      const place = places.size === 1 ? [...places][0] : undefined;
+      const text = renderChildFailures(failures, this.#agent.children, await this.#agent.contextStatus(), await this.#agent.childrenNow(this.#workingChildren()));
+      return this.#submit(`timer:${timer.id}`, "child", place, text, false, caller);
+    }
     const children = await this.#agent.childrenNow(this.#workingChildren());
     // A wake a child set from its own commands, which have its ID in POTS_CHILD.
     const child = timer.set_by === "agent" && timer.child !== null ? this.#agent.children.find((each) => each.id === timer.child) : undefined;

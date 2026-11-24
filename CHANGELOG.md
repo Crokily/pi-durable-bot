@@ -2,6 +2,15 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
+## Unreleased
+
+A child that cannot go on wakes the bot.
+
+### Changed
+- **A child that cannot go on wakes the bot.** In 0.8.9 a child that failed only kept why, and the bot learned of it at its next look-in. Now a child that cannot go on (its model still fails after its retries, no model is available, it reaches its turn limit or restart limit, or its run fails in another such way) wakes the bot once: the wake says which child, the place it worked for, why it failed and what it did last, and is a wake for that place. Children that fail close together, as when a provider is down, come in one wake 30 seconds after the first, which gives each one's place. A child that answers still decides itself whether to wake the bot; a child the bot stopped, or interrupted and that goes on, and a child whose model is still retrying wake no one. The wake is a timed wake (`bot_timers.set_by` `child`), so it is in the log and the traces, and a restart neither loses it nor makes it twice.
+- **A `--child` routine's child that cannot go on is a failed run of the routine.** It wakes the bot once, in the same wake as other children, and the routine's next failures do not, until a run succeeds. A run succeeds when its child answers: a child that only starts no longer counts as a success.
+- The prompt's lines on children and routines, and the `task` tool's description, say so.
+
 ## 0.8.9 (2026-11-23)
 
 The bot spends less context and fewer tokens. A child's end no longer wakes it, and a routine can start a child at its time without waking it. The main conversation keeps its prompt cache for an hour where the model has that. The bot hands children the work that runs commands and keeps the discussion itself.

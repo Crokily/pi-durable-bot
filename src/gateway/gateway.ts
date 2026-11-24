@@ -12,7 +12,7 @@ import { Inbox } from "./inbox.ts";
 import { MessageLog } from "./log.ts";
 import { Outbox, type OutboxHooks, type SendResult } from "./outbox.ts";
 import type { Routine, RoutineInput, RoutineListing } from "./routines.ts";
-import { type AddedTimer, type Timer, Timers, type WakeOptions } from "./timers.ts";
+import { type AddedTimer, type ChildEnd, type Timer, Timers, type WakeOptions } from "./timers.ts";
 import { type PiTelemetry, Telemetry } from "./telemetry.ts";
 import { tracingLayer, WakeSpans } from "./tracing.ts";
 import { Waker, type WakerHooks } from "./waker.ts";
@@ -340,6 +340,10 @@ export class TimersHandle {
 
   routines(): Promise<RoutineListing> {
     return this.#run(Timers.use((timers) => timers.routines));
+  }
+
+  childEnds(ends: readonly ChildEnd[]): Promise<void> {
+    return this.#run(Timers.use((timers) => timers.childEnds(ends)));
   }
 }
 

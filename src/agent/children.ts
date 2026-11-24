@@ -23,8 +23,10 @@ import { obj, opt, str } from "@earendil-works/pi-schema";
 // Children: agents the main agent starts for longer work, so it stays free to talk. A child is a conversation of its
 // own that starts with only the brief, and has read, write, edit, bash, grep, find, screen and codemode: not the channel
 // actions send, react and call, and not the task tool. The main agent starts one with the task tool, or a routine
-// starts one at its time. When it ends, its final message is kept, also across restarts, and wakes no one: the main
-// agent reads it with the task tool, and a child that judges the main agent needs to know wakes it itself (pots wake).
+// starts one at its time. When it answers, its answer is kept, also across restarts, and wakes no one: the main agent
+// reads it with the task tool, and a child that judges the main agent needs to know wakes it itself (pots wake). A child
+// that could not go on (its model failed after its retries, no model, its turn or restart limit) wakes the main agent:
+// its end is kept in ends until the bot has handed it to its timers, which wake once, also across restarts.
 // Built on pi-durable's example of background subagents: an anchor task owns each child's conversation, and a reporter
 // task delivers each message to the child and keeps how it ended.
 
@@ -65,6 +67,20 @@ export type ChildrenState = {
   children: Record<string, ChildRecord>;
   /** Reporters that have not ended yet, and their child. */
   live: Record<string, string>;
+  /** Ends the bot has not handed to its timers yet, by key: failures, and the answers of routines' children. */
+  ends?: Record<string, ChildEnd>;
+};
+
+/**
+ * How a child ended, for the bot's timers: it could not go on (failed: why; last: what it did last), or a routine's
+ * child answered. key: its reporter's ID.
+ */
+export type ChildEnd = {
+  key: string;
+  child: string;
+  routine?: string;
+  failed?: string;
+  last?: string;
 };
 
 export const Children = defineDoc<ChildrenState>({
@@ -328,6 +344,20 @@ export function describeActivity(activity: ChildActivity, now = Date.now()): str
   return lines;
 }
 
+/** What a child did last, from its context: the tool calls of its last step, or the start of its last text. */
+export function lastStep(messages: readonly { role: string; content?: unknown }[]): string | undefined {
+  const message = messages.findLast((each) => each.role === "assistant") as AssistantMessage | undefined;
+  if (!message) return undefined;
+  const calls = (message.content ?? []).flatMap((part) => {
+    if (part.type !== "toolCall") return [];
+    const command = commandOf(part.arguments as JsonObject);
+    return [`${part.name}${command === undefined ? "" : `: ${command}`}`];
+  });
+  if (calls.length > 0) return `called ${calls.join("; ")}`;
+  const text = clip(textOf(message));
+  return text === undefined ? undefined : `wrote: ${text}`;
+}
+
 function textOf(message: AssistantMessage | undefined): string {
   return (message?.content ?? []).flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
 }
@@ -378,7 +408,8 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
     delete child.since;
   };
 
-  // Delivers one message to a child, waits for its answer and keeps how it ended; that wakes no one. A background task
+  // Delivers one message to a child, waits for its answer and keeps how it ended: a failure, or a routine's child's
+  // answer, also in ends, for the bot's timers; the main agent's stop wakes no one. A background task
   // of the main conversation; each phase ends with a checkpoint, and a request ID makes a phase that runs again after a
   // restart find the first submission, so the child gets the message once.
   const Reporter = defineTask<ReporterInput, ReporterState, null>({
@@ -401,6 +432,14 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
         );
         const settled = await submission.wait(context);
         host.settled(String(conversationId));
+        // What it did last, for the wake about a failure.
+        const last =
+          settled.status === "unanswered" && settled.reason !== "aborted"
+            ? await runtime.context(conversationId, context).then(
+                (view) => lastStep(view.messages),
+                () => undefined,
+              )
+            : undefined;
         await host.beforeKeep?.(reporter.input.child, runtime.signal);
         // One commit keeps how the child ended, so a restart does not decide again.
         await runtime.commit(async (tx) => {
@@ -413,10 +452,22 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
             if (settled.reason === "aborted" || record.stoppedAt !== undefined) return next;
             const detail = settled.detail === undefined ? "" : `: ${typeof settled.detail === "string" ? settled.detail : JSON.stringify(settled.detail)}`;
             record.result = { at: runtime.now(), failed: `${settled.reason}${detail}` };
+            state.ends ??= {};
+            state.ends[String(reporter.id)] = {
+              key: String(reporter.id),
+              child: record.id,
+              ...(record.routine === undefined ? {} : { routine: record.routine }),
+              failed: record.result.failed!,
+              ...(last === undefined ? {} : { last }),
+            };
             return next;
           }
           // An answer is kept also when a stop came after it.
           if (settled.type === "input") keepAnswer(record, settled.answer, runtime.now());
+          if (record.routine !== undefined) {
+            state.ends ??= {};
+            state.ends[String(reporter.id)] = { key: String(reporter.id), child: record.id, routine: record.routine };
+          }
           return next;
         }, context);
       },
@@ -508,7 +559,7 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
       "send: a message to a child; a child that waits starts on it " +
       "at once, and one that works takes it when its current tool calls end. interrupt: ends the tool calls a child is in, such as a command " +
       "that hangs; the child goes on, sees that they were aborted, and takes the messages that wait for it. " +
-      "stop: stops a child and what it runs. A child's end does not wake you; a child can wake you itself.",
+      "stop: stops a child and what it runs. A child's answer does not wake you; a child can wake you itself. A child that cannot go on wakes you.",
     parameters: obj(
       {
         action: StringEnum(["start", "list", "result", "send", "interrupt", "stop"] as const),

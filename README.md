@@ -168,9 +168,9 @@ pots init
 3. **Who decides on group messages that do not mention it.** By default the bot itself: every such message wakes it. Or Jev, a fast judge from TypeSafe, with your TypeSafe API key, or a judge model you already set up in pi; the bot then wakes only for the messages about its work.
 4. **In one sentence, what it is for.** Optional. The bot writes its own persona and responsibilities from it.
 
-Then the gateway starts as a background service (it starts again at login) and you are talking to your bot in the terminal. It first checks that it can use the computer's screen and walks you through any permission it needs, such as Screen Recording and Accessibility on a Mac. On a server with no desktop, it works without a screen and asks you before it sets one up. Tell it which chat apps to join. It sets them up itself on its computer and asks you only for what it cannot do, like signing in to Slack or approving the app. Leave with Ctrl+C; come back with `pots chat`.
+Then the gateway starts as a background service (it starts again at login) and you are talking to your bot in the terminal. It first checks that it can use the computer's screen and walks you through any permission it needs, such as Screen Recording and Accessibility on a Mac. On a server with no desktop, it works without a screen and asks you before it sets one up. Tell it which chat apps to join. It sets them up itself on its computer and signs in with what the computer has, such as your accounts in its browser and your password manager. It asks you only for what it cannot do, like a code that comes to your phone or an admin's approval. Leave with Ctrl+C; come back with `pots chat`.
 
-It joins only the places it is invited to, like a new hire who is added to the right channels.
+It works in the places it is in, like a new hire who is added to the right channels. On Slack it can also join public channels and create channels itself; a private channel needs an invite.
 
 To add another bot, ask a bot you have to make one, or run `pots bot new <name> --about "<what it is for>"`. The new bot sets itself up the same way, and when another bot already uses the screen, it offers to set up one of its own ([Add another bot](docs/for-agents.md#add-another-bot)).
 

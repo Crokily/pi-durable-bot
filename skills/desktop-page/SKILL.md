@@ -1,6 +1,6 @@
 ---
 name: desktop-page
-description: "The desktop page, a one-time link with which a person sees and controls your screen from their phone or computer, does one step, and hands it back to you. Use when a step needs a person on your screen, such as a sign-in with their password or a code, a CAPTCHA, an approval or a choice only they can make. Also how to set up the VNC server it needs, on Linux, macOS and Windows, how to set up a screen of your own on a Linux computer whose desktop other bots already use, and what to know when you drive a Linux desktop."
+description: "The desktop page, a one-time link with which a person sees and controls your screen from their phone or computer, does one step, and hands it back to you. Use when a step needs a person on your screen, such as a code that comes to their phone, an identity check, a CAPTCHA you cannot pass, or a choice only they can make. Also how to set up the VNC server it needs, on Linux, macOS and Windows, how to set up a screen of your own on a Linux computer whose desktop other bots already use, and what to know when you drive a Linux desktop."
 ---
 
 # The desktop page

@@ -299,7 +299,9 @@ describe("the prompt", () => {
     }
     expect(folderSection(facts)).toContain('"file": "<app>-ada.env"');
     expect(workSection(facts)).toContain("bots that share a screen wait for each other");
-    expect(workSection(facts)).toContain("Your actions need no approval, with one exception: before an action, make sure whether it may cost money; if it may, confirm with the person before you do it.");
+    expect(workSection(facts)).toContain("Your actions need no approval, with one exception: before an action, make sure whether it may cost money; if it may, get the person's OK on what it costs, then do it yourself.");
+    expect(workSection(facts)).toContain("Looking something up, measuring or drafting needs no OK");
+    expect(workSection(facts)).toContain("When you need them, ask once, first in your message, and go on with the rest.");
   });
 
   it("lists the page, desktop and form commands", () => {

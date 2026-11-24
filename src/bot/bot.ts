@@ -444,10 +444,21 @@ export class Bot implements WakeTarget {
     agent.crashTests.afterChildFailure = crashTest(paths.crashAfterChildFailure, "crash test: dying after the child's failure wake", "reporter");
     // Right after a stop marked a child stopped, before its work ended. The next start must end that work.
     agent.crashTests.afterStopMark = crashTest(paths.crashAfterChildStop, "crash test: dying after marking the child stopped", "child");
+    // Holds, each while its file is there: after a stop marked its children stopped, before their work ends; and in a
+    // child's start of a child, before it commits.
+    const hold = (file: string, message: string, key: string) => async (id: string) => {
+      if (!existsSync(file)) return;
+      print(message, { [key]: id });
+      while (existsSync(file)) await new Promise((resolve) => setTimeout(resolve, 100));
+    };
+    agent.crashTests.holdAfterStopMark = hold(paths.holdAfterChildStop, "crash test: holding after the stop mark", "child");
+    agent.crashTests.holdChildStart = hold(paths.holdChildStart, "crash test: holding the start of a child", "starter");
     // After a child answered, before its reporter keeps the answer: held while the file is there, or until the reporter
-    // is aborted. A stop then must still keep the answer.
+    // is aborted. A stop then must still keep the answer. A file with a child's ID holds only that child.
     agent.crashTests.beforeChildKeep = async (child, signal) => {
       if (!existsSync(paths.holdChildKeep)) return;
+      const only = (await readFile(paths.holdChildKeep, "utf8").catch(() => "")).trim();
+      if (only !== "" && only !== child) return;
       print("crash test: holding the child's end", { child });
       while (existsSync(paths.holdChildKeep) && !signal.aborted) await new Promise((resolve) => setTimeout(resolve, 100));
       signal.throwIfAborted();
@@ -770,11 +781,13 @@ export class Bot implements WakeTarget {
         return { children, text: children.length === 0 ? "No children." : children.map((child) => describeChild(child, now, { thinking: true })).join("\n") };
       },
       "POST /children/stop": async (body: Record<string, unknown>) => {
+        // From a child's commands: only the children it started.
+        const by = optional(body.by);
         if (body.all === true) {
-          const results = await this.#agent.stopChildren();
+          const results = await this.#agent.stopChildren(by);
           return results.length === 0 ? "No children to stop." : results.join("\n");
         }
-        return this.#agent.stopChild(text(body.id, "id"));
+        return this.#agent.stopChild(text(body.id, "id"), by);
       },
       "POST /page/link": async (body: Record<string, unknown>) => this.#env.pages.link(this.#pages, text(body.page, "page"), optional(body.for)),
       "POST /page/unlink": async (body: Record<string, unknown>) => this.#env.pages.unlink(this.#pages, text(body.link, "link")),

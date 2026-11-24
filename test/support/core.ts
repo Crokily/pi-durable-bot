@@ -41,7 +41,7 @@ export class Recorder {
   /** The routines' commands that started, in order. */
   readonly commands: FakeCommand[] = [];
   /** The children routines started, in order; working: those that still work. */
-  readonly children: { id: string; routine: string; brief: string; at: number }[] = [];
+  readonly children: { id: string; routine: string; ref: { name: string; version: number; run: number }; brief: string; at: number }[] = [];
   readonly workingChildren = new Set<string>();
   /** Why the next children cannot start, while set. */
   refuseChildren?: string;
@@ -82,11 +82,11 @@ export class Recorder {
       this.commands.push(entry);
     });
 
-  readonly startChild = async (routine: string, brief: string): Promise<{ child: string } | { error: string } | { working: string }> => {
+  readonly startChild = async (ref: { name: string; version: number; run: number }, brief: string): Promise<{ child: string } | { error: string } | { working: string }> => {
     if (this.refuseChildren !== undefined) return { error: this.refuseChildren };
     if (this.workingAgain !== undefined) return { working: this.workingAgain };
     const id = `c${this.children.length + 1}`;
-    this.children.push({ id, routine, brief, at: this.now() });
+    this.children.push({ id, routine: ref.name, ref, brief, at: this.now() });
     this.workingChildren.add(id);
     return { child: id };
   };
@@ -110,6 +110,11 @@ export interface CoreOptions {
   readonly fallbackWakeMinutes?: number;
   /** Fails a timer's wake when it returns true. */
   readonly failTimer?: (timer: DueTimer) => boolean;
+  /**
+   * The bot takes a timer's wake, but the timers hear that it failed when this returns true: as when the wake went out
+   * and the timers could not mark it fired before a crash.
+   */
+  readonly loseTimer?: (timer: DueTimer) => boolean;
   /** Holds a timer's wake until the promise it returns resolves, as a bot that is slow to take it. */
   readonly holdTimer?: (timer: DueTimer) => Promise<void> | undefined;
 }
@@ -131,6 +136,7 @@ export const withCore = <A, E, R>(options: CoreOptions, body: (recorder: Recorde
         if (options.failTimer?.(timer)) throw new Error("the bot is busy");
         await options.holdTimer?.(timer);
         recorder.timers.push({ timer, at: recorder.now() });
+        if (options.loseTimer?.(timer)) throw new Error("the wake went out, but the timers did not hear it");
         return { submission: `timer-${timer.id}` };
       },
       runCommand: recorder.runCommand,

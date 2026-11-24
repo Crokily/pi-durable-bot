@@ -33,6 +33,10 @@ CREATE TABLE IF NOT EXISTS bot_timers (
   fired_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS bot_timers_pending ON bot_timers (due_at) WHERE state = 'pending';
+CREATE TABLE IF NOT EXISTS bot_child_ends (
+  key TEXT PRIMARY KEY,
+  at INTEGER NOT NULL
+);
 `;
 
 /** Columns that came after the table, added to a bot.sqlite from before them. */
@@ -41,6 +45,7 @@ const ADDED_COLUMNS = [
   ["request_id", "TEXT"],
   ["run_id", "INTEGER"],
   ["child", "TEXT"],
+  ["batch", "INTEGER"],
 ] as const;
 
 const COLUMNS = "id, due_at, note, set_by, source, request_id, run_id, child, created_at";
@@ -77,13 +82,14 @@ export interface DueTimer extends Timer {
 }
 
 /**
- * How a child ended, as the bot hands it to the timers: it could not go on (failed: why; last: what it did last), or,
- * for a routine's child, it answered. key: the same for the same end, also when it is handed again after a restart.
+ * How a child ended, as the bot hands it to the timers: it could not go on (failed: why; last: what it did last), or
+ * the brief of a routine's child was answered. routine: the routine's run this end is the outcome of (version: the
+ * routine's created_at). key: the same for the same end, also when it is handed again after a restart.
  */
 export interface ChildEnd {
   key: string;
   child: string;
-  routine?: string;
+  routine?: { name: string; version: number; run: number };
   failed?: string;
   last?: string;
 }
@@ -101,6 +107,8 @@ export type AddedTimer = Timer & { repeated?: true; state?: string };
 
 /** Look at the timers and the routines at least this often, so a changed clock or a missed change is noticed. */
 const CHECK_MS = 30_000;
+/** The keys of children's ends that were handed over are kept this long, far longer than a handover takes. */
+const CHILD_ENDS_DAYS = 7;
 /**
  * A child that could not go on wakes the bot this long after it, and the children that could not go on meanwhile come
  * in the same wake, as many fail together when a provider is down.
@@ -204,7 +212,7 @@ export class Timers extends Context.Service<
                 return { ...timer, ...(routine ? { routine } : {}), ...(run ? { run } : {}) };
               });
 
-        /** Fire a timer; the children that could not go on, all in the first one's wake. */
+        /** Fire a timer; the children that could not go on, all their batch in the first one's wake. */
         const fire = (timer: Timer, failures: readonly Timer[] = []) =>
           Effect.gen(function* () {
             const due = yield* withRoutine(timer);
@@ -222,18 +230,38 @@ export class Timers extends Context.Service<
             config.print("timer fired", { id: timer.id, setBy: timer.set_by, ...(timer.source ? { source: timer.source } : {}) });
           }).pipe(Effect.withSpan("wake", { root: true, attributes: { reason: timer.set_by === "agent" ? "timer" : timer.set_by, timer: timer.id } }));
 
+        /**
+         * The batch of children's wakes to fire: one that was handed to the bot before and may have gone out, the same
+         * timers again, so they go out under the same submission; or else the due ones, kept as a batch before they go
+         * out. Wakes that come later make a batch of their own. The batch's ID is its first timer's.
+         */
+        const childBatch = (now: number) =>
+          db(() =>
+            sql.transaction(async (tx) => {
+              const pendingChild = "state = 'pending' AND set_by = 'child'";
+              let batch = (await tx.get<{ batch: number }>(`SELECT batch FROM bot_timers WHERE ${pendingChild} AND batch IS NOT NULL ORDER BY batch LIMIT 1`))?.batch;
+              if (batch === undefined) {
+                batch = (await tx.get<{ id: number }>(`SELECT id FROM bot_timers WHERE ${pendingChild} AND due_at <= ? ORDER BY due_at, id LIMIT 1`, now))?.id;
+                if (batch === undefined) return [];
+                await tx.run(`UPDATE bot_timers SET batch = ? WHERE ${pendingChild} AND batch IS NULL AND due_at <= ?`, batch, now);
+              }
+              return tx.all<Timer>(`SELECT ${COLUMNS} FROM bot_timers WHERE ${pendingChild} AND batch = ? ORDER BY id != ?, due_at, id`, batch, batch);
+            }),
+          );
+
         /** Fire what is due. False when a wake could not be handed to the bot; it stays pending. */
         const fireDue = Effect.gen(function* () {
           if (stopped) return true;
-          const all = yield* pending;
-          let failuresFired = false;
-          for (const timer of all) {
+          let childrenFired = false;
+          for (const timer of yield* pending) {
             const now = yield* Clock.currentTimeMillis;
             if (stopped || timer.due_at > now) break;
             if (timer.set_by !== "child") yield* fire(timer);
-            else if (!failuresFired) {
-              failuresFired = true;
-              yield* fire(timer, all.filter((each) => each.set_by === "child" && each.due_at <= now));
+            else if (!childrenFired) {
+              // One batch at a time; the next look fires the rest.
+              childrenFired = true;
+              const batch = yield* childBatch(now);
+              if (batch.length > 0) yield* fire(batch[0]!, batch);
             }
           }
           yield* ensureFallback;
@@ -343,7 +371,7 @@ export class Timers extends Context.Service<
         const startChild = (routine: Routine & { child: string }, runId: number) =>
           Effect.promise(async () => {
             if (!config.startChild) return { error: "this gateway cannot start children" };
-            return config.startChild(routine.name, routine.child).catch((cause: unknown) => ({ error: message(cause) }));
+            return config.startChild({ name: routine.name, version: routine.created_at, run: runId }, routine.child).catch((cause: unknown) => ({ error: message(cause) }));
           }).pipe(
             Effect.flatMap((started) =>
               "child" in started
@@ -438,39 +466,41 @@ export class Timers extends Context.Service<
 
         /**
          * Children ended. One that could not go on wakes the bot, CHILD_FAILURE_MS later or with the wake about other
-         * children that is still pending. A routine's child counts as the routine's run: its answer is a run that
-         * succeeds, and its failure a failed run, which wakes the bot only when the routine's last failure did not. An end
-         * handed again, after a restart, wakes no one again: its key is the wake's request ID.
+         * children that waits for its time. The end of a routine's run counts as the run's outcome, if the routine was
+         * not replaced since: an answer is a run that succeeds, and a failure a failed run, which wakes the bot only when
+         * the routine's last failure did not. A failure of a replaced routine's run wakes the bot as any child's. Each end
+         * is taken once, also when it is handed again after a restart: its key is kept with what it changed.
          */
         const childEnds = (ends: readonly ChildEnd[]) =>
           Effect.gen(function* () {
             const now = yield* Clock.currentTimeMillis;
             const woke = yield* db(() =>
               sql.transaction(async (tx) => {
+                await tx.run("DELETE FROM bot_child_ends WHERE at < ?", now - CHILD_ENDS_DAYS * DAY_MS);
                 const woke: ChildEnd[] = [];
                 for (const end of ends) {
-                  const name = end.routine ?? null;
-                  const routine = name === null ? undefined : await tx.get<{ failing: number }>("SELECT failing FROM bot_routines WHERE name = ?", name);
+                  if (await tx.get("SELECT 1 AS x FROM bot_child_ends WHERE key = ?", end.key)) continue;
+                  await tx.run("INSERT INTO bot_child_ends (key, at) VALUES (?, ?)", end.key, now);
+                  const ref = end.routine;
+                  const routine = ref && (await tx.get<{ failing: number; created_at: number }>("SELECT failing, created_at FROM bot_routines WHERE name = ?", ref.name));
+                  const current = ref !== undefined && routine !== undefined && routine.created_at === ref.version;
+                  // The run's line in pots routine list: its child, and how the child's brief ended.
+                  if (ref) {
+                    const outcome = end.failed === undefined ? "answered" : `could not go on: ${end.failed.split(/\r?\n/)[0]}`;
+                    await tx.run("UPDATE bot_routine_runs SET ended_at = ?, output = ? WHERE id = ? AND result = 'child'", now, `${end.child}\n${outcome}`, ref.run);
+                  }
                   if (end.failed === undefined) {
-                    if (routine) await tx.run("UPDATE bot_routines SET failing = 0 WHERE name = ?", name);
+                    if (current) await tx.run("UPDATE bot_routines SET failing = 0 WHERE name = ?", ref.name);
                     continue;
                   }
-                  const requestId = `child-end:${end.key}`;
-                  if (await tx.get("SELECT 1 AS x FROM bot_timers WHERE request_id = ?", requestId)) continue;
-                  if (routine?.failing) continue;
-                  let runId: number | undefined;
-                  if (routine) {
-                    await tx.run("UPDATE bot_routines SET failing = 1 WHERE name = ?", name);
-                    runId = (await tx.get<{ id: number }>("SELECT id FROM bot_routine_runs WHERE routine = ? AND result = 'child' AND output = ? ORDER BY id DESC LIMIT 1", name, end.child))?.id;
-                  }
-                  const waiting = await tx.get<{ due_at: number }>("SELECT due_at FROM bot_timers WHERE state = 'pending' AND set_by = 'child' ORDER BY due_at LIMIT 1");
+                  if (current && routine.failing) continue;
+                  if (current) await tx.run("UPDATE bot_routines SET failing = 1 WHERE name = ?", ref.name);
+                  const waiting = await tx.get<{ due_at: number }>("SELECT due_at FROM bot_timers WHERE state = 'pending' AND set_by = 'child' AND batch IS NULL ORDER BY due_at LIMIT 1");
                   await insertWake(tx, {
                     dueAt: waiting?.due_at ?? now + CHILD_FAILURE_MS,
                     note: end.last === undefined ? end.failed : `${end.failed}\nIts last step: ${end.last}`,
                     setBy: "child",
-                    ...(end.routine === undefined ? {} : { source: end.routine }),
-                    requestId,
-                    ...(runId === undefined ? {} : { runId }),
+                    ...(current ? { source: ref.name, runId: ref.run } : {}),
                     child: end.child,
                     now,
                   });
@@ -479,7 +509,7 @@ export class Timers extends Context.Service<
                 return woke;
               }),
             );
-            for (const end of woke) config.print("child could not go on", { child: end.child, ...(end.routine === undefined ? {} : { routine: end.routine }) });
+            for (const end of woke) config.print("child could not go on", { child: end.child, ...(end.routine === undefined ? {} : { routine: end.routine.name }) });
           }).pipe(lock.withPermits(1), Effect.tap(() => schedule));
 
         return Timers.of({

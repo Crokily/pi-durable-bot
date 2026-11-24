@@ -206,8 +206,11 @@ export function describeRun(run: RoutineRun, now: number): string {
       return `running since ${formatTime(run.started_at)} (${took(now - run.started_at)})`;
     case "woke":
       return `${formatTime(run.started_at)}, woke the bot`;
-    case "child":
-      return `${formatTime(run.started_at)}, started child ${run.output}`;
+    case "child": {
+      // The child's ID, then, once its brief ended, how.
+      const [child, outcome] = run.output.split("\n");
+      return `${formatTime(run.started_at)}, started child ${child}${outcome === undefined ? "" : `, which ${outcome}`}`;
+    }
     case "exit":
       return `${formatTime(run.started_at)}, exit code ${run.exit_code}${after}${fail}`;
     case "timeout":

@@ -67,6 +67,11 @@ CREATE TABLE IF NOT EXISTS bot_wakes (
   text TEXT NOT NULL,
   submission TEXT
 );
+CREATE TABLE IF NOT EXISTS bot_wake_places (
+  submission TEXT NOT NULL,
+  place TEXT NOT NULL,
+  PRIMARY KEY (submission, place)
+);
 CREATE TABLE IF NOT EXISTS bot_state (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -119,8 +124,8 @@ export class Bot implements WakeTarget {
   /** Undefined when bot.json says "judge": "off". */
   #judge: Judge | undefined;
   readonly #control: ControlServer;
-  /** Which place each wake submission is about, for "is the bot working on this place". */
-  readonly #submissionPlaces = new Map<string, Address>();
+  /** Which places each wake submission is about, for "is the bot working on this place": one, or for a wake about several children, several. */
+  readonly #submissionPlaces = new Map<string, readonly Address[]>();
   /** How the last failed run ended, for pots status and pots chat. */
   #lastError: { at: number; error: string } | undefined;
   /**
@@ -435,7 +440,13 @@ export class Bot implements WakeTarget {
     for (const row of await sql.all<{ submission: string; place: string }>(
       "SELECT submission, place FROM bot_wakes WHERE submission IS NOT NULL AND place IS NOT NULL ORDER BY at DESC LIMIT 1000",
     )) {
-      bot.#submissionPlaces.set(row.submission, row.place);
+      bot.#submissionPlaces.set(row.submission, [row.place]);
+    }
+    // A wake about several places has them here, not in bot_wakes.
+    for (const row of await sql.all<{ submission: string; places: string }>(
+      "SELECT submission, json_group_array(place) AS places FROM bot_wake_places WHERE submission IN (SELECT submission FROM bot_wakes WHERE place IS NULL AND submission IS NOT NULL ORDER BY at DESC LIMIT 1000) GROUP BY submission",
+    )) {
+      bot.#submissionPlaces.set(row.submission, JSON.parse(row.places) as Address[]);
     }
     let adapters: ChannelAdapter[] = [];
     try {
@@ -480,6 +491,7 @@ export class Bot implements WakeTarget {
       await this.#control.stop();
       await this.#gateway.pauseWakes();
       this.#agent.onChildEnds = undefined;
+      clearTimeout(this.#handRetry.timer);
       await this.#handing;
       await this.#agent.close();
     } finally {
@@ -538,7 +550,7 @@ export class Bot implements WakeTarget {
     const inputs = this.#agent.runInputs;
     if (!inputs) return false;
     if (this.#touched.has(place)) return true;
-    return inputs.some((submission) => this.#submissionPlaces.get(submission) === place);
+    return inputs.some((submission) => this.#submissionPlaces.get(submission)?.includes(place));
   }
 
   /** The children that work now, for one place or all. */
@@ -548,7 +560,7 @@ export class Bot implements WakeTarget {
 
   /** The place the main agent works on now, when its run is about one place. */
   #currentPlace(): Address | undefined {
-    const places = new Set((this.#agent.runInputs ?? []).map((submission) => this.#submissionPlaces.get(submission)).filter((place) => place !== undefined));
+    const places = new Set((this.#agent.runInputs ?? []).flatMap((submission) => this.#submissionPlaces.get(submission) ?? []));
     return places.size === 1 ? [...places][0] : undefined;
   }
 
@@ -556,7 +568,7 @@ export class Bot implements WakeTarget {
     const me = this.#gateway.channels.find((channel) => channel.owns(wake.place.address))?.me;
     const children = await this.#agent.childrenNow(this.#workingChildren(wake.place.address));
     const text = renderPlaceWake(wake, await this.#agent.contextStatus(), me, children);
-    return this.#submit(wake.id, wake.reason, wake.place.address, text, wake.reason === "steer", caller);
+    return this.#submit(wake.id, wake.reason, [wake.place.address], text, wake.reason === "steer", caller);
   }
 
   responsibilities(): Promise<string> {
@@ -565,38 +577,50 @@ export class Bot implements WakeTarget {
 
   /** The ends of children handed over now. */
   #handing: Promise<void> = Promise.resolve();
+  /** The next try to hand over children's ends, after one failed, and how many failed in a row. */
+  #handRetry: { timer?: NodeJS.Timeout; failures: number } = { failures: 0 };
 
   /**
    * Hand the children's ends to the timers, then drop them from the children document. A crash between the two hands
-   * them over again at the next start, which the timers take once.
+   * them over again at the next start, which the timers take once. A handover that fails is tried again, after 1 s,
+   * then twice as long each time up to a minute, while ends wait.
    */
   #handChildEnds(): void {
-    this.#handing = this.#handing
-      .then(async () => {
-        const ends = this.#agent.childEnds;
-        if (ends.length === 0) return;
+    clearTimeout(this.#handRetry.timer);
+    this.#handRetry.timer = undefined;
+    this.#handing = this.#handing.then(async () => {
+      const ends = this.#agent.childEnds;
+      if (ends.length === 0 || this.#agent.onChildEnds === undefined) return;
+      try {
         await this.#timers.childEnds(ends);
         await this.#agent.dropChildEnds(ends.map((end) => end.key));
-      })
-      .catch((error: unknown) => this.#print("could not hand children's ends to the timers", { error: String(error) }));
+        this.#handRetry.failures = 0;
+      } catch (error) {
+        const delay = Math.min(60_000, 1_000 * 2 ** this.#handRetry.failures++);
+        this.#print("could not hand children's ends to the timers", { error: String(error), retryInMs: delay });
+        if (this.#agent.onChildEnds !== undefined) this.#handRetry.timer = setTimeout(() => this.#handChildEnds(), delay);
+      }
+    });
   }
 
   async #deliverTimer(timer: DueTimer, caller?: TelemetrySpan): Promise<Delivered> {
     if (timer.set_by === "child") {
       const failures = timer.failures ?? [timer];
-      const places = new Set(failures.map((each) => this.#agent.children.find((child) => child.id === each.child)?.place));
-      const place = places.size === 1 ? [...places][0] : undefined;
+      // Every place the wake lists, so new messages there go to the main agent while it works on the wake.
+      const places = [...new Set(failures.flatMap((each) => this.#agent.children.find((child) => child.id === each.child)?.place ?? []))];
       const text = renderChildFailures(failures, this.#agent.children, await this.#agent.contextStatus(), await this.#agent.childrenNow(this.#workingChildren()));
-      return this.#submit(`timer:${timer.id}`, "child", place, text, false, caller);
+      return this.#submit(`timer:${timer.id}`, "child", places, text, false, caller);
     }
     const children = await this.#agent.childrenNow(this.#workingChildren());
     // A wake a child set from its own commands, which have its ID in POTS_CHILD.
     const child = timer.set_by === "agent" && timer.child !== null ? this.#agent.children.find((each) => each.id === timer.child) : undefined;
     const text = renderTimerWake(timer, await this.#agent.contextStatus(), this.#definition.settings.fallbackWakeMinutes, children, child);
-    return this.#submit(`timer:${timer.id}`, timer.set_by === "agent" ? "timer" : timer.set_by, child?.place, text, false, caller);
+    return this.#submit(`timer:${timer.id}`, timer.set_by === "agent" ? "timer" : timer.set_by, child?.place ? [child.place] : [], text, false, caller);
   }
 
-  async #submit(id: string, reason: string, place: Address | undefined, text: string, steer: boolean, caller?: TelemetrySpan): Promise<Delivered> {
+  /** places: what the wake is about, none, one, or for a wake about several children, several. */
+  async #submit(id: string, reason: string, places: readonly Address[], text: string, steer: boolean, caller?: TelemetrySpan): Promise<Delivered> {
+    const place = places.length === 1 ? places[0] : undefined;
     // What the memory passes changed since the last wake, once, at the end of this one, as Claude Code tells it. Taken
     // at once, so two wakes never give the same note; not by a wake given again after a crash, which does not go out
     // again; and put back when the wake could not go out.
@@ -615,23 +639,18 @@ export class Bot implements WakeTarget {
     }
     let submitted;
     try {
-      submitted = await this.#agent.submit({ id, text, steer, data: { reason, ...(place ? { place } : {}) }, caller });
+      submitted = await this.#agent.submit({ id, text, steer, data: { reason, ...(place ? { place } : {}), ...(places.length > 1 ? { places: [...places] } : {}) }, caller });
     } catch (error) {
       this.#notes.unshift(...notes);
       this.#left ??= left;
       throw error;
     }
     const { id: submission, trace } = submitted;
-    if (place) this.#submissionPlaces.set(submission, place);
-    await this.#sql.run(
-      "INSERT OR IGNORE INTO bot_wakes (id, at, reason, place, text, submission) VALUES (?, ?, ?, ?, ?, ?)",
-      id,
-      Date.now(),
-      reason,
-      place ?? null,
-      text,
-      submission,
-    );
+    if (places.length > 0) this.#submissionPlaces.set(submission, places);
+    await this.#sql.transaction(async (tx) => {
+      await tx.run("INSERT OR IGNORE INTO bot_wakes (id, at, reason, place, text, submission) VALUES (?, ?, ?, ?, ?, ?)", id, Date.now(), reason, place ?? null, text, submission);
+      if (places.length > 1) for (const each of places) await tx.run("INSERT OR IGNORE INTO bot_wake_places (submission, place) VALUES (?, ?)", submission, each);
+    });
     return { submission, run: trace };
   }
 
@@ -641,7 +660,7 @@ export class Bot implements WakeTarget {
    * pots status and pots chat show it on this computer.
    */
   #tellFailure(inputs: readonly string[]): void {
-    const places = new Set(inputs.map((submission) => this.#submissionPlaces.get(submission)).filter((place) => place !== undefined));
+    const places = new Set(inputs.flatMap((submission) => this.#submissionPlaces.get(submission) ?? []));
     for (const place of places) {
       if ((this.#failureNotices.get(place)?.state ?? "unsent") !== "unsent") continue;
       const notice = { sendId: this.#failureNotices.get(place)?.sendId ?? `failed:${inputs[0]}:${place}`, state: "sending" as const };

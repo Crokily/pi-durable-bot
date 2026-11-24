@@ -25,7 +25,9 @@ const isChild = (request: FakeRequest) => request.system.includes("You are a chi
  * once, or for "wait long" runs a long command first, and for "wait for go" one that ends once the file go is in the
  * workspace. For "please note", the child adds a line to the bot's memory index first, and for "please research and
  * tell", it wakes the main agent with pots wake first. "on <model>" starts the child on that model, and "please tell
- * <child> more" sends it a message. For "please break", the child runs a command, then its model fails. For "please probe" the child runs a command that hangs after one line of output,
+ * <child> more" sends it a message. For "please break", the child runs a command, then its model fails; for "please
+ * break slowly", the command waits for the file go first. The main agent runs a command of 4 seconds for a wake about
+ * two children that could not go on. For "please probe" the child runs a command that hangs after one line of output,
  * from bash or from a script; the main agent sends it "wrap up" for "wrap up the probe", and interrupts it for
  * "interrupt the probe".
  */
@@ -33,7 +35,9 @@ function script(request: FakeRequest): FakeReply {
   const last = request.messages.at(-1);
   if (isChild(request)) {
     if (last?.role === "tool" && last.content.includes('"id"')) return { text: "told the main agent" };
-    if (last?.role === "tool" && request.messages[0]?.content.includes("then fail")) return { fail: { status: 400, message: "the request is bad" } };
+    // Once it ran its command, each of its requests fails, also those for later messages.
+    if (request.messages[0]?.content.includes("then fail") && request.messages.some((message) => message.role === "tool")) return { fail: { status: 400, message: "the request is bad" } };
+    if (last?.role === "user" && last.content.includes("wait for go, then fail")) return { call: { name: "bash", arguments: { command: "until [ -e go ]; do sleep 0.2; done; echo looked" } } };
     if (last?.role === "user" && last.content.includes("then fail")) return { call: { name: "bash", arguments: { command: "echo looked" } } };
     if (last?.role !== "user") return { text: "done waiting" };
     if (last.content.includes("and tell")) return { call: { name: "bash", arguments: { command: `pots wake --note "the answer is 42, Alice should know"` } } };
@@ -53,6 +57,7 @@ function script(request: FakeRequest): FakeReply {
   }
   if (last?.role !== "user") return { text: "done" };
   const place = /\b[a-z0-9][a-z0-9-]*:#[\w-]+/.exec(last.content)?.[0];
+  if (last.content.startsWith("[wake] 2 of your children could not go on")) return { call: { name: "bash", arguments: { command: "sleep 4" } } };
   if (last.content.startsWith("[wake] wake from your child")) {
     const note = /^Note: (.*)/m.exec(last.content)?.[1] ?? "?";
     return { call: { name: "send", arguments: { to: "test:#general", text: `report: ${note}` } } };
@@ -73,7 +78,9 @@ function script(request: FakeRequest): FakeReply {
     const choice = on ? { model: on, thinking: "low" } : {};
     return { call: { name: "task", arguments: { action: "start", title: "waiter", brief: `wait for go, then answer (${on ?? "no model"})`, ...choice } } };
   }
-  if (last.content.includes("please break")) return { call: { name: "task", arguments: { action: "start", title: "broken", brief: "look, then fail" } } };
+  if (last.content.includes("please break")) {
+    return { call: { name: "task", arguments: { action: "start", title: "broken", brief: last.content.includes("slowly") ? "wait for go, then fail" : "look, then fail" } } };
+  }
   if (last.content.includes("please write at length")) return { call: { name: "task", arguments: { action: "start", title: "long", brief: "answer at length" } } };
   if (last.content.includes("please nap")) return { call: { name: "task", arguments: { action: "start", title: "nap", brief: "nap first, then answer" } } };
   if (last.content.includes("please note")) return { call: { name: "task", arguments: { action: "start", title: "note", brief: "save a memory", thinking: "max" } } };
@@ -222,6 +229,9 @@ describe("children", { timeout: 90_000 }, () => {
     await gateway.start();
     await waitFor(() => wakes(model).some((text) => text.startsWith("[wake] 2 of your children could not go on")), { what: "the wake", timeout: 45_000 });
     const wake = wakes(model).find((text) => text.startsWith("[wake] 2 of your children"))!;
+    // While the main agent works on the wake, a message in either of its places joins its work.
+    gateway.say("random", "bob", `@${ME} anything new?`);
+    await waitFor(() => gateway.query("SELECT 1 FROM bot_wakes WHERE place = 'test:#random' AND reason = 'steer'").length === 1, { what: "the message to join" });
     expect(wake).toMatch(/^- c1 "broken", for test:#general, at [^\n]*: model_error: [^\n]*400[^\n]*\n {2}Its last step: called bash: echo looked$/m);
     expect(wake).toMatch(/^- c2 "broken", for test:#random, at [^\n]*: model_error: [^\n]*\n {2}Its last step: called bash: echo looked$/m);
     await pause(2_000);
@@ -229,11 +239,16 @@ describe("children", { timeout: 90_000 }, () => {
     await gateway.stop();
     await gateway.start();
     await pause(2_000);
-    // One wake about both, for no single place, and none for the stop or the restarts.
+    // One wake about both, for both places, and none for the stop or the restarts.
     expect(gateway.query<{ reason: string; place: string | null }>("SELECT reason, place FROM bot_wakes ORDER BY at").map((each) => [each.reason, each.place])).toEqual([
       ["mention", "test:#general"],
       ["mention", "test:#random"],
       ["child", null],
+      ["steer", "test:#random"],
+    ]);
+    expect(gateway.query<{ place: string }>("SELECT p.place FROM bot_wake_places p JOIN bot_wakes w ON w.submission = p.submission WHERE w.reason = 'child' ORDER BY p.place").map((row) => row.place)).toEqual([
+      "test:#general",
+      "test:#random",
     ]);
     expect(childWakes()).toEqual(["c1", "c2"]);
   });
@@ -248,6 +263,58 @@ describe("children", { timeout: 90_000 }, () => {
       ["mention", "test:#general"],
       ["child", "test:#general"],
     ]);
+  });
+
+  it("wakes the main agent once for a run that failed with a message it took while it worked, and again for a later failure", async () => {
+    await setUp();
+    gateway.say("general", "alice", `@${ME} please break slowly`);
+    await waitFor(() => /^c1 "broken": working/m.test(gateway.pots("children")), { what: "the child to work" });
+    // The message joins the run that is in its command; that run fails, and with it both messages.
+    gateway.say("general", "alice", `@${ME} please tell c1 more`);
+    await waitFor(() => taskResult("Sent to c1") !== undefined, { what: "the message" });
+    writeFileSync(join(gateway.botDir, "workspace", "go"), "");
+    await waitFor(() => /^c1 "broken": failed/m.test(gateway.pots("children")), { what: "the failure" });
+    await pause(2_000);
+    expect(childWakes()).toEqual(["c1"]);
+    // A later message fails on its own: that is a failure of its own.
+    gateway.say("general", "alice", `@${ME} please tell c1 more`);
+    await waitFor(() => childWakes().length === 2, { what: "the second failure" });
+    await pause(2_000);
+    expect(childWakes()).toEqual(["c1", "c1"]);
+  });
+
+  it("keeps how a child ended when crashes cut off its reporter too often before it kept it", async () => {
+    await setUp();
+    gateway.holdChildKeep();
+    gateway.say("general", "alice", `@${ME} please break`);
+    const holds = () => gateway.output.filter((line) => line.message === "crash test: holding the child's end").length;
+    // pi-durable's restart limit is 5: after the fifth crash the reporter does not run again.
+    for (let crash = 1; crash <= 5; crash++) {
+      await waitFor(() => holds() >= crash, { what: `hold ${crash}` });
+      await gateway.kill();
+      await gateway.start();
+    }
+    await waitFor(() => /^c1 "broken": failed \(model_error: .*400.*\)/m.test(gateway.pots("children")), { what: "the failure kept" });
+    await waitFor(() => childWakes().length === 1, { what: "the wake" });
+    expect(holds()).toBe(5);
+    expect(gateway.output.some((line) => line.message === "kept how children ended for reporters that ended without it")).toBe(true);
+    gateway.releaseChildKeep();
+    await waitFor(() => wakes(model).some((text) => text.startsWith("[wake] your child c1")), { what: "the wake", timeout: 45_000 });
+  }, 150_000);
+
+  it("counts a routine child's answer that a stop came after, before its reporter kept it, as its run's success", async () => {
+    await setUp();
+    gateway.holdChildKeep();
+    gateway.pots("routine", "add", "mail-watch", "--every", "3s", "--child", "wait for go, then answer (no model)");
+    await waitFor(() => /^c1 "mail-watch": working/m.test(gateway.pots("children")), { what: "the routine's child" });
+    writeFileSync(join(gateway.botDir, "workspace", "go"), "");
+    await waitFor(() => gateway.output.some((line) => line.message === "crash test: holding the child's end"), { what: "the held answer" });
+    gateway.pots("children", "--stop", "c1");
+    const run = () => gateway.query<{ output: string }>("SELECT output FROM bot_routine_runs WHERE output LIKE 'c1%'")[0]?.output;
+    await waitFor(() => run() === "c1\nanswered", { what: "the run's success" });
+    gateway.pots("routine", "remove", "mail-watch");
+    gateway.releaseChildKeep();
+    expect(childWakes()).toEqual([]);
   });
 
   it("starts a child for a routine without waking the main agent, and skips the routine's time while that child works", async () => {

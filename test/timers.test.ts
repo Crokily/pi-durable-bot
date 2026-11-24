@@ -7,7 +7,10 @@ import { advance, type Recorder, settle, withCore } from "./support/core.ts";
 
 const SECOND = 1_000;
 const MINUTE = 60_000;
-const DAY = 24 * 60 * MINUTE;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+/** How many of c1's wakes the timers have not heard of, in the test that loses one. */
+let lost = 0;
 
 /** The routines' wakes so far: [routine, failed run's result or "note", when]. */
 const routineWakes = (recorder: Recorder) =>
@@ -186,7 +189,8 @@ describe("routines", () => {
         yield* timers.start;
         yield* timers.addRoutine({ name: "mail-watch", every: 10 * MINUTE, child: "look at the new mail" });
         yield* pass(10 * MINUTE);
-        assert.deepStrictEqual(recorder.children, [{ id: "c1", routine: "mail-watch", brief: "look at the new mail", at: 10 * MINUTE }]);
+        const version = (yield* timers.routines).routines[0]!.created_at;
+        assert.deepStrictEqual(recorder.children, [{ id: "c1", routine: "mail-watch", ref: { name: "mail-watch", version, run: 1 }, brief: "look at the new mail", at: 10 * MINUTE }]);
         const last = (yield* timers.routines).routines[0]?.last;
         assert.deepStrictEqual([last?.result, last?.output], ["child", "c1"]);
         assert.deepStrictEqual(recorder.timers, []);
@@ -209,7 +213,7 @@ describe("routines", () => {
         yield* pass(10 * MINUTE);
         assert.deepStrictEqual(recorder.children.map((child) => child.at), [10 * MINUTE, 30 * MINUTE, 60 * MINUTE]);
         assert.strictEqual((yield* timers.routines).routines[0]?.failing, 1);
-        yield* timers.childEnds([{ key: "7", child: "c3", routine: "mail-watch" }]);
+        yield* timers.childEnds([{ key: "7", child: "c3", routine: recorder.children[2]!.ref }]);
         assert.strictEqual((yield* timers.routines).routines[0]?.failing, 0);
         assert.strictEqual(recorder.timers.length, 1);
 
@@ -221,7 +225,7 @@ describe("routines", () => {
         assert.strictEqual(recorder.children.length, 3);
         assert.isTrue(recorder.prints.some((print) => print.message === "routine skipped: its last run still runs" && print.data?.child === "c3"));
         const runs = (yield* timers.routines).routines[0]?.last;
-        assert.deepStrictEqual([runs?.result, runs?.output], ["child", "c3"]);
+        assert.deepStrictEqual([runs?.result, runs?.output], ["child", "c3\nanswered"]);
         assert.strictEqual(recorder.timers.length, 1);
       }),
     ));
@@ -264,14 +268,17 @@ describe("routines", () => {
         yield* timers.addRoutine({ name: "mail-watch", every: 10 * MINUTE, child: "look at the new mail" });
         const runOf = (child: string) => (failure?: { child: string; failed?: string }) => {
           recorder.workingChildren.delete(child);
-          return timers.childEnds([{ key: child, child, routine: "mail-watch", ...(failure ?? {}) }]);
+          return timers.childEnds([{ key: child, child, routine: recorder.children.find((each) => each.id === child)!.ref, ...(failure ?? {}) }]);
         };
         yield* pass(10 * MINUTE);
         yield* runOf("c1")({ child: "c1", failed: "model_error: 401 expired" });
         yield* advance(CHILD_FAILURE_MS);
         const [wake] = recorder.timers;
         assert.deepStrictEqual([wake?.timer.set_by, wake?.timer.source, wake?.timer.child], ["child", "mail-watch", "c1"]);
-        assert.deepStrictEqual([wake?.timer.failures?.[0]?.run?.result, wake?.timer.failures?.[0]?.run?.output, wake?.timer.failures?.[0]?.routine?.name], ["child", "c1", "mail-watch"]);
+        assert.deepStrictEqual(
+          [wake?.timer.failures?.[0]?.run?.result, wake?.timer.failures?.[0]?.run?.output, wake?.timer.failures?.[0]?.routine?.name],
+          ["child", "c1\ncould not go on: model_error: 401 expired", "mail-watch"],
+        );
         assert.strictEqual((yield* timers.routines).routines[0]?.failing, 1);
 
         // The next child starts, which is not a success yet, and fails too: no wake.
@@ -289,6 +296,86 @@ describe("routines", () => {
         yield* runOf("c4")({ child: "c4", failed: "restart_limit" });
         yield* advance(CHILD_FAILURE_MS);
         assert.deepStrictEqual(recorder.timers.map((entry) => entry.timer.child), ["c1", "c4"]);
+      }),
+    ));
+
+  it.effect("keep the batch of children's wakes that went out, so a failure after it is a wake of its own and none is lost", () =>
+    // The first time c1's wake goes out, the timers do not hear it, as after a crash between the two.
+    withCore({ fallbackWakeMinutes: 600, loseTimer: (timer) => timer.child === "c1" && lost++ === 0 }, (recorder) =>
+      Effect.gen(function* () {
+        const timers = yield* Timers;
+        yield* timers.start;
+        yield* timers.childEnds([{ key: "c1:failed:1", child: "c1", failed: "no_model" }]);
+        yield* advance(CHILD_FAILURE_MS);
+        // c2 fails before the timers try again: the batch that went out stays as it was, under the same timer.
+        yield* timers.childEnds([{ key: "c2:failed:1", child: "c2", failed: "no_model" }]);
+        yield* advance(CHILD_FAILURE_MS + 30 * SECOND, 10 * SECOND);
+        const sent = recorder.timers.map((entry) => [entry.timer.id, entry.timer.failures?.map((each) => each.child)]);
+        assert.deepStrictEqual(sent, [
+          [sent[0]![0], ["c1"]],
+          [sent[0]![0], ["c1"]],
+          [sent[2]![0], ["c2"]],
+        ]);
+        assert.notStrictEqual(sent[2]![0], sent[0]![0]);
+        assert.deepStrictEqual((yield* timers.pending).map((timer) => timer.set_by), ["fallback"]);
+      }),
+    ));
+
+  it.effect("take each child's end once, also a routine's answer and failure handed again together, and apart from pots wake --id", () =>
+    withCore({ fallbackWakeMinutes: 600 }, (recorder) =>
+      Effect.gen(function* () {
+        const timers = yield* Timers;
+        yield* timers.start;
+        yield* timers.addRoutine({ name: "mail-watch", every: 10 * MINUTE, child: "look at the new mail" });
+        yield* pass(20 * MINUTE);
+        recorder.workingChildren.clear();
+        yield* pass(10 * MINUTE);
+        const [c1, c2] = recorder.children;
+        // c1's run succeeded and c2's failed, and the same ends come again, as after a crash before they were dropped.
+        const ends = [
+          { key: "c1:run:1", child: "c1", routine: c1!.ref },
+          { key: "c2:failed:9", child: "c2", routine: c2!.ref, failed: "no_model" },
+        ];
+        yield* timers.childEnds(ends);
+        assert.strictEqual((yield* timers.routines).routines[0]?.failing, 1);
+        yield* timers.childEnds(ends);
+        assert.strictEqual((yield* timers.routines).routines[0]?.failing, 1);
+        yield* advance(CHILD_FAILURE_MS);
+        assert.deepStrictEqual(recorder.timers.map((entry) => entry.timer.child), ["c2"]);
+
+        // A pots wake whose --id is the key of a child's end does not take the place of the end, nor the other way.
+        yield* timers.add(recorder.now() + HOUR, "mine", { requestId: "c3:failed:4" });
+        yield* timers.childEnds([{ key: "c3:failed:4", child: "c3", failed: "turn_limit" }]);
+        yield* advance(CHILD_FAILURE_MS);
+        assert.deepStrictEqual(recorder.timers.map((entry) => entry.timer.child), ["c2", "c3"]);
+      }),
+    ));
+
+  it.effect("count a routine child's end for the run and the routine that started it, not for a replaced routine of the same name", () =>
+    withCore({ fallbackWakeMinutes: 600 }, (recorder) =>
+      Effect.gen(function* () {
+        const timers = yield* Timers;
+        yield* timers.start;
+        yield* timers.addRoutine({ name: "mail-watch", every: 10 * MINUTE, child: "look at the new mail" });
+        yield* pass(10 * MINUTE);
+        const old = recorder.children[0]!;
+        // The routine is replaced while its child works: the old child's failure wakes the bot as any child's does, and
+        // does not count as a failed run of the new routine.
+        yield* timers.addRoutine({ name: "mail-watch", every: 10 * MINUTE, child: "look at the mail again" });
+        yield* timers.childEnds([{ key: "c1:failed:1", child: "c1", routine: old.ref, failed: "no_model" }]);
+        yield* advance(CHILD_FAILURE_MS);
+        assert.deepStrictEqual(recorder.timers.map((entry) => [entry.timer.child, entry.timer.source, entry.timer.run_id]), [["c1", null, null]]);
+        assert.strictEqual((yield* timers.routines).routines[0]?.failing, 0);
+
+        // The new routine's run fails, and wakes the bot once; the old child's answer does not count as its success.
+        recorder.workingChildren.clear();
+        yield* pass(10 * MINUTE);
+        const current = recorder.children[1]!;
+        yield* timers.childEnds([{ key: "c2:failed:1", child: "c2", routine: current.ref, failed: "no_model" }]);
+        yield* timers.childEnds([{ key: "c1:run:1", child: "c1", routine: old.ref }]);
+        assert.strictEqual((yield* timers.routines).routines[0]?.failing, 1);
+        yield* advance(CHILD_FAILURE_MS);
+        assert.deepStrictEqual(recorder.timers.map((entry) => [entry.timer.child, entry.timer.source, entry.timer.run_id]), [["c1", null, null], ["c2", "mail-watch", current.ref.run]]);
       }),
     ));
 

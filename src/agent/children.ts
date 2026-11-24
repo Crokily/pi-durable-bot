@@ -12,9 +12,13 @@ import {
   type Extension,
   type InboxState,
   type JsonObject,
+  LiveDoc,
   type LiveState,
   type ModelRef,
   ROOT_CONVERSATION_ID,
+  type SettledSubmissionRecord,
+  type SubmissionRecord,
+  SubmissionSettled,
   type TaskId,
   type Tx,
 } from "@earendil-works/pi-durable";
@@ -28,7 +32,7 @@ import { obj, opt, str } from "@earendil-works/pi-schema";
 // that could not go on (its model failed after its retries, no model, its turn or restart limit) wakes the main agent:
 // its end is kept in ends until the bot has handed it to its timers, which wake once, also across restarts.
 // Built on pi-durable's example of background subagents: an anchor task owns each child's conversation, and a reporter
-// task delivers each message to the child and keeps how it ended.
+// task delivers each message to the child, sleeps until the child's run settles it, and keeps how it ended.
 
 /** A child, as the main conversation's children document keeps it. */
 export type ChildRecord = {
@@ -39,6 +43,11 @@ export type ChildRecord = {
   place?: string;
   /** The routine that started it, when one did. */
   routine?: string;
+  /**
+   * The routine's run that started it: the run's ID, the routine's version (its created_at) and the request ID of the
+   * brief. How the brief ends is the run's outcome, given to ends once (ended).
+   */
+  run?: { id: number; version: number; request: string; ended?: true };
   /** The model the main agent chose for it, "provider/modelId", for its whole life; absent: the main agent's model. */
   model?: string;
   /** Its thinking level, for its whole life. */
@@ -60,6 +69,8 @@ export type ChildRecord = {
    * that ended only before this was kept.
    */
   result?: { at: number; failed?: string };
+  /** The submissions whose failed runs are in ends already, the newest last: a run that fails fails all its messages. */
+  failedInputs?: string[];
 };
 
 export type ChildrenState = {
@@ -71,14 +82,18 @@ export type ChildrenState = {
   ends?: Record<string, ChildEnd>;
 };
 
+/** A routine's run that started a child: the routine's name, its version (created_at), and the run's ID. */
+export type RoutineRunRef = { name: string; version: number; run: number };
+
 /**
- * How a child ended, for the bot's timers: it could not go on (failed: why; last: what it did last), or a routine's
- * child answered. key: its reporter's ID.
+ * How a child ended, for the bot's timers: it could not go on (failed: why; last: what it did last), or the brief of a
+ * routine's child was answered. routine: the routine's run this end is the outcome of. key: the same for the same end,
+ * also when it is kept again: the child and its failed run, or the child and its routine's run.
  */
 export type ChildEnd = {
   key: string;
   child: string;
-  routine?: string;
+  routine?: RoutineRunRef;
   failed?: string;
   last?: string;
 };
@@ -274,8 +289,8 @@ export interface ChildStart {
   /** Who gives the brief, for its first line: "the main agent", or "routine <name>". */
   from: string;
   place?: string;
-  /** The routine that starts it, when one does. */
-  routine?: string;
+  /** The routine's run that starts it, when one does. */
+  routine?: RoutineRunRef;
   /** The model chosen for it, "provider/modelId", already checked; absent: the main agent's model. */
   chosen?: string;
   model: ModelRef;
@@ -292,6 +307,11 @@ export interface ChildrenTools {
    * whose earlier child works again, that child.
    */
   start(tx: Tx, start: ChildStart, now: number): Promise<ChildStarted>;
+  /**
+   * In a commit of the main conversation: reporters that ended without keeping how their child ended, as when crashes
+   * cut one off too often, keep it now; a message the child has not settled yet gets a new reporter. Returns how many.
+   */
+  reconcile(tx: Tx, now: number): Promise<number>;
 }
 
 /** How long, in words: "12 s", "4 min", "2.5 h". */
@@ -387,15 +407,65 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
     abort: (_anchor, runtime, context) => runtime.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), context),
   });
 
-  type ReporterInput = { child: string; conversationId: ConversationId; message: string };
+  /** request: the request ID of a message an earlier reporter delivered, which this one waits for instead (reconcile). */
+  type ReporterInput = { child: string; conversationId: ConversationId; message: string; request?: string };
+  // keep: the child's run settled the message, or it was delivered by an earlier version, which waits for it here.
   // end: only in a reporter that an earlier version left in its report phase, which handed the end to the main agent.
-  type ReporterState = { phase: "deliver" } | { phase: "report"; end?: { status: "answered" | "failed"; text: string } };
+  type ReporterState = { phase: "deliver" } | { phase: "keep" } | { phase: "report"; end?: { status: "answered" | "failed"; text: string } };
+  /** The key a reporter sleeps on until its message is settled. */
+  const SETTLED = "settled";
+  /** How many submissions of failed runs a child keeps in failedInputs. */
+  const FAILED_INPUTS = 50;
+  const requestOf = (reporter: string, input: ReporterInput) => input.request ?? `child:${reporter}`;
 
   /** Keep an answer of the child, once: several messages can end in one answer. */
   const keepAnswer = (record: ChildRecord, answer: EntryId, now: number) => {
     if (record.reported.includes(answer)) return;
     record.reported.push(answer);
     record.result = { at: now };
+  };
+
+  /**
+   * Keep how a message to a child was settled, in a commit of the main conversation: its answer, or that the child could
+   * not go on, which goes to ends once per failed run, as a run that fails fails all the messages it took. How a
+   * routine's brief ends goes to ends once, as its run's outcome. A stop keeps nothing but an answer that came before it.
+   */
+  const keep = async (tx: Tx, state: ChildrenState, input: ReporterInput, settled: SubmissionRecord, now: number, last?: string) => {
+    const record = state.children[input.child];
+    if (!record || settled.type !== "input") return;
+    state.ends ??= {};
+    const run = record.run && !record.run.ended ? record.run : undefined;
+    const brief = run && (await tx.submissionByRequest(input.conversationId, run.request))?.id;
+    const routine = (ofBrief: boolean) => {
+      if (!run || !ofBrief) return {};
+      run.ended = true;
+      return { routine: { name: record.routine ?? "", version: run.version, run: run.id } };
+    };
+    if (settled.status === "done") {
+      keepAnswer(record, settled.answer, now);
+      if (brief !== undefined && settled.id === brief) {
+        const key = `${record.id}:run:${run!.id}`;
+        state.ends[key] = { key, child: record.id, ...routine(true) };
+      }
+      return;
+    }
+    if (settled.status !== "unanswered" || settled.reason === "aborted" || record.stoppedAt !== undefined) return;
+    const id = String(settled.id);
+    if (record.failedInputs?.includes(id)) return;
+    // All the messages the failed run took, when pi-durable still has them: their reporters keep this end once.
+    const failure = (await tx.doc(LiveDoc, input.conversationId)).runFailure;
+    const inputs = failure?.inputs.map(String).includes(id) ? failure.inputs.map(String) : [id];
+    record.failedInputs = [...(record.failedInputs ?? []), ...inputs].slice(-FAILED_INPUTS);
+    const detail = settled.detail === undefined ? "" : `: ${typeof settled.detail === "string" ? settled.detail : JSON.stringify(settled.detail)}`;
+    record.result = { at: now, failed: `${settled.reason}${detail}` };
+    const key = `${record.id}:failed:${inputs[0]}`;
+    state.ends[key] = {
+      key,
+      child: record.id,
+      ...routine(brief !== undefined && inputs.includes(String(brief))),
+      failed: record.result.failed!,
+      ...(last === undefined ? {} : { last }),
+    };
   };
 
   /** The reporter ends: it is no longer live, and its child waits for a message once no other reporter is live. */
@@ -408,10 +478,10 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
     delete child.since;
   };
 
-  // Delivers one message to a child, waits for its answer and keeps how it ended: a failure, or a routine's child's
-  // answer, also in ends, for the bot's timers; the main agent's stop wakes no one. A background task
+  // Delivers one message to a child, sleeps until the child's run settles it, and keeps how it ended: a failure, or how
+  // a routine's brief ended, also in ends, for the bot's timers; the main agent's stop wakes no one. A background task
   // of the main conversation; each phase ends with a checkpoint, and a request ID makes a phase that runs again after a
-  // restart find the first submission, so the child gets the message once.
+  // restart find the first submission, so the child gets the message once. While it sleeps, no crash counts against it.
   const Reporter = defineTask<ReporterInput, ReporterState, null>({
     name: "bot.child-reporter",
     version: 1,
@@ -425,12 +495,27 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
           await runtime.commit(() => ({ status: "running", checkpoint: { phase: "report" } }), context);
           return;
         }
+        const request = requestOf(String(reporter.id), reporter.input);
         const child = (await runtime.conversation(conversationId, context))!;
-        const submission = await child.submit(
-          { type: "input", content: message, whenBusy: "steer", requestId: `child:${reporter.id}`, entry: { kind: "bot.brief" } },
+        await child.submit(
+          { type: "input", content: message, whenBusy: "steer", requestId: request, entry: { kind: "bot.brief" }, notify: { taskId: reporter.id, key: SETTLED } },
           context,
         );
-        const settled = await submission.wait(context);
+        await runtime.commit(async (tx) => {
+          // A submission made before, without this reporter to notify: the phase keep waits for it.
+          const submission = await tx.submissionByRequest(conversationId, request);
+          if (submission?.notify?.taskId !== reporter.id) return { status: "running", checkpoint: { phase: "keep" } };
+          return { status: "sleeping", checkpoint: { phase: "keep" }, signals: [SubmissionSettled.key(SETTLED)] };
+        }, context);
+      },
+      keep: async (reporter, runtime, context) => {
+        const { conversationId, message } = reporter.input;
+        const signal = await runtime.readSignal(SubmissionSettled, SETTLED, context);
+        const request = requestOf(String(reporter.id), reporter.input);
+        const settled: SettledSubmissionRecord =
+          signal !== undefined && "value" in signal
+            ? signal.value
+            : await (await (await runtime.conversation(conversationId, context))!.submit({ type: "input", content: message, whenBusy: "steer", requestId: request, entry: { kind: "bot.brief" } }, context)).wait(context);
         host.settled(String(conversationId));
         // What it did last, for the wake about a failure.
         const last =
@@ -443,32 +528,8 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
         await host.beforeKeep?.(reporter.input.child, runtime.signal);
         // One commit keeps how the child ended, so a restart does not decide again.
         await runtime.commit(async (tx) => {
-          const next = { status: "running" as const, checkpoint: { phase: "report" as const } };
-          const state = await tx.doc(Children, runtime.conversationId);
-          const record = state.children[reporter.input.child];
-          if (!record) return next;
-          if (settled.status === "unanswered") {
-            // Stopped, or withdrawn while queued: nothing to keep.
-            if (settled.reason === "aborted" || record.stoppedAt !== undefined) return next;
-            const detail = settled.detail === undefined ? "" : `: ${typeof settled.detail === "string" ? settled.detail : JSON.stringify(settled.detail)}`;
-            record.result = { at: runtime.now(), failed: `${settled.reason}${detail}` };
-            state.ends ??= {};
-            state.ends[String(reporter.id)] = {
-              key: String(reporter.id),
-              child: record.id,
-              ...(record.routine === undefined ? {} : { routine: record.routine }),
-              failed: record.result.failed!,
-              ...(last === undefined ? {} : { last }),
-            };
-            return next;
-          }
-          // An answer is kept also when a stop came after it.
-          if (settled.type === "input") keepAnswer(record, settled.answer, runtime.now());
-          if (record.routine !== undefined) {
-            state.ends ??= {};
-            state.ends[String(reporter.id)] = { key: String(reporter.id), child: record.id, routine: record.routine };
-          }
-          return next;
+          await keep(tx, await tx.doc(Children, runtime.conversationId), reporter.input, settled, runtime.now(), last);
+          return { status: "running", checkpoint: { phase: "report" } };
         }, context);
       },
       report: async (reporter, runtime, context) => {
@@ -486,14 +547,42 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
     abort: (reporter, runtime, context) =>
       runtime.commit(async (tx) => {
         const state = await tx.doc(Children, runtime.conversationId);
-        // A stop that came after the child answered, before the reporter kept the answer: the answer is kept.
-        const record = state.children[reporter.input.child];
-        const submission = await tx.submissionByRequest(reporter.input.conversationId, `child:${reporter.id}`);
-        if (record && submission?.type === "input" && submission.status === "done") keepAnswer(record, submission.answer, runtime.now());
+        // A stop that came after the child answered, before the reporter kept the answer: the answer is kept, as a run
+        // of its routine that succeeded too.
+        const submission = await tx.submissionByRequest(reporter.input.conversationId, requestOf(String(reporter.id), reporter.input));
+        if (submission?.status === "done") await keep(tx, state, reporter.input, submission, runtime.now());
         finish(state, String(reporter.id), runtime.now());
         return { status: "terminal", outcome: { status: "aborted" } };
       }, context),
   });
+
+  /**
+   * Reporters that ended without keeping how their message ended: a crash loop faults one, which then is still live.
+   * One whose message is settled keeps it now; one whose message is not settled yet is followed by a reporter that waits
+   * for the same message, without delivering it again.
+   */
+  const reconcile = async (tx: Tx, now: number): Promise<number> => {
+    const state = await tx.doc(Children, ROOT_CONVERSATION_ID);
+    let count = 0;
+    for (const [reporter, id] of Object.entries(state.live)) {
+      const task = await tx.task(Number(reporter) as TaskId);
+      if (task && task.state.status !== "terminal") continue;
+      count++;
+      const record = state.children[id];
+      const input = task?.input as ReporterInput | undefined;
+      if (record && input) {
+        const submission = await tx.submissionByRequest(record.conversationId, requestOf(reporter, input));
+        if (submission?.status === "done" || submission?.status === "unanswered") await keep(tx, state, input, submission, now);
+        else if (submission && record.stoppedAt === undefined) {
+          const next = await tx.createTask(Reporter, { ...input, request: requestOf(reporter, input) }, background);
+          record.reporters.push(String(next));
+          state.live[String(next)] = record.id;
+        }
+      }
+      finish(state, reporter, now);
+    }
+    return count;
+  };
 
   const text = (value: string) => ({ output: [{ type: "text" as const, text: value }] });
   const isWorking = (child: Readonly<ChildRecord> | ChildInfo) => child.since !== undefined && child.stoppedAt === undefined;
@@ -521,7 +610,7 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
    */
   const start = async (tx: Tx, input: ChildStart, now: number): Promise<ChildStarted> => {
     const state = await tx.doc(Children, ROOT_CONVERSATION_ID);
-    const earlier = input.routine === undefined ? undefined : Object.values(state.children).find((child) => child.routine === input.routine && isWorking(child));
+    const earlier = input.routine === undefined ? undefined : Object.values(state.children).find((child) => child.routine === input.routine!.name && isWorking(child));
     if (earlier) return { working: earlier.id };
     const full = atCap(state);
     if (full !== undefined) return { full };
@@ -537,7 +626,7 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
       title: input.title,
       conversationId: conversation.id,
       ...(input.place ? { place: input.place } : {}),
-      ...(input.routine === undefined ? {} : { routine: input.routine }),
+      ...(input.routine === undefined ? {} : { routine: input.routine.name, run: { id: input.routine.run, version: input.routine.version, request: `child:${reporter}` } }),
       ...(input.chosen === undefined ? {} : { model: input.chosen }),
       thinking: input.thinking,
       startedAt: now,
@@ -660,6 +749,6 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
     },
   });
 
-  return { extension: defineExtension({ name: "tasks", tasks: [Anchor, Reporter], tools: [task] }), start };
+  return { extension: defineExtension({ name: "tasks", tasks: [Anchor, Reporter], tools: [task] }), start, reconcile };
 }
 

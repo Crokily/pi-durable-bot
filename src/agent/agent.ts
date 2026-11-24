@@ -49,6 +49,7 @@ import {
   type ChildRecord,
   type ChildEnd,
   type ChildrenState,
+  type RoutineRunRef,
   type ChildrenTools,
   Children,
   DEFAULT_CHILD_THINKING,
@@ -269,6 +270,7 @@ export class Agent {
   #childExtensions: { add: readonly Extension[]; remove: readonly Extension[] } = { add: [], remove: [] };
   /** The task extension's start, for children that routines start. */
   #startChild?: ChildrenTools["start"];
+  #reconcile?: ChildrenTools["reconcile"];
   #closing = false;
   /** Stops the last process did not finish; resume() finishes them. */
   #unfinishedStops: Stop[] = [];
@@ -640,7 +642,11 @@ export class Agent {
         // The scopes' environment runs each shell command in a systemd scope of its own; its files are the same.
         env: () => (options.scopes ? options.scopes.env({ cwd: options.workspace, shellEnv: options.shellEnv }) : new NodeExecutionEnv({ cwd: options.workspace, shellEnv: options.shellEnv })),
         ...(options.telemetry ? { telemetry: options.telemetry } : {}),
-        onReport: (report) => options.log("pi report", { type: report.kind, error: String(report.error) }),
+        onReport: (report) => {
+          options.log("pi report", { type: report.kind, error: String(report.error) });
+          // A reporter that crashes cut off too often keeps how its child ended now.
+          if (report.kind === "task_faulted" && report.task.kind === "bot.child-reporter") void agent?.reconcileChildren();
+        },
       },
       context,
     );
@@ -651,6 +657,7 @@ export class Agent {
     agent.#warming = warming;
     agent.#childExtensions = childExtensions;
     agent.#startChild = childrenTools.start;
+    agent.#reconcile = childrenTools.reconcile;
     if (memory) {
       memory.attach(harness, root);
       memory.beforePass = () => agent?.crashTests.beforeMemoryPass?.();
@@ -670,6 +677,7 @@ export class Agent {
   async resume(): Promise<void> {
     this.#harness.resume();
     for (const stop of this.#unfinishedStops.splice(0)) await this.#finishStop(stop);
+    await this.reconcileChildren();
     await this.#memory?.recover();
     // What extraction did not cover before the last process stopped: a run that ended, but whose pass did not end.
     if (this.#memory && this.#runInputs === undefined) {
@@ -795,6 +803,18 @@ export class Agent {
       const state = await tx.doc(Children, ROOT_CONVERSATION_ID);
       for (const key of keys) delete state.ends?.[key];
     }, context);
+  }
+
+  /** Reporters that ended without keeping how their child ended keep it now (see ChildrenTools.reconcile). */
+  async reconcileChildren(): Promise<void> {
+    const reconcile = this.#reconcile;
+    if (!reconcile || this.#closing) return;
+    try {
+      const count = await this.#root.commit((tx) => reconcile(tx, Date.now()), context);
+      if (count > 0) this.#options.log("kept how children ended for reporters that ended without it", { reporters: count });
+    } catch (error) {
+      if (!this.#closing) this.#options.log("could not reconcile the children's reporters", { error: String(error) });
+    }
   }
 
   /** The main agent's children, oldest first. */
@@ -938,13 +958,16 @@ export class Agent {
 
   /**
    * Start a child for a routine, with the main agent's model and the default thinking level, for no place. The child
-   * keeps the routine's name, in the same commit, so the routine knows while it works. Returns its ID; why it did not
-   * start at the cap; or the routine's earlier child, which works again.
+   * keeps the routine's name and run, in the same commit, so the routine knows while it works, and how the brief ends counts as
+   * the run's outcome. Returns its ID; why it did not start at the cap; or the routine's earlier child, which works again.
    */
-  async startChild(routine: string, brief: string): Promise<{ id: string } | { refused: string } | { working: string }> {
+  async startChild(routine: RoutineRunRef, brief: string): Promise<{ id: string } | { refused: string } | { working: string }> {
     const start = this.#startChild;
     if (!start) throw new Error("the agent is still starting");
-    const started = await this.#root.commit((tx) => start(tx, { title: routine, brief, from: `routine ${routine}`, routine, model: this.#model, thinking: DEFAULT_CHILD_THINKING }, Date.now()), context);
+    const started = await this.#root.commit(
+      (tx) => start(tx, { title: routine.name, brief, from: `routine ${routine.name}`, routine, model: this.#model, thinking: DEFAULT_CHILD_THINKING }, Date.now()),
+      context,
+    );
     if (!("full" in started)) return started;
     return { refused: `${started.full.length} children work now, as many as the cap (settings.maxChildren in bot.json)` };
   }

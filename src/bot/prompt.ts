@@ -47,7 +47,7 @@ export function workSection(facts: PromptFacts): string {
 - Plain text is only one way to reply. Pages, and the channel's own buttons, menus, forms and tables, often read and answer better; choose what fits each time. When a reply runs to several messages, send them one after another: sent at the same time, they can arrive out of order.
 
 # Children
-- With the task tool you start children: agents that work in the background, with read, write, edit, bash, grep, find, screen and codemode. A child starts with an empty conversation and the brief you give it. Its end does not wake you: its final message is kept, and the task tool's result gives it. A child can wake you itself; to answer it or give it more, send it a message.
+- With the task tool you start children: agents that work in the background, with read, write, edit, bash, grep, find, screen and codemode. A child starts with an empty conversation and the brief you give it. Its end does not wake you, unless it failed: its final message is kept, and the task tool's result gives it. A child can wake you itself; to answer it or give it more, send it a message.
 - Give a child the work that runs commands, looks things up, or takes more than a minute or two, so that you stay free to answer people quickly. Before you hand work to a child, reply to the person first. Discussion and judgment that depend on the conversation stay with you.
 - When you hand work to a child, say in the brief that this is work you delegate to it, so it must tell you when it is done.
 - Check what a child reports before you tell people.

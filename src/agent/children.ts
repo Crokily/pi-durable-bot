@@ -67,8 +67,10 @@ export type ChildRecord = {
    * that ended only before this was kept.
    */
   result?: { at: number; failed?: string };
-  /** The task tool's waits for its end, by tool task: the signal key each sleeps on, and who waits (a child, or main). */
-  waiters?: Record<string, { key: string; by: string }>;
+  /** The tool tasks of the task tool's waits for its end; each sleeps on the key of the child's ID. */
+  waiters?: string[];
+  /** The reporters that give the child that started it a message of its failure, which a stop withdraws while queued. */
+  told?: string[];
 };
 
 export type ChildrenState = {
@@ -186,8 +188,8 @@ export function childActivity(
   };
 }
 
-/** The longest result the task tool gives in its output; a longer one goes to a file. */
-const RESULT_CHARS = 30_000;
+/** The longest result the task tool gives in its output, under pi's cut at 50 KB or 2,000 lines; a longer one goes to a file. */
+const RESULT_BYTES = 40_000;
 const RESULT_LINES = 1_500;
 
 /** How much of a command or an output line a description shows. */
@@ -233,15 +235,46 @@ export function childInfo(record: Readonly<ChildRecord>): ChildInfo {
   };
 }
 
-/** A child's end, for the task tool's waits: the key each wait sleeps on. */
-const ChildEnded = defineSignal({ name: "bot.child-ended", version: 1, schema: obj({ child: str() }) });
+/** How a child ended, as a wait keeps it the first time: its answer then, why it could not answer, whether it was stopped. */
+type End = { answer?: number; failed?: string; stopped?: boolean };
+
+/** A child's end, for the task tool's waits, under the child's ID: how it ended. */
+const ChildEnded = defineSignal({ name: "bot.child-ended", version: 1, schema: obj({ answer: opt(num()), failed: opt(str()), stopped: opt(bool()) }) });
+
+function endOf(record: Readonly<ChildRecord>): End {
+  const failed = record.result?.failed;
+  const answer = record.reported.at(-1);
+  return { ...(failed !== undefined ? { failed } : answer !== undefined ? { answer: Number(answer) } : {}), ...(record.stoppedAt === undefined ? {} : { stopped: true }) };
+}
 
 /**
- * A child ended or was stopped: wake the waits for it. In a commit, before its first table write, such as a new task.
+ * Children ended or were stopped: wake the waits for them, each with how its child ended. In a commit, before its first
+ * table write: each delivery reads its task before it writes it, so all of them start before the first one writes.
  */
-export async function endWaits(tx: Tx, record: ChildRecord): Promise<void> {
-  for (const [task, { key }] of Object.entries(record.waiters ?? {})) await tx.signal(Number(task) as TaskId, ChildEnded, key, { child: record.id });
-  delete record.waiters;
+export async function endWaits(tx: Tx, records: readonly ChildRecord[]): Promise<void> {
+  const deliveries = records.flatMap((record) => [...new Set(record.waiters ?? [])].map((task) => tx.signal(Number(task) as TaskId, ChildEnded, record.id, endOf(record))));
+  for (const record of records) delete record.waiters;
+  await Promise.all(deliveries);
+}
+
+/** Keep an answer of a child, once: several messages can end in one answer. */
+export function keepAnswer(record: ChildRecord, answer: EntryId, now: number): void {
+  if (record.reported.includes(answer)) return;
+  record.reported.push(answer);
+  record.result = { at: now };
+}
+
+/**
+ * Which children a list shows: those that work, the last `limit` of the others, and the chain of children that started
+ * each shown one, so none shows apart from the one that started it.
+ */
+export function shownChildren(listed: readonly ChildInfo[], limit = 20): ChildInfo[] {
+  const byId = new Map(listed.map((child) => [child.id, child]));
+  const shown = new Set([...listed.filter(isWorking), ...listed.filter((child) => !isWorking(child)).slice(-limit)].map((child) => child.id));
+  for (const id of [...shown]) {
+    for (let up = byId.get(id)?.parent; up !== undefined && byId.has(up) && !shown.has(up); up = byId.get(up)?.parent) shown.add(up);
+  }
+  return listed.filter((child) => shown.has(child.id));
 }
 
 /** Whether a child works now. */
@@ -306,8 +339,10 @@ export interface ChildrenHost {
   interrupt(child: ChildInfo): Promise<string>;
   /** A child's work ended: it holds nothing any more, such as the screen. */
   settled(conversationId: string): void;
-  /** Save a child's result that is too long for a tool's output to a file: its path. */
-  saveResult(child: string, text: string): Promise<string>;
+  /** Save a result that is too long for a tool's output to a file, named after a child or "wait": its path. */
+  saveResult(name: string, text: string): Promise<string>;
+  /** Crash tests: before a child's start commits, with the ID of the child that starts it. */
+  beforeStart?(starter: string): Promise<void>;
   /** Crash tests: before a reporter keeps how its child ended; ends early when the reporter is aborted. */
   beforeKeep?(child: string, signal: AbortSignal): Promise<void>;
   /** Crash tests: just before and just after a child's failure is handed to the main agent. */
@@ -332,14 +367,14 @@ export interface ChildStart {
   thinking: ModelThinkingLevel;
 }
 
-export type ChildStarted = { id: string } | { full: ChildInfo[] } | { working: string };
+export type ChildStarted = { id: string } | { full: ChildInfo[] } | { working: string } | { stopped: string };
 
 /** The task extension, and how the bot starts a child itself, for a routine. */
 export interface ChildrenTools {
   extension: Extension;
   /**
-   * Start a child in a commit of the main conversation: its ID; at the cap, the children that work; or, for a routine
-   * whose earlier child works again, that child.
+   * Start a child in a commit of the main conversation: its ID; at the cap, the children that work; for a routine whose
+   * earlier child works again, that child; or, for a child that starts it and was stopped meanwhile, that child.
    */
   start(tx: Tx, start: ChildStart, now: number): Promise<ChildStarted>;
 }
@@ -437,17 +472,11 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
     abort: (_anchor, runtime, context) => runtime.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), context),
   });
 
-  type ReporterInput = { child: string; conversationId: ConversationId; message: string };
+  /** about: the child whose failure the message tells, which a stop of it withdraws. */
+  type ReporterInput = { child: string; conversationId: ConversationId; message: string; about?: string };
   // end: failed: why the child could not go on, for the main agent's wake. answered: only in a reporter that 0.8.8 left
   // in its report phase, which handed the end to the main agent.
   type ReporterState = { phase: "deliver" } | { phase: "report"; end?: { status: "answered" | "failed"; text: string } };
-
-  /** Keep an answer of the child, once: several messages can end in one answer. */
-  const keepAnswer = (record: ChildRecord, answer: EntryId, now: number) => {
-    if (record.reported.includes(answer)) return;
-    record.reported.push(answer);
-    record.result = { at: now };
-  };
 
   /**
    * The reporter ends: it is no longer live, and its child waits for a message once no other reporter is live, which
@@ -460,18 +489,19 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
     if (!child || Object.values(state.live).includes(child.id)) return;
     if (child.since !== undefined && child.stoppedAt === undefined) child.endedAt = now;
     delete child.since;
-    await endWaits(tx, child);
+    await endWaits(tx, [child]);
   };
 
   // Every reporter and anchor is a task of the main conversation, also for a child that a child starts.
   const background = { ownership: { kind: "conversation" }, background: true, conversationId: ROOT_CONVERSATION_ID } as const;
 
-  /** Give a child a message: a reporter delivers it. In a commit of the children document. */
-  const deliver = async (tx: Tx, state: ChildrenState, record: ChildRecord, message: string, now: number) => {
-    const reporter = await tx.createTask(Reporter, { child: record.id, conversationId: record.conversationId, message }, background);
-    record.reporters.push(String(reporter));
+  /** Give a child a message, for one of a child's failure about that child: a reporter delivers it. Returns the reporter. */
+  const deliver = async (tx: Tx, state: ChildrenState, record: ChildRecord, message: string, now: number, about?: string) => {
+    const reporter = String(await tx.createTask(Reporter, { child: record.id, conversationId: record.conversationId, message, ...(about === undefined ? {} : { about }) }, background));
+    record.reporters.push(reporter);
     record.since ??= now;
-    state.live[String(reporter)] = record.id;
+    state.live[reporter] = record.id;
+    return reporter;
   };
 
   // Delivers one message to a child, waits for its answer and keeps how it ended; only a failure wakes the main agent.
@@ -485,9 +515,10 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
     phases: {
       deliver: async (reporter, runtime, context) => {
         const { conversationId, message } = reporter.input;
-        // Stopped before its message reached the child: the child does not get it.
+        // Stopped before its message reached the child, or the child the message is about: the child does not get it.
         const state = await runtime.snapshot(Children, runtime.conversationId, context);
-        if (state?.children[reporter.input.child]?.stoppedAt !== undefined) {
+        const stopped = (id: string | undefined) => id !== undefined && state?.children[id]?.stoppedAt !== undefined;
+        if (stopped(reporter.input.child) || stopped(reporter.input.about)) {
           await runtime.commit(() => ({ status: "running", checkpoint: { phase: "report" } }), context);
           return;
         }
@@ -551,11 +582,13 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
           // An end that 0.8.8 had not kept yet: kept, as now.
           const record = state.children[reporter.input.child];
           if (end && record && (end.status === "answered" || record.stoppedAt === undefined)) record.result = end.status === "failed" ? { at: runtime.now(), failed: end.text } : { at: runtime.now() };
-          // A parent that waits for this child learns of the failure from its wait.
-          const waits = Object.values(record?.waiters ?? {}).some((waiter) => waiter.by === parent?.id);
           await finish(tx, state, String(reporter.id), runtime.now());
-          const to = parent && !waits ? state.children[parent.id] : undefined;
-          if (to && to.stoppedAt === undefined) await deliver(tx, state, to, parent!.message, runtime.now());
+          // Also when a wait of the parent gives the failure too. Not when one of them was stopped meanwhile; a later stop
+          // of this child withdraws the message while it waits in the parent's queue.
+          const to = parent === undefined ? undefined : state.children[parent.id];
+          if (to && to.stoppedAt === undefined && record && record.stoppedAt === undefined) {
+            record.told = [...(record.told ?? []), await deliver(tx, state, to, parent!.message, runtime.now(), record.id)];
+          }
           return { status: "terminal", outcome: { status: "completed", result: null } };
         }, context);
       },
@@ -588,15 +621,34 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
   const capText = async (not: string, working: readonly ChildInfo[], at: number) =>
     `${not}: ${working.length} children work now, as many as the cap (settings.maxChildren in bot.json). They are:\n` +
     (await Promise.all(working.map(withActivity))).map((child) => describeChild(child, at)).join("\n");
+  /** Text for the model after a head: whole, or in a file named after `name` when it is too long for a tool's output. */
+  const fitted = async (head: string, body: string, name: string, what: string) => {
+    // Tool output is cut at 2,000 lines or 50 KB: a longer text goes to a file, whole.
+    if (Buffer.byteLength(head + body) <= RESULT_BYTES && `${head}\n${body}`.split("\n").length <= RESULT_LINES) return `${head}\n${body}`;
+    const file = await host.saveResult(name, body);
+    return `${head}\n${what} ${body.length} characters; all of it is in ${file}. Its start:\n${body.split("\n").slice(0, 100).join("\n").slice(0, 4_000)}`;
+  };
   /** A child's last final message for the model: whole, or in a file when it is too long for a tool's output. */
   const resultText = async (tx: Tx, child: Readonly<ChildRecord>, at: number) => {
     const result = await childResult(tx, child);
     const now = describeChild(childInfo(child), at);
     if (result === undefined) return `${now}\nNo final message yet.`;
-    // Tool output is cut at 2,000 lines or 50 KB: a longer result goes to a file, whole.
-    if (result.length <= RESULT_CHARS && result.split("\n").length <= RESULT_LINES) return `${now}\nIts last final message:\n${result}`;
-    const file = await host.saveResult(child.id, result);
-    return `${now}\nIts last final message is ${result.length} characters; all of it is in ${file}. Its start:\n${result.split("\n").slice(0, 100).join("\n").slice(0, 4_000)}`;
+    return fitted(`${now}\nIts last final message:`, result, child.id, "It is");
+  };
+  /** How a child ended for a wait, with its final message then. */
+  const endText = async (tx: Tx, end: End) => {
+    if (end.failed !== undefined) return `It could not answer: ${end.failed}`;
+    if (end.answer === undefined) return end.stopped ? "It was stopped before it gave a final message." : "No final message.";
+    const answer = textOf((await tx.entry(AssistantEntry, end.answer as EntryId))?.model?.[0] as AssistantMessage | undefined).trim() || "(empty)";
+    return `${end.stopped ? "It was stopped. Its last final message" : "Its final message"}:\n${answer}`;
+  };
+  /** Take a wait's task out of the children it waits for. */
+  const unwait = (state: ChildrenState, task: TaskId) => {
+    for (const child of Object.values(state.children)) {
+      if (!child.waiters?.includes(String(task))) continue;
+      child.waiters = child.waiters.filter((each) => each !== String(task));
+      if (child.waiters.length === 0) delete child.waiters;
+    }
   };
 
   /**
@@ -608,6 +660,8 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
     const state = await tx.doc(Children, ROOT_CONVERSATION_ID);
     const earlier = input.routine === undefined ? undefined : Object.values(state.children).find((child) => child.routine === input.routine && isWorking(child));
     if (earlier) return { working: earlier.id };
+    // A stop marks a child and all it started in one commit: a child stopped since it looked starts none.
+    if (input.parent !== undefined && state.children[input.parent]?.stoppedAt !== undefined) return { stopped: input.parent };
     const full = atCap(state);
     if (full !== undefined) return { full };
     const id = `c${state.next++}`;
@@ -647,8 +701,8 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
     return lines.join("\n");
   };
 
-  /** Where a wait is: its round, which names the signal key it sleeps on; its time limit; the children it waits for. */
-  type Waiting = { round: number; until?: number; children: string[] };
+  /** Where a wait is: its time limit, and how each child that ended has ended, the first time. */
+  type Waiting = { until?: number; ended: Record<string, End> };
 
   const task = defineTool({
     name: "task",
@@ -657,12 +711,13 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
       "(place: the address of the place it works for, by default the place you work on; model: \"provider/modelId\", which it keeps, by default yours; " +
       "thinking: its thinking level, which it keeps, by default xhigh); it starts with an empty conversation and the brief, and has this tool too. " +
       "list: your children and the children they started, and what each one that works does now. result: a child's last final message (child: its ID). " +
-      "wait: waits until the children listed in children (by default, all of yours that work) have ended, or any one of them (any: true), " +
-      "or until seconds have passed, then gives their final messages together; while you wait you do nothing else. " +
+      "wait: waits until all the children listed in children have ended, or any one of them (any: true), or until seconds have passed, " +
+      "then says which of these ended it and gives, for each child that ended, how it ended and its final message then; while you wait you do nothing else. " +
       "send: a message to a child; a child that waits starts on it " +
       "at once, and one that works takes it when its current tool calls end. interrupt: ends the tool calls a child is in, such as a command " +
       "that hangs; the child goes on, sees that they were aborted, and takes the messages that wait for it. " +
-      "stop: stops a child, what it runs and the children it started. A child's end does not wake you, but a failure does, once; a child can wake you itself. " +
+      "stop: stops a child, what it runs and the children it started. A child's end wakes no one. A child that fails tells the child that started it " +
+      "while that one works, and else wakes the main agent, once. Any child can wake the main agent with pots wake. " +
       "All children share the cap settings.maxChildren.",
     parameters: obj(
       {
@@ -683,6 +738,11 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
     // A call cut off by a crash is not run again: a repeated start would start a second child. The model sees that the
     // call was interrupted and can look with list. A wait holds no process and goes on after a restart.
     replay: "unsafe",
+    // A wait that is aborted while it sleeps: the children it waited for no longer name it.
+    cancel: async (args, api, call) => {
+      if (args.action !== "wait") return;
+      await api.commit(async (tx) => unwait(await tx.doc(Children, ROOT_CONVERSATION_ID), api.taskId), call);
+    },
     execute: async (args, api, call) => {
       const state = (await api.snapshot(Children, ROOT_CONVERSATION_ID, call)) ?? { next: 1, children: {}, live: {} };
       // The main agent manages every child; a child, those it started.
@@ -695,8 +755,7 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
         const below = caller === undefined ? undefined : new Set(descendants(state, caller.id));
         const listed = all.filter((child) => below === undefined || below.has(child.id));
         if (listed.length === 0) return text("No children.");
-        const others = listed.filter((child) => !isWorking(child)).slice(-20);
-        return text(tree(await Promise.all(listed.filter((child) => isWorking(child) || others.includes(child)).map(withActivity)), api.now()));
+        return text(tree(await Promise.all(shownChildren(listed).map(withActivity)), api.now()));
       }
       if (args.action === "start") {
         if (!args.title?.trim() || !args.brief?.trim()) return text("start needs a title and a brief.");
@@ -710,6 +769,7 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
         // As pi does, a level the model does not have becomes the nearest one it has, at each request (pi-ai).
         const thinkingLevel = args.thinking ?? DEFAULT_CHILD_THINKING;
         const title = args.title!.trim();
+        if (caller) await host.beforeStart?.(caller.id);
         const started = await api.commit(
           (tx) =>
             start(
@@ -728,6 +788,7 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
             ),
           call,
         );
+        if ("stopped" in started) return text("Not started: you were stopped.");
         if (!("id" in started)) return text("full" in started ? await capText("Not started", started.full, api.now()) : "Not started.");
         return text(
           `Started ${started.id} ("${title}")${place ? ` for ${place}` : ""}, model ${model.provider}/${model.modelId}${args.model?.trim() ? "" : " (yours)"}, ` +
@@ -735,34 +796,58 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
         );
       }
       if (args.action === "wait") {
-        const before = api.checkpoint as Waiting | undefined;
-        const ids = before?.children ?? args.children ?? all.filter((child) => mine(child) && isWorking(child)).map((child) => child.id);
-        if (ids.length === 0) return text("None of your children works now.");
+        const ids = [...new Set(args.children ?? [])];
+        if (ids.length === 0) return text("wait needs children: the IDs of the children to wait for.");
         const unknown = ids.filter((id) => !Object.hasOwn(state.children, id) || !mine(state.children[id]!));
         if (unknown.length > 0) return text(`No child ${unknown.join(", ")} of yours.`);
+        const before = api.checkpoint as Waiting | undefined;
         const until = before ? before.until : args.seconds === undefined ? undefined : api.now() + args.seconds * 1_000;
-        const round = before ? before.round + 1 : 0;
-        const key = `wait-${round}`;
-        // Looked at and, while it waits, kept in the children document in one commit, so no end comes in between.
-        const left = await api.commit(async (tx) => {
-          const state = await tx.doc(Children, ROOT_CONVERSATION_ID);
-          const records = ids.map((id) => state.children[id]!);
-          const working = records.filter(isWorking);
-          const done = api.wake?.reason === "expired" || working.length === 0 || (args.any === true && working.length < records.length);
-          if (done) return working.map((child) => child.id);
-          for (const child of working) child.waiters = { ...child.waiters, [String(api.taskId)]: { key, by: caller?.id ?? "main" } };
-          return undefined;
-        }, call);
-        if (left === undefined) {
-          const waiting: Waiting = { round, ...(until === undefined ? {} : { until }), children: ids };
-          return { sleep: { checkpoint: waiting, signals: [ChildEnded.key(key)], ...(until === undefined ? {} : { until }) } };
+        const ended: Record<string, End> = { ...before?.ended };
+        if (before === undefined) {
+          // Looked at and, for those that work, kept in the children document in one commit, so no end comes in between.
+          Object.assign(
+            ended,
+            await api.commit(async (tx) => {
+              const state = await tx.doc(Children, ROOT_CONVERSATION_ID);
+              const now: Record<string, End> = {};
+              for (const id of ids) {
+                const record = state.children[id]!;
+                if (isWorking(record)) record.waiters = [...(record.waiters ?? []), String(api.taskId)];
+                else now[id] = endOf(record);
+              }
+              return now;
+            }, call),
+          );
+        } else {
+          // The first end of each: a later message may make the child work again and answer anew.
+          for (const id of ids) {
+            if (Object.hasOwn(ended, id)) continue;
+            const signal = await api.readSignal(ChildEnded, id, call);
+            if (signal && "value" in signal) ended[id] = signal.value;
+          }
+        }
+        const done = ids.filter((id) => Object.hasOwn(ended, id));
+        const left = ids.filter((id) => !Object.hasOwn(ended, id));
+        const over = left.length === 0 ? "all" : args.any === true && done.length > 0 ? "any" : api.wake?.reason === "expired" || api.wake?.reason === "time" ? "time" : undefined;
+        if (over === undefined) {
+          const waiting: Waiting = { ...(until === undefined ? {} : { until }), ended };
+          return { sleep: { checkpoint: waiting, signals: left.map((id) => ChildEnded.key(id)), ...(until === undefined ? {} : { until }) } };
         }
         const results = await api.commit(async (tx) => {
           const state = await tx.doc(Children, ROOT_CONVERSATION_ID);
-          return Promise.all(ids.map((id) => resultText(tx, state.children[id]!, api.now())));
+          const texts = await Promise.all(done.map(async (id) => `${describeChild(childInfo(state.children[id]!), api.now())}\n${await endText(tx, ended[id]!)}`));
+          unwait(state, api.taskId);
+          return texts;
         }, call);
-        const head = left.length === 0 ? "" : `The time is up; ${left.join(", ")} still ${left.length === 1 ? "works" : "work"}.\n\n`;
-        return text(head + results.join("\n\n"));
+        const works = left.length === 1 ? "still works" : "still work";
+        const head =
+          over === "all"
+            ? `All of them ended: ${done.join(", ")}.`
+            : over === "any"
+              ? `${done.length === 1 ? "One of them ended" : "Some of them ended"}: ${done.join(", ")}; ${left.join(", ")} ${works}.`
+              : `The time is up; ${left.join(", ")} ${works}.${done.length > 0 ? ` Ended: ${done.join(", ")}.` : ""}`;
+        if (done.length === 0) return text(head);
+        return text(await fitted(head, `\n${results.join("\n\n")}`, "wait", "Together, their final messages are"));
       }
       if (!args.child) return text(`${args.action} needs a child ID.`);
       const child = Object.hasOwn(state.children, args.child) && mine(state.children[args.child]!) ? state.children[args.child] : undefined;

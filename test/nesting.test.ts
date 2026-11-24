@@ -1,4 +1,4 @@
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { agentRequests, type FakeModel, type FakeReply, type FakeRequest, startFakeModel, wakeLine } from "./support/fake-model.ts";
@@ -39,7 +39,18 @@ const LEADS: Record<string, FakeReply[]> = {
   ],
   cap: [task({ action: "start", title: "one", brief: "wait for go" }), task({ action: "start", title: "two", brief: "answer one" })],
   any: [task({ action: "start", title: "one", brief: "answer one" }), task({ action: "start", title: "two", brief: "wait for go" }), task({ action: "wait", children: ["c2", "c3"], any: true })],
-  "time limit": [task({ action: "start", title: "one", brief: "wait for go" }), task({ action: "wait", seconds: 2 })],
+  "time limit": [task({ action: "start", title: "one", brief: "wait for go" }), task({ action: "wait", children: ["c2"], seconds: 2 })],
+  "wait for two": [task({ action: "start", title: "one", brief: "wait for go" }), task({ action: "start", title: "two", brief: "wait for go" }), task({ action: "wait", children: ["c2", "c3"] })],
+  again: [task({ action: "start", title: "one", brief: "answer one" }), task({ action: "start", title: "two", brief: "wait for go" }), task({ action: "wait", children: ["c2", "c3"] })],
+  long: [
+    task({ action: "start", title: "one", brief: "answer long" }),
+    task({ action: "start", title: "two", brief: "answer long" }),
+    task({ action: "start", title: "three", brief: "answer long" }),
+    task({ action: "wait", children: ["c2", "c3", "c4"] }),
+  ],
+  "start one": [task({ action: "start", title: "one", brief: "wait for go" })],
+  "start two": [task({ action: "start", title: "one", brief: "wait for go" }), task({ action: "start", title: "two", brief: "wait for go" })],
+  "fail after a wait": [task({ action: "start", title: "doomed", brief: "fail after a nap" }), task({ action: "wait", children: ["c2"], seconds: 1 }), bash("until [ -e go ]; do sleep 0.2; done")],
   "wait for all": [task({ action: "start", title: "one", brief: "wait for go" }), task({ action: "wait", children: ["c2"] })],
   "fail below": [task({ action: "start", title: "doomed", brief: "fail after a step" }), bash("until [ -e go ]; do sleep 0.2; done")],
   "fail later": [task({ action: "start", title: "doomed", brief: "fail after a nap" })],
@@ -55,7 +66,9 @@ function script(request: FakeRequest): FakeReply {
   const brief = request.messages[0]?.content ?? "";
   const step = request.messages.filter((message) => message.role === "tool").length;
   if (isChild(request) && brief.startsWith("[brief from child")) {
+    if (last?.role === "user" && last.content.startsWith("[message from")) return { text: last.content.split("\n")[1] ?? "" };
     if (brief.includes("answer one")) return { text: "one" };
+    if (brief.includes("answer long")) return { text: Array.from({ length: 900 }, (_, index) => `line ${index + 1}`).join("\n") };
     if (brief.includes("wait for go")) return go() ? { text: "two" } : bash("until [ -e go ]; do sleep 0.2; done");
     const fail: FakeReply = { fail: { status: 401, message: "the login expired" } };
     if (brief.includes("fail after a step")) return step === 0 ? bash("echo step one") : fail;
@@ -75,6 +88,10 @@ function script(request: FakeRequest): FakeReply {
   if (stop) return task({ action: "stop", child: stop });
   const said = /what did (c\d+) say/.exec(last.content)?.[1];
   if (said) return task({ action: "result", child: said });
+  const awaited = /wait for (c\d+)/.exec(last.content)?.[1];
+  if (awaited) return task({ action: "wait", children: [awaited] });
+  const tell = /tell (c\d+): (.+)/.exec(last.content);
+  if (tell) return task({ action: "send", child: tell[1], message: tell[2] });
   if (last.content.includes("please list")) return task({ action: "list" });
   return { text: "nothing to do" };
 }
@@ -100,8 +117,13 @@ async function mainResult(start: string, after = 0): Promise<string> {
 }
 /** The lead's answer: its last request's answer is what it got from its last step. */
 const leadAnswer = () => new RegExp(`^c1 "lead": ended`, "m").test(gateway.pots("children"));
-/** The lead's requests, oldest first. */
-const leadRequests = () => model.requests.filter((request) => isChild(request) && request.messages[0]?.content.startsWith("[brief from the main agent"));
+/** The lead's requests, oldest first: c1's, or another lead's. */
+const leadRequests = (id = "c1") => model.requests.filter((request) => isChild(request) && request.messages[0]?.content.startsWith(`[brief from the main agent; you are child ${id}]`));
+/** Whether the gateway printed this line. */
+const printed = (message: string) => gateway.output.some((line) => line.message === message);
+/** A hold of the gateway's, while its file is in the bot's folder. */
+const hold = (name: "child-start" | "after-child-stop" | "child-keep") => writeFileSync(join(gateway.botDir, `hold-${name}`), "");
+const release = (name: "child-start" | "after-child-stop" | "child-keep") => rmSync(join(gateway.botDir, `hold-${name}`), { force: true });
 const reports = () => gateway.sent().filter((record) => record.text?.startsWith("report:"));
 const failureWakes = () => gateway.query<{ text: string }>("SELECT text FROM bot_wakes WHERE reason = 'child'");
 const forgetFailures = () => gateway.output.splice(0, gateway.output.length, ...gateway.output.filter((line) => !/failed/i.test(String(line.message))));
@@ -130,8 +152,7 @@ describe("children that start children", { timeout: 90_000 }, () => {
     putGo();
     await waitFor(leadAnswer, { what: "the lead's end" });
     const answer = await said("c1");
-    expect(answer).toMatch(/c2 "one": ended [^\n]*\nIts last final message:\none\n/);
-    expect(answer).toMatch(/c3 "two": ended [^\n]*\nIts last final message:\ntwo/);
+    expect(answer).toMatch(/All of them ended: c2, c3\.\n\nc2 "one": ended [^\n]*\nIts final message:\none\n\nc3 "two": ended [^\n]*\nIts final message:\ntwo/);
     expect(gateway.query<{ reason: string }>("SELECT reason FROM bot_wakes").map((wake) => wake.reason)).not.toContain("child");
   });
 
@@ -160,9 +181,7 @@ describe("children that start children", { timeout: 90_000 }, () => {
     await setUp();
     gateway.say("general", "alice", `@${ME} please lead any`);
     await waitFor(leadAnswer, { what: "the lead's end" });
-    const any = await said("c1");
-    expect(any).toMatch(/c2 "one": ended [^\n]*\nIts last final message:\none\n/);
-    expect(any).toMatch(/c3 "two": working[^\n]*\nNo final message yet\./);
+    expect(await said("c1")).toMatch(/lead got: One of them ended: c2; c3 still works\.\n\nc2 "one": ended [^\n]*\nIts final message:\none$/);
 
     putGo();
   });
@@ -171,7 +190,7 @@ describe("children that start children", { timeout: 90_000 }, () => {
     await setUp();
     gateway.say("general", "alice", `@${ME} please lead time limit`);
     await waitFor(leadAnswer, { what: "the lead's end" });
-    expect(await said("c1")).toMatch(/lead got: The time is up; c2 still works\.\n\nc2 "one": working[^\n]*\nNo final message yet\./);
+    expect(await said("c1")).toMatch(/lead got: The time is up; c2 still works\.$/);
     putGo();
   });
 
@@ -187,9 +206,113 @@ describe("children that start children", { timeout: 90_000 }, () => {
       await waitFor(leadAnswer, { what: "the lead's end" });
       // The wait was not run again: the lead asked its model once more, with the wait's result.
       expect(leadRequests()).toHaveLength(3);
-      expect(await said("c1")).toMatch(/lead got: c2 "one": ended [^\n]*\nIts last final message:\ntwo$/);
+      expect(await said("c1")).toMatch(/lead got: All of them ended: c2\.\n\nc2 "one": ended [^\n]*\nIts final message:\ntwo$/);
     });
   }
+
+  it("gives each waiter the end of a child that two wait for: its parent and the main agent", async () => {
+    await setUp();
+    gateway.say("general", "alice", `@${ME} please lead wait for all`);
+    await waitFor(() => leadRequests().length === 2 && /^c2 "one": working/m.test(gateway.pots("children")), { what: "the lead's wait" });
+    gateway.say("general", "alice", `@${ME} wait for c2`);
+    await waitFor(() => model.requests.some((request) => !isChild(request) && String(request.messages.at(-1)?.content).includes("wait for c2")), { what: "the main agent's wait" });
+    await pause(500);
+    putGo();
+    expect(await mainResult("All of them ended: c2.")).toMatch(/^All of them ended: c2\.\n\nc2 "one": ended [^\n]*\nIts final message:\ntwo$/);
+    await waitFor(leadAnswer, { what: "the lead's end" });
+    expect(await said("c1")).toMatch(/lead got: All of them ended: c2\.\n\nc2 "one": ended [^\n]*\nIts final message:\ntwo$/);
+  });
+
+  it("stops a child that waits for two children, with them", async () => {
+    await setUp();
+    gateway.say("general", "alice", `@${ME} please lead wait for two`);
+    await waitFor(() => leadRequests().length === 3 && /^c3 "two": working/m.test(gateway.pots("children")), { what: "the lead's wait" });
+    await pause(500);
+    gateway.say("general", "alice", `@${ME} stop c1`);
+    expect(await mainResult("Stopped c1")).toBe('Stopped c1 ("lead") and the children it started: c2, c3. Nothing comes back from them.');
+    expect(gateway.pots("children")).toMatch(/^c1 "lead": stopped[^\n]*\nc2 "one": stopped[^\n]*\nc3 "two": stopped/);
+  });
+
+  it("gives a wait the first end of each child, not the answer to a later message", async () => {
+    await setUp();
+    gateway.say("general", "alice", `@${ME} please lead again`);
+    await waitFor(() => leadRequests().length === 3 && /^c2 "one": ended/m.test(gateway.pots("children")), { what: "the lead's wait" });
+    await pause(500);
+    gateway.say("general", "alice", `@${ME} tell c2: three`);
+    await waitFor(() => model.requests.some((request) => isChild(request) && request.messages.at(-1)?.content === "[message from the main agent]\nthree"), { what: "c2's second answer" });
+    await waitFor(() => /^c2 "one": ended/m.test(gateway.pots("children")), { what: "c2's second end" });
+    putGo();
+    await waitFor(leadAnswer, { what: "the lead's end" });
+    expect(await said("c1")).toMatch(/lead got: All of them ended: c2, c3\.\n\nc2 "one": ended [^\n]*\nIts final message:\none\n\nc3 "two": ended [^\n]*\nIts final message:\ntwo$/);
+  });
+
+  it("gives a batch too long for a tool's output whole, in one file", async () => {
+    await setUp();
+    gateway.say("general", "alice", `@${ME} please lead long`);
+    await waitFor(leadAnswer, { what: "the lead's end" });
+    const answer = await said("c1");
+    const file = /lead got: All of them ended: c2, c3, c4\.\nTogether, their final messages are \d+ characters; all of it is in (\S+)\. Its start:\n/.exec(answer)?.[1];
+    expect(file).toBeDefined();
+    const saved = readFileSync(file!, "utf8");
+    expect(saved.match(/^line 900$/gm)).toHaveLength(3);
+    expect(saved).toMatch(/c4 "three": ended [^\n]*\nIts final message:\nline 1\n/);
+  });
+
+  it("gives a stopped child's answer to its waits when the stop came after the answer, before its reporter kept it", async () => {
+    await setUp();
+    gateway.say("general", "alice", `@${ME} please lead wait for all`);
+    await waitFor(() => leadRequests().length === 2 && /^c2 "one": working/m.test(gateway.pots("children")), { what: "the lead's wait" });
+    hold("child-keep");
+    putGo();
+    await waitFor(() => printed("crash test: holding the child's end"), { what: "the held answer" });
+    gateway.say("general", "alice", `@${ME} stop c2`);
+    await mainResult("Stopped c2");
+    release("child-keep");
+    await waitFor(leadAnswer, { what: "the lead's end" });
+    expect(await said("c1")).toMatch(/lead got: All of them ended: c2\.\n\nc2 "one": stopped [^\n]*\nIt was stopped\. Its last final message:\ntwo$/);
+  });
+
+  for (const first of ["stop", "start"] as const) {
+    it(`starts no child for a child that a stop marked, and stops one it started before (${first} first)`, async () => {
+      await setUp();
+      hold("child-start");
+      gateway.say("general", "alice", `@${ME} please lead start one`);
+      await waitFor(() => printed("crash test: holding the start of a child"), { what: "the held start" });
+      if (first === "stop") {
+        hold("after-child-stop");
+        gateway.say("general", "alice", `@${ME} stop c1`);
+        await waitFor(() => printed("crash test: holding after the stop mark"), { what: "the held stop" });
+        release("child-start");
+        await waitFor(() => leadRequests().length === 2, { what: "the start's result" });
+        expect(leadRequests()[1]!.messages.at(-1)!.content).toBe("Not started: you were stopped.");
+        release("after-child-stop");
+        expect(await mainResult("Stopped c1")).toBe('Stopped c1 ("lead"). Nothing comes back from it.');
+        expect(gateway.pots("children")).not.toMatch(/^c2/m);
+      } else {
+        release("child-start");
+        await waitFor(() => /^c2 "one": working/m.test(gateway.pots("children")), { what: "the grandchild" });
+        gateway.say("general", "alice", `@${ME} stop c1`);
+        expect(await mainResult("Stopped c1")).toBe('Stopped c1 ("lead") and the children it started: c2. Nothing comes back from them.');
+        expect(gateway.pots("children")).toMatch(/^c2 "one": stopped/m);
+      }
+    });
+  }
+
+  it("stops from a child's commands only the children it started", async () => {
+    await setUp();
+    gateway.say("general", "alice", `@${ME} please lead start two`);
+    await waitFor(() => /^c3 "two": working/m.test(gateway.pots("children")), { what: "the first lead's children" });
+    gateway.say("general", "alice", `@${ME} please lead start two`);
+    await waitFor(() => /^c6 "two": working/m.test(gateway.pots("children")), { what: "the second lead's children" });
+    const as = { env: { POTS_CHILD: "c4" } };
+    expect((await gateway.run(["children", "--stop", "c2"], as)).stdout).toMatch(/No child c2 of yours/);
+    expect((await gateway.run(["children", "--stop-all"], as)).stdout).toMatch(/^Stopped c5 \("one"\)\. .*\nStopped c6 \("two"\)\./);
+    const children = gateway.pots("children");
+    expect(children).toMatch(/^c2 "one": working/m);
+    expect(children).toMatch(/^c3 "two": working/m);
+    expect(children).toMatch(/^c5 "one": stopped/m);
+    putGo();
+  });
 
   it("tells the child that started it of a failure while that child works, and not the main agent", async () => {
     await setUp();
@@ -202,6 +325,31 @@ describe("children that start children", { timeout: 90_000 }, () => {
     await pause(1_000);
     expect(failureWakes()).toHaveLength(0);
     expect(reports()).toHaveLength(0);
+    forgetFailures();
+  });
+
+  it("tells the child that started it of a failure also after its wait for that child ran out of time", async () => {
+    await setUp();
+    gateway.say("general", "alice", `@${ME} please lead fail after a wait`);
+    await waitFor(() => /^c2 "doomed": failed/m.test(gateway.pots("children")), { what: "the failure" });
+    expect(leadRequests()[2]!.messages.at(-1)!.content).toBe("The time is up; c2 still works.");
+    putGo();
+    await waitFor(leadAnswer, { what: "the lead's end" });
+    expect(await said("c1")).toMatch(/heard: \[your child c2 "doomed" failed: model_error: .*the login expired/);
+    expect(failureWakes()).toHaveLength(0);
+    forgetFailures();
+  });
+
+  it("withdraws a failure's message that waits for the child that started it, when the failed child is stopped", async () => {
+    await setUp();
+    gateway.say("general", "alice", `@${ME} please lead fail below`);
+    await waitFor(() => /^c1 "lead": working[^\n]*\n(?: {2}.*\n)*? {2}1 message from you waits/m.test(gateway.pots("children")), { what: "the queued failure" });
+    gateway.say("general", "alice", `@${ME} stop c2`);
+    await mainResult("Stopped c2");
+    putGo();
+    await waitFor(leadAnswer, { what: "the lead's end" });
+    expect(leadRequests().some((request) => request.messages.some((message) => message.content.includes("[your child c2")))).toBe(false);
+    expect(failureWakes()).toHaveLength(0);
     forgetFailures();
   });
 

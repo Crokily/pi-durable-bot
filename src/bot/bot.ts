@@ -42,6 +42,7 @@ import {
   contextSection,
   folderSection,
   identitySection,
+  LOOK,
   logSection,
   memorySection,
   type PromptFacts,
@@ -254,7 +255,6 @@ export class Bot implements WakeTarget {
       bot: id,
       judge: () => (bot ? bot.#judge : judge),
       settings,
-      fallbackWakeMinutes: () => settings().fallbackWakeMinutes,
       fireTimer: (timer, caller) => self().#deliverTimer(timer, caller),
       runCommand: commandRunner(paths.workspace, shellEnv, scopes),
       // A routine's child: no place, the main agent's model and the default thinking level.
@@ -267,6 +267,11 @@ export class Bot implements WakeTarget {
       print,
     });
     const timers = gateway.timers;
+    // The look, once per bot: a bot or person that changes or removes it keeps it that way.
+    if (!(await sql.get("SELECT 1 AS x FROM bot_state WHERE key = 'look_added'"))) {
+      if (!(await timers.routines()).routines.some((routine) => routine.name === LOOK.name)) await timers.addRoutine(LOOK);
+      await sql.run("INSERT INTO bot_state (key, value) VALUES ('look_added', ?)", VERSION);
+    }
     // A page's answers and a password page's submission wake the bot now, as pots wake does, once per request ID.
     const pages = await BotPages.open({
       id,
@@ -292,7 +297,6 @@ export class Bot implements WakeTarget {
       pots: env.potsCommand,
       machine,
       secretsDir: SECRETS_DIR,
-      fallbackWakeMinutes: current().settings.fallbackWakeMinutes,
       sharedMemory: MEMORY_DIR,
       ...(scopes ? { scopes: { slice: scopes.support.slice, prefix: scopes.prefix } } : {}),
     });
@@ -512,7 +516,6 @@ export class Bot implements WakeTarget {
     }
     this.#definition = next;
     if (before.judge !== next.judge) this.#judge = createJudge(next.judge, this.#env.models, () => this.#definition.model);
-    if (before.settings.fallbackWakeMinutes !== next.settings.fallbackWakeMinutes) await this.#timers.resetFallback();
     this.#print("definition applied", { name: next.name, model: next.model, judge: next.judge, channels: next.channels.map((channel) => channel.id) });
   }
 
@@ -566,7 +569,7 @@ export class Bot implements WakeTarget {
     const children = await this.#agent.childrenNow(this.#workingChildren());
     // A wake a child set from its own commands, which have its ID in POTS_CHILD.
     const child = timer.set_by === "agent" && timer.child !== null ? this.#agent.children.find((each) => each.id === timer.child) : undefined;
-    const text = renderTimerWake(timer, await this.#agent.contextStatus(), this.#definition.settings.fallbackWakeMinutes, children, child);
+    const text = renderTimerWake(timer, await this.#agent.contextStatus(), children, child);
     return this.#submit(`timer:${timer.id}`, timer.set_by === "agent" ? "timer" : timer.set_by, child?.place, text, false, caller);
   }
 

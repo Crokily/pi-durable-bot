@@ -17,25 +17,19 @@ const routineWakes = (recorder: Recorder) =>
 const pass = (ms: number) => advance(ms, 10 * SECOND);
 
 describe("timers", () => {
-  it.effect("keep one fallback wake while the agent has none, and fire it on time", () =>
-    withCore({ fallbackWakeMinutes: 120 }, (recorder) =>
+  it.effect("set no wake of their own: with none set, nothing fires", () =>
+    withCore({}, (recorder) =>
       Effect.gen(function* () {
         const timers = yield* Timers;
         yield* timers.start;
-        const [fallback] = yield* timers.pending;
-        assert.deepStrictEqual([fallback?.set_by, fallback?.due_at], ["fallback", 120 * MINUTE]);
-
-        yield* advance(120 * MINUTE - 1);
+        assert.deepStrictEqual(yield* timers.pending, []);
+        yield* advance(DAY);
         assert.strictEqual(recorder.timers.length, 0);
-        yield* advance(1);
-        assert.deepStrictEqual(recorder.timers.map((entry) => [entry.timer.set_by, entry.at]), [["fallback", 120 * MINUTE]]);
-        // The next fallback counts from the firing.
-        assert.deepStrictEqual((yield* timers.pending).map((timer) => timer.due_at), [240 * MINUTE]);
       }),
     ));
 
-  it.effect("fire the agent's wakes in time order, and bring the fallback back after the last one", () =>
-    withCore({ fallbackWakeMinutes: 120 }, (recorder) =>
+  it.effect("fire the agent's wakes in time order", () =>
+    withCore({}, (recorder) =>
       Effect.gen(function* () {
         const timers = yield* Timers;
         yield* timers.start;
@@ -47,13 +41,12 @@ describe("timers", () => {
         yield* advance(5 * MINUTE);
         yield* advance(85 * MINUTE);
         assert.deepStrictEqual(recorder.timers.map((entry) => [entry.timer.note, entry.at]), [["soon", 5 * MINUTE], ["later", 90 * MINUTE]]);
-        const [fallback] = yield* timers.pending;
-        assert.deepStrictEqual([fallback?.set_by, fallback?.due_at], ["fallback", 210 * MINUTE]);
+        assert.deepStrictEqual(yield* timers.pending, []);
       }),
     ));
 
-  it.effect("cancel a wake; the fallback comes back from that moment", () =>
-    withCore({ fallbackWakeMinutes: 60 }, (recorder) =>
+  it.effect("cancel a wake", () =>
+    withCore({}, (recorder) =>
       Effect.gen(function* () {
         const timers = yield* Timers;
         yield* timers.start;
@@ -63,13 +56,13 @@ describe("timers", () => {
         assert.isFalse(yield* timers.cancel(timer.id));
         yield* advance(30 * MINUTE);
         assert.strictEqual(recorder.timers.length, 0);
-        assert.deepStrictEqual((yield* timers.pending).map((pending) => [pending.set_by, pending.due_at]), [["fallback", 70 * MINUTE]]);
+        assert.deepStrictEqual(yield* timers.pending, []);
       }),
     ));
 
   it.effect("try a wake again when the bot could not take it", () => {
     let failures = 1;
-    return withCore({ fallbackWakeMinutes: 120, failTimer: () => failures-- > 0 }, (recorder) =>
+    return withCore({ failTimer: () => failures-- > 0 }, (recorder) =>
       Effect.gen(function* () {
         const timers = yield* Timers;
         yield* timers.start;
@@ -85,7 +78,7 @@ describe("timers", () => {
   });
 
   it.effect("give back the first wake for a second wake with the same ID, and keep where a wake comes from", () =>
-    withCore({ fallbackWakeMinutes: 120 }, (recorder) =>
+    withCore({}, (recorder) =>
       Effect.gen(function* () {
         const timers = yield* Timers;
         yield* timers.start;
@@ -96,14 +89,14 @@ describe("timers", () => {
         yield* advance(10 * MINUTE);
         assert.deepStrictEqual(recorder.timers.map((entry) => [entry.timer.note, entry.timer.source]), [["new mail", "inbox-watch"]]);
         // Also once the first has fired.
-        assert.deepStrictEqual([(yield* timers.add(30 * MINUTE, "", { requestId: "mail-1" })).state, (yield* timers.pending).length], ["fired", 1]);
+        assert.deepStrictEqual([(yield* timers.add(30 * MINUTE, "", { requestId: "mail-1" })).state, (yield* timers.pending).length], ["fired", 0]);
         const bad = yield* Effect.flip(timers.add(30 * MINUTE, "", { source: "two words" }));
         assert.strictEqual(bad.message, 'bad --from "two words": use letters, digits, "-" and "_", at most 64 characters');
       }),
     ));
 
   it.effect("fire nothing after stop", () =>
-    withCore({ fallbackWakeMinutes: 1 }, (recorder) =>
+    withCore({}, (recorder) =>
       Effect.gen(function* () {
         const timers = yield* Timers;
         yield* timers.start;
@@ -115,8 +108,8 @@ describe("timers", () => {
 });
 
 describe("routines", () => {
-  it.effect("wake the bot with a routine's note at each time, and never hold back the fallback check-in", () =>
-    withCore({ fallbackWakeMinutes: 60 }, (recorder) =>
+  it.effect("wake the bot with a routine's note at each time", () =>
+    withCore({}, (recorder) =>
       Effect.gen(function* () {
         const timers = yield* Timers;
         yield* timers.start;
@@ -126,23 +119,13 @@ describe("routines", () => {
         assert.deepStrictEqual(routineWakes(recorder), [["standup", "note", 20 * MINUTE], ["standup", "note", 40 * MINUTE], ["standup", "note", 60 * MINUTE]]);
         assert.strictEqual(recorder.timers[0]!.timer.note, "ask about the release");
         assert.strictEqual(recorder.timers[0]!.timer.routine?.every_ms, 20 * MINUTE);
-        // The fallback came on its time, as if there were no routine.
-        assert.deepStrictEqual(
-          recorder.timers.filter((entry) => entry.timer.set_by === "fallback").map((entry) => entry.at),
-          [60 * MINUTE],
-        );
         const listing = yield* timers.routines;
-        assert.deepStrictEqual([listing.routines[0]?.next_at, listing.routines[0]?.last?.result, listing.fallback], [80 * MINUTE, "woke", { minutes: 60, next: 120 * MINUTE }]);
-
-        // Only a wake set with pots wake holds the fallback back.
-        yield* timers.add(200 * MINUTE, "later");
-        assert.deepStrictEqual((yield* timers.routines).fallback, { minutes: 60 });
-        assert.deepStrictEqual((yield* timers.pending).map((timer) => timer.set_by), ["agent"]);
+        assert.deepStrictEqual([listing.routines[0]?.next_at, listing.routines[0]?.last?.result], [80 * MINUTE, "woke"]);
       }),
     ));
 
   it.effect("follow a cron expression in this computer's time zone", () =>
-    withCore({ fallbackWakeMinutes: 600 }, (recorder) =>
+    withCore({}, (recorder) =>
       Effect.gen(function* () {
         const timers = yield* Timers;
         yield* timers.start;
@@ -154,7 +137,7 @@ describe("routines", () => {
     ));
 
   it.effect("run a routine's command with POTS_FROM, skip a time while it still runs, and keep each run's end", () =>
-    withCore({ fallbackWakeMinutes: 600 }, (recorder) =>
+    withCore({}, (recorder) =>
       Effect.gen(function* () {
         const timers = yield* Timers;
         yield* timers.start;
@@ -180,7 +163,7 @@ describe("routines", () => {
     ));
 
   it.effect("start a --child routine's child without waking the bot, skip a time while that child works, and wake the bot once when none could start", () =>
-    withCore({ fallbackWakeMinutes: 600 }, (recorder) =>
+    withCore({}, (recorder) =>
       Effect.gen(function* () {
         const timers = yield* Timers;
         yield* timers.start;
@@ -225,7 +208,7 @@ describe("routines", () => {
     ));
 
   it.effect("wake the bot once for failed runs, until a run succeeds, with the last lines of the output", () =>
-    withCore({ fallbackWakeMinutes: 600 }, (recorder) =>
+    withCore({}, (recorder) =>
       Effect.gen(function* () {
         const timers = yield* Timers;
         yield* timers.start;
@@ -253,7 +236,7 @@ describe("routines", () => {
     ));
 
   it.effect("stop a command at its timeout, and count that as a failure", () =>
-    withCore({ fallbackWakeMinutes: 600 }, (recorder) =>
+    withCore({}, (recorder) =>
       Effect.gen(function* () {
         const timers = yield* Timers;
         yield* timers.start;
@@ -273,7 +256,7 @@ describe("routines", () => {
     ));
 
   it.effect("stop the commands when the timers stop, and wake nobody about it", () =>
-    withCore({ fallbackWakeMinutes: 600 }, (recorder) =>
+    withCore({}, (recorder) =>
       Effect.gen(function* () {
         const timers = yield* Timers;
         yield* timers.start;
@@ -287,7 +270,7 @@ describe("routines", () => {
     ));
 
   it.effect("skip the times missed while stopped, and go on from the next one", () =>
-    withCore({ fallbackWakeMinutes: 600 }, (recorder) =>
+    withCore({}, (recorder) =>
       Effect.gen(function* () {
         const timers = yield* Timers;
         yield* timers.start;
@@ -310,7 +293,7 @@ describe("routines", () => {
   it.effect("skip a time that Pots could look at only long after, as when the computer slept", () => {
     let release = () => {};
     const held = new Promise<void>((resolve) => (release = resolve));
-    return withCore({ fallbackWakeMinutes: 600, holdTimer: (timer) => (timer.note === "slow" ? held : undefined) }, (recorder) =>
+    return withCore({ holdTimer: (timer) => (timer.note === "slow" ? held : undefined) }, (recorder) =>
       Effect.gen(function* () {
         const timers = yield* Timers;
         yield* timers.start;
@@ -328,7 +311,7 @@ describe("routines", () => {
   });
 
   it.effect("keep a replaced routine's run that still runs apart from the routine that replaced it", () =>
-    withCore({ fallbackWakeMinutes: 600 }, (recorder) =>
+    withCore({}, (recorder) =>
       Effect.gen(function* () {
         const timers = yield* Timers;
         yield* timers.start;
@@ -353,7 +336,7 @@ describe("routines", () => {
     ));
 
   it.effect("drop the runs older than 7 days, also when only --note routines run", () =>
-    withCore({ fallbackWakeMinutes: 600 }, (recorder, sql) =>
+    withCore({}, (recorder, sql) =>
       Effect.gen(function* () {
         const timers = yield* Timers;
         yield* timers.start;
@@ -366,7 +349,7 @@ describe("routines", () => {
     ));
 
   it.effect("replace a routine added again with the same name, and remove one", () =>
-    withCore({ fallbackWakeMinutes: 600 }, (recorder) =>
+    withCore({}, (recorder) =>
       Effect.gen(function* () {
         const timers = yield* Timers;
         yield* timers.start;

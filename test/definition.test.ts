@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { agentRequests, type FakeModel, startFakeModel } from "./support/fake-model.ts";
+import { LOOK } from "../src/bot/prompt.ts";
 import { CHANNEL, ME, pause, TestGateway, waitFor } from "./support/gateway.ts";
 
 // bot.json while the gateway runs, seen from outside: the gateway checks the bot folders every few seconds, applies a
@@ -93,25 +94,48 @@ describe("bot.json while running", { timeout: 90_000 }, () => {
     model = await startFakeModel();
     gateway = new TestGateway({ model });
     await gateway.start();
-    const file = join(gateway.botDir, "bot.json");
-    const definition = JSON.parse(readFileSync(file, "utf8")) as { settings: Record<string, unknown> };
+    const index = join(gateway.botDir, "memory", "MEMORY.md");
+    mkdirSync(join(gateway.botDir, "memory"), { recursive: true });
+    writeFileSync(index, "- [Old fact](old.md) — the first index\n");
     gateway.say("general", "alice", `@${ME} hello`);
     await waitFor(() => gateway.sent().length === 1, { what: "the reply" });
-    expect(lastPrompt()).toContain("a fallback check-in comes every 120 minutes");
+    expect(lastPrompt()).toContain("the first index");
 
     // The start of each request stays as it was, so the provider's prompt cache keeps serving it.
-    writeFileSync(file, `${JSON.stringify({ ...definition, settings: { ...definition.settings, fallbackWakeMinutes: 45 } }, null, 2)}\n`);
-    await waitFor(() => gateway.output.some((line) => line.message === "definition applied"), { what: "the new definition" });
+    writeFileSync(index, "- [New fact](new.md) — the second index\n");
     gateway.say("general", "alice", `@${ME} still the same page?`);
     await waitFor(() => gateway.sent().length === 2, { what: "the second reply" });
-    expect(lastPrompt()).toContain("a fallback check-in comes every 120 minutes");
-    expect(lastPrompt()).not.toContain("every 45 minutes");
+    expect(lastPrompt()).toContain("the first index");
+    expect(lastPrompt()).not.toContain("the second index");
 
     expect((await gateway.run(["turn-page", "--note", "a new page"])).status).toBe(0);
     gateway.say("general", "alice", `@${ME} and on the new page?`);
     await waitFor(() => gateway.sent().length === 3, { what: "the reply on the new page" });
-    expect(lastPrompt()).toContain("a fallback check-in comes every 45 minutes");
-    expect(lastPrompt()).not.toContain("every 120 minutes");
+    expect(lastPrompt()).toContain("the second index");
+    expect(lastPrompt()).not.toContain("the first index");
+  });
+
+  it("adds the look routine at the first start, and not again once it was removed", async () => {
+    model = await startFakeModel();
+    // A bot.json of an earlier version, with the fallback check-in's setting, still loads.
+    gateway = new TestGateway({ model, look: true, settings: { fallbackWakeMinutes: 45 } });
+    await gateway.start();
+    const list = async () => (await gateway.run(["routine", "list"])).stdout;
+    const look = await list();
+    expect(look).toContain(`- look: cron "0 8-22/3 * * *", starts a child with the brief ${JSON.stringify(LOOK.child)}`);
+    // In this computer's time zone, every 3 hours from 8:00 to 22:00.
+    expect(look).toMatch(/next: \d{4}-\d{2}-\d{2} (08|11|14|17|20):00:00 /);
+    gateway.say("general", "alice", `@${ME} hello`);
+    await waitFor(() => gateway.sent().length === 1, { what: "the reply" });
+    expect(lastPrompt()).toContain("Your routine look starts a child at its times");
+    expect(lastPrompt()).not.toContain("fallback check-in");
+    expect(existsSync(join(gateway.botDir, "bot.json.error"))).toBe(false);
+
+    // A person or the bot removed it: a restart does not bring it back.
+    expect((await gateway.run(["routine", "remove", "look"])).stdout).toBe("Removed routine look.\n");
+    await gateway.stop();
+    await gateway.start();
+    expect(await list()).toBe("No routines added.\n");
   });
 
   it("starts a bot whose folder appears and stops one whose folder goes", async () => {

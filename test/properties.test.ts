@@ -182,7 +182,7 @@ const MINUTE = 60_000;
 type TimerOp = { kind: "add"; inMinutes: number } | { kind: "cancel"; pick: number } | { kind: "wait"; minutes: number };
 
 describe("timers", () => {
-  it("fire each wake once, on time and in order, never after a cancel, and keep exactly one fallback while there is no wake", async () => {
+  it("fire each wake once, on time and in order, never after a cancel, and keep pending exactly those not fired or cancelled", async () => {
     const op: fc.Arbitrary<TimerOp> = fc.oneof(
       fc.record({ kind: fc.constant("add" as const), inMinutes: fc.integer({ min: 0, max: 90 }) }),
       fc.record({ kind: fc.constant("cancel" as const), pick: fc.nat(5) }),
@@ -191,17 +191,15 @@ describe("timers", () => {
     await fc.assert(
       fc.asyncProperty(fc.array(op, { minLength: 1, maxLength: 20 }), async (ops) => {
         await run(
-          withCore({ fallbackWakeMinutes: 60 }, (recorder) =>
+          withCore({}, (recorder) =>
             Effect.gen(function* () {
               const timers = yield* Timers;
               yield* timers.start;
               const added: { id: number; due: number; cancelled: boolean }[] = [];
               const check = Effect.gen(function* () {
-                const pending = yield* timers.pending;
-                const fallbacks = pending.filter((timer) => timer.set_by === "fallback");
-                const agent = pending.filter((timer) => timer.set_by === "agent");
-                // Exactly one fallback while the agent has none, and none while it has some.
-                expect(fallbacks).toHaveLength(agent.length === 0 ? 1 : 0);
+                // Pots sets no wake of its own: what is pending is what was added and is not fired or cancelled.
+                const open = added.filter((timer) => !timer.cancelled && !recorder.timers.some((fired) => fired.timer.id === timer.id));
+                expect((yield* timers.pending).map((timer) => timer.id).sort((a, b) => a - b)).toEqual(open.map((timer) => timer.id).sort((a, b) => a - b));
               });
               for (const item of ops) {
                 if (item.kind === "add") {
@@ -248,7 +246,7 @@ type RoutineOp =
   | { kind: "wait"; minutes: number };
 
 describe("routines", () => {
-  it("run on their times, never twice at once, skip a time only while the last run still runs, and never hold back the fallback", async () => {
+  it("run on their times, never twice at once, skip a time only while the last run still runs", async () => {
     const op: fc.Arbitrary<RoutineOp> = fc.oneof(
       fc.record({ kind: fc.constant("routine" as const), everyMinutes: fc.integer({ min: 1, max: 20 }), run: fc.boolean() }),
       fc.record({ kind: fc.constant("wake" as const), inMinutes: fc.integer({ min: 0, max: 90 }) }),
@@ -259,7 +257,7 @@ describe("routines", () => {
     await fc.assert(
       fc.asyncProperty(fc.array(op, { minLength: 1, maxLength: 15 }), async (ops) => {
         await run(
-          withCore({ fallbackWakeMinutes: 45 }, (recorder) =>
+          withCore({}, (recorder) =>
             Effect.gen(function* () {
               const timers = yield* Timers;
               yield* timers.start;
@@ -284,9 +282,6 @@ describe("routines", () => {
                   yield* advance(item.minutes * MINUTE, MINUTE);
                 }
                 yield* settle;
-                // Exactly one fallback while no wake set with pots wake is pending, whatever the routines do.
-                const pending = yield* timers.pending;
-                expect(pending.filter((timer) => timer.set_by === "fallback")).toHaveLength(pending.some((timer) => timer.set_by === "agent") ? 0 : 1);
               }
               yield* advance(30 * MINUTE, MINUTE);
               const end = recorder.now();

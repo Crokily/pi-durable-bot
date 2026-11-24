@@ -158,7 +158,7 @@ const routineList = Command.make("list", { bot }, (input) =>
     const result = (yield* control(id, "GET", "/routines")) as { text: string };
     yield* printResult(result.text);
   }),
-).pipe(Command.withDescription("List the routines, with each one's next time and last run, and the fallback check-in."));
+).pipe(Command.withDescription("List the routines, with each one's next time and last run."));
 
 const routineRemove = Command.make("remove", { name: Argument.String("name"), bot }, (input) =>
   Effect.gen(function* () {

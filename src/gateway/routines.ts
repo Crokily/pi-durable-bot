@@ -219,11 +219,9 @@ export function describeRun(run: RoutineRun, now: number): string {
   }
 }
 
-/** The routines and the fallback check-in, as pots routine list gives them. */
+/** The routines, as pots routine list gives them. */
 export interface RoutineListing {
   routines: (Routine & { last?: RoutineRun })[];
-  /** next: when the fallback check-in comes; undefined while a wake set with pots wake is pending. */
-  fallback: { minutes: number; next?: number };
 }
 
 /** pots routine list, for people and the bot. */
@@ -234,8 +232,5 @@ export function renderRoutines(listing: RoutineListing, now: number): string {
     lines.push(`  next: ${formatTime(routine.next_at)}`);
     lines.push(`  last: ${routine.last ? describeRun(routine.last, now) : `none in the last ${RUN_DAYS} days`}`);
   }
-  const fallback = listing.fallback;
-  lines.push(`- fallback check-in (built in, cannot be removed): every ${fallback.minutes} minutes while no wake set with pots wake is pending`);
-  lines.push(fallback.next === undefined ? "  next: waits, because a wake set with pots wake is pending" : `  next: ${formatTime(fallback.next)}`);
   return [listing.routines.length === 0 ? "No routines added." : `Routines (${listing.routines.length}):`, ...lines].join("\n");
 }

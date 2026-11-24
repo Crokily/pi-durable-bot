@@ -322,10 +322,6 @@ export class TimersHandle {
     return this.#run(Timers.use((timers) => timers.cancel(id)));
   }
 
-  resetFallback(): Promise<void> {
-    return this.#run(Timers.use((timers) => timers.resetFallback));
-  }
-
   pending(): Promise<Timer[]> {
     return this.#run(Timers.use((timers) => timers.pending));
   }

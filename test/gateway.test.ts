@@ -30,7 +30,6 @@ async function openGateway(file = ":memory:") {
     bot: "coworker",
     judge: () => undefined,
     settings: () => SETTINGS,
-    fallbackWakeMinutes: () => 120,
     fireTimer: async () => ({ submission: "timer" }),
     filesDir: FILES_DIR,
     print: (message) => prints.push(message),
@@ -252,12 +251,24 @@ describe("Gateway", () => {
     await sql.close();
   });
 
+  it("drops the fallback check-in that a pending timer from an older version still holds", async () => {
+    const { sql, gateway } = await openGateway();
+    await gateway.stop();
+    await sql.run("INSERT INTO bot_timers (due_at, note, state, set_by, created_at) VALUES (?, '', 'pending', 'fallback', ?)", Date.now() - 1, Date.now() - 1);
+    await sql.run("INSERT INTO bot_timers (due_at, note, state, set_by, created_at) VALUES (?, 'mine', 'pending', 'agent', ?)", Date.now() + 3_600_000, Date.now());
+    const again = await Gateway.open(sql, { bot: "coworker", judge: () => undefined, settings: () => SETTINGS, fireTimer: async () => ({ submission: "t" }), filesDir: FILES_DIR, print: () => {} });
+    expect((await again.timers.pending()).map((timer) => [timer.set_by, timer.note])).toEqual([["agent", "mine"]]);
+    expect(await sql.all("SELECT state FROM bot_timers WHERE set_by = 'fallback'")).toEqual([{ state: "replaced" }]);
+    await again.stop();
+    await sql.close();
+  });
+
   it("deletes spans older than 7 days when it starts", async () => {
     const { sql, gateway } = await openGateway();
     await gateway.stop();
     await sql.run("INSERT INTO gw_spans (span_id, trace_id, name, start_at, end_at, status) VALUES ('old', 'old', 'wake', ?, ?, 'ok')", Date.now() - 8 * 86_400_000, Date.now());
     await sql.run("INSERT INTO gw_spans (span_id, trace_id, name, start_at, end_at, status) VALUES ('new', 'new', 'wake', ?, ?, 'ok')", Date.now() - 6 * 86_400_000, Date.now());
-    const again = await Gateway.open(sql, { bot: "coworker", judge: () => undefined, settings: () => SETTINGS, fallbackWakeMinutes: () => 120, fireTimer: async () => ({ submission: "t" }), filesDir: FILES_DIR, print: () => {} });
+    const again = await Gateway.open(sql, { bot: "coworker", judge: () => undefined, settings: () => SETTINGS, fireTimer: async () => ({ submission: "t" }), filesDir: FILES_DIR, print: () => {} });
     await again.stop();
     expect((await sql.all<{ span_id: string }>("SELECT span_id FROM gw_spans WHERE span_id IN ('old', 'new')")).map((row) => row.span_id)).toEqual(["new"]);
     await sql.close();
@@ -314,7 +325,7 @@ describe("Gateway", () => {
     await until(() => woken);
     await gateway.stop();
 
-    const again = await Gateway.open(sql, { bot: "coworker", judge: () => undefined, settings: () => SETTINGS, fallbackWakeMinutes: () => 120, fireTimer: async () => ({ submission: "t" }), filesDir: FILES_DIR, print: () => {} });
+    const again = await Gateway.open(sql, { bot: "coworker", judge: () => undefined, settings: () => SETTINGS, fireTimer: async () => ({ submission: "t" }), filesDir: FILES_DIR, print: () => {} });
     await again.start(target, [new MemoryChannel()]);
     await again.send("tool:9", "mem:#general", "after the restart", ["submission-7"]);
     await again.stop();

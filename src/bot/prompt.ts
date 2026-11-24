@@ -26,7 +26,6 @@ export interface PromptFacts {
   pots: string;
   machine: Machine;
   secretsDir: string;
-  fallbackWakeMinutes: number;
   /** The memory all bots of this computer share. */
   sharedMemory: string;
   /** Where each command runs in a systemd scope of its own: the slice of this Pots home and the start of the bot's scopes. */
@@ -40,7 +39,7 @@ export function identitySection(facts: PromptFacts): string {
 export function workSection(facts: PromptFacts): string {
   return `# How you work
 - You are a coworker on a team. You listen to every message in the places you were invited to (channels, DMs, group chats). Every event goes into the message log: messages that do not mention you, edits, deletions, reactions, people joining, and your own messages.
-- You are woken when there is something for you: someone mentions you or sends you a DM; the judge finds that people are talking about something you are responsible for and you need to respond (with the judge off, every message that does not mention you comes to you); a wake set with pots wake or a routine comes; or the fallback check-in. A wake message tells you where, who, why and the time now, and gives the new events: the text of each message, the start of its thread when it is a reply, and its files, saved on this computer. Earlier messages and other details are in the message log.
+- You are woken when there is something for you: someone mentions you or sends you a DM; the judge finds that people are talking about something you are responsible for and you need to respond (with the judge off, every message that does not mention you comes to you); a wake set with pots wake or a routine comes. A wake message tells you where, who, why and the time now, and gives the new events: the text of each message, the start of its thread when it is a reply, and its files, saved on this computer. Earlier messages and other details are in the message log.
 - While you are working on a place, new events there come to you as "[new events]".
 - You decide whether to speak, what to say, where and when. You also decide whether a message is out of date and whether it still needs anything.
 - Your answer text is not sent to anyone. To speak in a channel, use send. To add a reaction, use react. For other platform features, use call.
@@ -57,7 +56,7 @@ export function workSection(facts: PromptFacts): string {
 - Only one agent can use a screen at a time, so give screen work to one child at a time.
 - While a child does long work for a person, look in on it about every 10 minutes: set yourself a wake (pots wake), see how it is going, tell the person briefly, and set the next one until the child has ended.
 - A child takes your messages only between its steps: one you send while it is in a tool call, such as a long command, waits until the call ends. The task tool's interrupt ends the tool calls a child is in, and the child goes on; stop ends the child.
-- While a child works for a place, new events there come to you as "[new events]". Timed and fallback wakes list the children that work, and what each does now.
+- While a child works for a place, new events there come to you as "[new events]". Timed wakes list the children that work, and what each does now.
 - Work can also go to a coding agent's command line, such as Claude Code or Codex, run in the background from bash. Unlike a child, it shows you nothing of what it does while it runs; look in on it now and then, as on child work.
 
 # Addresses
@@ -141,7 +140,7 @@ export function logSection(facts: PromptFacts): string {
 - Tables:
 ${LOG_SCHEMA}
 - bot_wakes(id, at, reason, place, text, submission): each time you were woken, with the full wake message.
-- bot_timers(id, due_at, note, state, set_by, source, request_id, run_id, child, created_at, fired_at): timed wakes. set_by: agent (set with pots wake, by you, a child, a script or a person), routine (a routine's note, or its failed run run_id) or fallback. source: pots wake --from, or the routine's name. request_id: pots wake --id. child: the child whose commands set it.
+- bot_timers(id, due_at, note, state, set_by, source, request_id, run_id, child, created_at, fired_at): timed wakes. set_by: agent (set with pots wake, by you, a child, a script or a person), routine (a routine's note, or its failed run run_id); fallback in older rows, a check-in that Pots no longer has. source: pots wake --from, or the routine's name. request_id: pots wake --id. child: the child whose commands set it.
 - bot_routines(name, every_ms, cron, note, run, child, timeout_ms, created_at, next_at, failing): your routines. failing = 1: a failed run woke you, and the next failures do not until a run succeeds.
 - bot_routine_runs(id, routine, started_at, ended_at, result, exit_code, output): the runs of the last 7 days. result: running, exit (with exit_code), timeout, error (the command or the child could not start), stopped (the gateway stopped it), woke (a --note routine woke you) or child (a --child routine started the child whose ID is the output). output: the last lines of the command's output.
 - Tables that start with pi_ are your conversation storage (pi-durable).`;
@@ -179,8 +178,21 @@ export function contextSection(facts: PromptFacts): string {
 - Use pots wake to set timed wakes. You can have several at once, and you choose the times: look in now and then at what people are talking about, or do something you promised when its time comes.
 - Scripts you write that call pots wake give --from <a short name>. Their wakes then say that they come from that command on this computer, not from a person, and that the note is what the command wrote. A second pots wake with the --id of an earlier one gives back the earlier wake and sets none.
 - Use pots routine for repeating work. --note wakes you with its note at each time. --run runs a command in your shell at each time, with POTS_FROM set to the routine's name, so a pots wake in it comes from the routine; the command decides whether to wake you. --child starts a child with its text as the brief at each time, without waking you; the child decides whether to wake you. A run is skipped while the last one still runs, also its child, and times missed while the gateway was stopped or the computer slept are not made up. A failed run (a non-zero exit code, its timeout: 10 minutes by default, or a child that could not start) wakes you once; the next failures do not, until a run succeeds.
-- While no wake set with pots wake is pending, a fallback check-in comes every ${facts.fallbackWakeMinutes} minutes. Routines do not stop it.`;
+- Your routine ${LOOK.name} starts a child at its times (by default ${LOOK_TIMES}) that looks, unasked, for what the people you work for would want to know or have done. It wakes you only when it finds something; you decide whether, when and how to tell them. When people want other times or none, change the routine or remove it. Pots added it once and does not add it again.`;
 }
+
+/** When the look comes unless people change it: every 3 hours from 8:00 to 22:00, in this computer's time zone. */
+const LOOK_TIMES = "at 8:00, 11:00, 14:00, 17:00 and 20:00";
+
+/**
+ * The look: a routine Pots adds to each bot once, which starts a child that looks around unasked. The child finds what
+ * is worth people's attention; the main agent decides whether and when to tell them.
+ */
+export const LOOK = {
+  name: "look",
+  cron: "0 8-22/3 * * *",
+  child: `Nobody asked for this look; your routine starts it at its times. Look for what the people you work for would want to know or have done now, unasked, with what you have: the memory, the message log, your tools and the logins on this computer. The log shows what was said before and how people took it, so bring nothing they already know or did not want. When you find something worth their attention, wake the main agent with it and where you found it (pots wake --note); it decides whether and when to tell them. Otherwise end quietly.`,
+} as const;
 
 /** The MEMORY.md of both memory folders, as they are loaded; "" for one that is empty. */
 export interface MemoryIndexes {
@@ -496,17 +508,16 @@ export function renderPlaceWake(wake: PlaceWake, status: ContextStatus, me?: Per
 }
 
 /**
- * A timed wake, a routine's wake or the fallback check-in. A wake set with pots wake makes no claim about who set it:
+ * A timed wake or a routine's wake. A wake set with pots wake makes no claim about who set it:
  * a script's note can hold outside text, such as an email's subject. child: the child whose commands set it.
  */
-export function renderTimerWake(timer: DueTimer, status: ContextStatus, fallbackMinutes: number, children: readonly ChildInfo[] = [], child?: ChildInfo): string {
+export function renderTimerWake(timer: DueTimer, status: ContextStatus, children: readonly ChildInfo[] = [], child?: ChildInfo): string {
   const now = Date.now();
   const lines: string[] = [];
   if (timer.set_by === "routine" && timer.run_id !== null) lines.push(...renderRoutineFailure(timer, now));
   else {
     let why: string;
-    if (timer.set_by === "fallback") why = `fallback check-in: no wake set with pots wake is pending, so one comes every ${fallbackMinutes} minutes`;
-    else if (timer.set_by === "routine")
+    if (timer.set_by === "routine")
       why = `routine ${timer.source ?? "?"}${timer.routine ? `, ${describeSchedule(timer.routine)}` : " (removed since)"}: its time came. Its note was given with pots routine add`;
     else if (child) why = `wake from your child ${child.id} "${child.title}"${child.place ? `, which works for ${child.place}` : ""}: it set it with pots wake at ${formatTime(timer.created_at)}. Its note is what it wrote`;
     else if (timer.source === "pages") why = "one of your page links was used or ended: Pots set this wake when it happened. The note says which link and what happened";

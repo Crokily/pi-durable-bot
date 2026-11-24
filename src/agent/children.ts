@@ -13,6 +13,7 @@ import {
   type Extension,
   type InboxState,
   type JsonObject,
+  LiveDoc,
   type LiveState,
   type ModelRef,
   ROOT_CONVERSATION_ID,
@@ -355,8 +356,10 @@ function textOf(message: AssistantMessage | undefined): string {
 /** What a child did last, from the newest step in its conversation: the tools it called, or the start of its text. */
 export async function lastStep(conversation: Pick<Conversation, "entries"> | undefined, context: Context): Promise<string | undefined> {
   const page = await conversation?.entries({}, 20, undefined, context);
-  // Not a failed request's entry, which has no content.
-  const message = page?.items.flatMap((entry) => (AssistantEntry.is(entry) ? [entry.model?.[0] as AssistantMessage | undefined] : [])).find((each) => each && each.content.length > 0);
+  // Not a failed or aborted request's entry: its tool calls never ran.
+  const message = page?.items
+    .flatMap((entry) => (AssistantEntry.is(entry) ? [entry.model?.[0] as AssistantMessage | undefined] : []))
+    .find((each) => each && each.content.length > 0 && each.stopReason !== "error" && each.stopReason !== "aborted");
   if (!message) return undefined;
   const calls = message.content.flatMap((part) => (part.type === "toolCall" ? [`${part.name}${commandOf(part.arguments as JsonObject) ? `: ${commandOf(part.arguments as JsonObject)}` : ""}`] : []));
   if (calls.length > 0) return `called ${calls.join("; ")}`;
@@ -448,6 +451,11 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
             const detail = settled.detail === undefined ? "" : `: ${typeof settled.detail === "string" ? settled.detail : JSON.stringify(settled.detail)}`;
             const failed = `${settled.reason}${detail}`;
             record.result = { at: runtime.now(), failed };
+            // The inputs that joined one run settle together: only the reporter of the run's first input wakes the main
+            // agent. When the failure is no longer there to tell, this one wakes.
+            const run = (await tx.doc(LiveDoc, conversationId)).runFailure;
+            const first = run?.inputs.includes(submission.id) ? await tx.submission(run.inputs[0]!) : undefined;
+            if (first && first.id !== submission.id && first.requestId?.startsWith("child:")) return next;
             return { ...next, checkpoint: { phase: "report" as const, end: { status: "failed" as const, text: failed } } };
           }
           // An answer is kept also when a stop came after it.

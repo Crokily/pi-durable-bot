@@ -27,7 +27,8 @@ export interface FakeRequest {
 
 export type FakeReply =
   | { readonly text: string }
-  | { readonly call: { readonly name: string; readonly arguments: Record<string, unknown> } }
+  /** finish: how the stream ends instead of tool_calls, such as content_filter for a provider that cut the answer off. */
+  | { readonly call: { readonly name: string; readonly arguments: Record<string, unknown> }; readonly finish?: string }
   /** An HTTP error, such as 401 for a login that expired. */
   | { readonly fail: { readonly status: number; readonly message: string } };
 
@@ -78,7 +79,7 @@ export async function startFakeModel(
       const delta = "text" in reply
         ? { role: "assistant", content: reply.text }
         : { role: "assistant", tool_calls: [{ index: 0, id: `call_${calls}`, type: "function", function: { name: reply.call.name, arguments: JSON.stringify(reply.call.arguments) } }] };
-      const finish = "text" in reply ? "stop" : "tool_calls";
+      const finish = "text" in reply ? "stop" : (reply.finish ?? "tool_calls");
       // As a provider whose prompt cache served most of the input.
       const usage = { prompt_tokens: 100, completion_tokens: 10, total_tokens: 110, prompt_tokens_details: { cached_tokens: 80 } };
       if (body.stream === false) {

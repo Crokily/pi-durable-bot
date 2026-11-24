@@ -1,6 +1,6 @@
 import { basename } from "node:path";
 import type { CacheUse, ContextStatus } from "../agent/agent.ts";
-import { type ChildInfo, describeChild } from "../agent/children.ts";
+import { age, type ChildFailure, type ChildInfo, describeChild } from "../agent/children.ts";
 import type { MemoryFolders, MemoryNote, MemoryProgress } from "../agent/memory.ts";
 import type { LeftScope } from "../agent/scopes.ts";
 import type { PersonInfo } from "../core/channel.ts";
@@ -539,6 +539,20 @@ function renderRoutineFailure(timer: DueTimer, now: number): string[] {
   else lines.push("Output: (none)");
   lines.push("Later failures of this routine do not wake you until one of its runs succeeds.");
   return lines;
+}
+
+/** A child could not go on: why, and what it did last. */
+export function renderChildFailure(failure: ChildFailure, status: ContextStatus, now = Date.now()): string {
+  const child = failure.child;
+  const ran = child.since === undefined ? "" : `, ran ${age(now - child.since)}`;
+  const lines = [
+    `[wake] your child ${child.id} failed: ${failure.reason}`,
+    `Now: ${formatTime(now)}`,
+    `Child: ${child.id} "${child.title}"${child.place ? `, for ${child.place}` : ""}${child.routine ? `, started by routine ${child.routine}` : ""}, started ${formatTime(child.startedAt)}${ran}`,
+  ];
+  if (failure.last) lines.push(`Last, it ${failure.last}`);
+  lines.push(renderContext(status));
+  return lines.join("\n");
 }
 
 export function renderHandoff(note: string, notes: string, notesPath: string, children: readonly ChildInfo[] = []): string {

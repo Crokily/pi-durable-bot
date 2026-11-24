@@ -2,6 +2,7 @@ import type { Context } from "@earendil-works/chord/context";
 import { type AssistantMessage, type ModelThinkingLevel, StringEnum } from "@earendil-works/pi-ai";
 import {
   AssistantEntry,
+  type Conversation,
   type ConversationId,
   configure,
   defineDoc,
@@ -25,6 +26,7 @@ import { obj, opt, str } from "@earendil-works/pi-schema";
 // actions send, react and call, and not the task tool. The main agent starts one with the task tool, or a routine
 // starts one at its time. When it ends, its final message is kept, also across restarts, and wakes no one: the main
 // agent reads it with the task tool, and a child that judges the main agent needs to know wakes it itself (pots wake).
+// A child that cannot go on, such as when its model fails, wakes the main agent once, also across restarts.
 // Built on pi-durable's example of background subagents: an anchor task owns each child's conversation, and a reporter
 // task delivers each message to the child and keeps how it ended.
 
@@ -219,6 +221,17 @@ export function childInfo(record: Readonly<ChildRecord>): ChildInfo {
   };
 }
 
+/** A child that could not go on, for the main agent's wake. */
+export interface ChildFailure {
+  /** The reporter's task ID: one wake per reporter, also when its phase runs again after a restart. */
+  reporter: string;
+  child: ChildInfo;
+  /** Why it could not go on. */
+  reason: string;
+  /** What it did last, from its conversation, when that can be read. */
+  last?: string;
+}
+
 /** The thinking level of a child the main agent starts without choosing one. */
 export const DEFAULT_CHILD_THINKING = "xhigh" satisfies ModelThinkingLevel;
 
@@ -237,6 +250,10 @@ export interface ChildrenHost {
    * servers that come and go.
    */
   extensions(): { add: readonly Extension[]; remove: readonly Extension[] };
+  /** Hand a child's failure to the main agent as a wake. The same reporter is one wake. Returns its submission ID. */
+  failed(failure: ChildFailure, context: Context): Promise<string>;
+  /** Withdraw the main agent's queued submission, for the wake of a child stopped in the meantime. */
+  withdraw(submission: string): Promise<void>;
   /** Stop a child: it does nothing more. Returns what happened, for the model. */
   stop(id: string): Promise<string>;
   /** What a working child does now, read from its conversation; undefined when it cannot be read. */
@@ -249,6 +266,9 @@ export interface ChildrenHost {
   saveResult(child: string, text: string): Promise<string>;
   /** Crash tests: before a reporter keeps how its child ended; ends early when the reporter is aborted. */
   beforeKeep?(child: string, signal: AbortSignal): Promise<void>;
+  /** Crash tests: just before and just after a child's failure is handed to the main agent. */
+  beforeFailed?(reporter: string): void;
+  afterFailed?(reporter: string): void;
 }
 
 /** A new child, as the task tool or a routine starts it. */
@@ -332,6 +352,18 @@ function textOf(message: AssistantMessage | undefined): string {
   return (message?.content ?? []).flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
 }
 
+/** What a child did last, from the newest step in its conversation: the tools it called, or the start of its text. */
+export async function lastStep(conversation: Pick<Conversation, "entries"> | undefined, context: Context): Promise<string | undefined> {
+  const page = await conversation?.entries({}, 20, undefined, context);
+  // Not a failed request's entry, which has no content.
+  const message = page?.items.flatMap((entry) => (AssistantEntry.is(entry) ? [entry.model?.[0] as AssistantMessage | undefined] : [])).find((each) => each && each.content.length > 0);
+  if (!message) return undefined;
+  const calls = message.content.flatMap((part) => (part.type === "toolCall" ? [`${part.name}${commandOf(part.arguments as JsonObject) ? `: ${commandOf(part.arguments as JsonObject)}` : ""}`] : []));
+  if (calls.length > 0) return `called ${calls.join("; ")}`;
+  const said = clip(textOf(message));
+  return said === undefined ? undefined : `wrote: ${said}`;
+}
+
 /** A child's last final message, or why it could not answer; undefined while it has neither. */
 async function childResult(tx: Tx, record: Readonly<ChildRecord>): Promise<string | undefined> {
   if (record.result?.failed !== undefined) return `It could not answer: ${record.result.failed}`;
@@ -358,7 +390,8 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
   });
 
   type ReporterInput = { child: string; conversationId: ConversationId; message: string };
-  // end: only in a reporter that an earlier version left in its report phase, which handed the end to the main agent.
+  // end: failed: why the child could not go on, for the main agent's wake. answered: only in a reporter that 0.8.8 left
+  // in its report phase, which handed the end to the main agent.
   type ReporterState = { phase: "deliver" } | { phase: "report"; end?: { status: "answered" | "failed"; text: string } };
 
   /** Keep an answer of the child, once: several messages can end in one answer. */
@@ -378,9 +411,10 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
     delete child.since;
   };
 
-  // Delivers one message to a child, waits for its answer and keeps how it ended; that wakes no one. A background task
-  // of the main conversation; each phase ends with a checkpoint, and a request ID makes a phase that runs again after a
-  // restart find the first submission, so the child gets the message once.
+  // Delivers one message to a child, waits for its answer and keeps how it ended; only a failure wakes the main agent.
+  // A background task of the main conversation; each phase ends with a checkpoint, and request IDs make a phase that
+  // runs again after a restart find the first submission, so the child gets the message once and the main agent the
+  // failure once.
   const Reporter = defineTask<ReporterInput, ReporterState, null>({
     name: "bot.child-reporter",
     version: 1,
@@ -412,8 +446,9 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
             // Stopped, or withdrawn while queued: nothing to keep.
             if (settled.reason === "aborted" || record.stoppedAt !== undefined) return next;
             const detail = settled.detail === undefined ? "" : `: ${typeof settled.detail === "string" ? settled.detail : JSON.stringify(settled.detail)}`;
-            record.result = { at: runtime.now(), failed: `${settled.reason}${detail}` };
-            return next;
+            const failed = `${settled.reason}${detail}`;
+            record.result = { at: runtime.now(), failed };
+            return { ...next, checkpoint: { phase: "report" as const, end: { status: "failed" as const, text: failed } } };
           }
           // An answer is kept also when a stop came after it.
           if (settled.type === "input") keepAnswer(record, settled.answer, runtime.now());
@@ -421,10 +456,21 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
         }, context);
       },
       report: async (reporter, runtime, context) => {
+        const end = reporter.state.checkpoint.end;
+        if (end?.status === "failed") {
+          const record = () => runtime.snapshot(Children, runtime.conversationId, context).then((state) => state?.children[reporter.input.child]);
+          const before = await record();
+          if (before && before.stoppedAt === undefined) {
+            host.beforeFailed?.(String(reporter.id));
+            const submission = await host.failed({ reporter: String(reporter.id), child: childInfo(before), reason: end.text }, context);
+            host.afterFailed?.(String(reporter.id));
+            // A stop that came in the meantime did not find this wake yet; it must not reach the main agent.
+            if ((await record())?.stoppedAt !== undefined) await host.withdraw(submission);
+          }
+        }
         await runtime.commit(async (tx) => {
           const state = await tx.doc(Children, runtime.conversationId);
-          // An end that an earlier version had not handed to the main agent yet: kept, as now.
-          const end = reporter.state.checkpoint.end;
+          // An end that 0.8.8 had not kept yet: kept, as now.
           const record = state.children[reporter.input.child];
           if (end && record && (end.status === "answered" || record.stoppedAt === undefined)) record.result = end.status === "failed" ? { at: runtime.now(), failed: end.text } : { at: runtime.now() };
           finish(state, String(reporter.id), runtime.now());
@@ -508,7 +554,7 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
       "send: a message to a child; a child that waits starts on it " +
       "at once, and one that works takes it when its current tool calls end. interrupt: ends the tool calls a child is in, such as a command " +
       "that hangs; the child goes on, sees that they were aborted, and takes the messages that wait for it. " +
-      "stop: stops a child and what it runs. A child's end does not wake you; a child can wake you itself.",
+      "stop: stops a child and what it runs. A child's end does not wake you, but a failure does, once; a child can wake you itself.",
     parameters: obj(
       {
         action: StringEnum(["start", "list", "result", "send", "interrupt", "stop"] as const),
@@ -612,3 +658,7 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
   return { extension: defineExtension({ name: "tasks", tasks: [Anchor, Reporter], tools: [task] }), start };
 }
 
+/** The wake ID of a reporter's failure wake, also its request ID in the main agent's queue, by which a stop finds it. */
+export function failureRequestId(reporter: string | TaskId): string {
+  return `child-end:${String(reporter)}`;
+}

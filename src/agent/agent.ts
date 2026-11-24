@@ -45,6 +45,7 @@ import {
   type CallTask,
   type ChildActivity,
   type ChildCall,
+  type ChildFailure,
   type ChildInfo,
   type ChildRecord,
   type ChildrenState,
@@ -55,6 +56,8 @@ import {
   childInfo,
   childrenExtension,
   describeActivity,
+  failureRequestId,
+  lastStep,
 } from "./children.ts";
 import type { Codemode } from "./codemode.ts";
 import type { Mcp } from "./mcp.ts";
@@ -96,6 +99,8 @@ interface Stop {
   id: string;
   title: string;
   conversationId: ConversationId;
+  /** All its reporters, to find their failure wakes in the main agent's queue. */
+  reporters: readonly string[];
   /** Those that have not ended yet. */
   live: readonly string[];
 }
@@ -171,6 +176,8 @@ export interface AgentOptions {
     sections: readonly AgentSection[];
     /** The place the main agent works on now, when it works on one: a new child works for it unless told otherwise. */
     place(): string | undefined;
+    /** Hand a child's failure to the main agent as a wake; the same reporter is one wake. Returns its submission ID. */
+    failed(failure: ChildFailure, context: Context): Promise<string>;
   };
   /**
    * Set after an upgrade: the main conversation's requests show the new text of pinned sections, as a new page does, so
@@ -272,11 +279,13 @@ export class Agent {
   readonly #outputs: Map<string, number | undefined>;
   /**
    * Crash tests: called right after a stop marked a child stopped, before its work ended; before a child's reporter
-   * keeps how the child ended, which it may hold up until its reporter is aborted; and right before a memory pass forks
-   * the main conversation.
+   * keeps how the child ended, which it may hold up until its reporter is aborted; just before and just after a child's
+   * failure is handed to the main agent; and right before a memory pass forks the main conversation.
    */
   readonly crashTests: {
     afterStopMark?: (child: string) => void;
+    beforeChildFailure?: (reporter: string) => void;
+    afterChildFailure?: (reporter: string) => void;
     beforeChildKeep?: (child: string, signal: AbortSignal) => Promise<void>;
     beforeMemoryPass?: () => void;
   } = {};
@@ -569,6 +578,15 @@ export class Agent {
       max: () => options.children.max(),
       place: () => options.children.place(),
       extensions: () => childExtensions,
+      // With what the child did last, read from its conversation.
+      failed: async (failure, context) => {
+        const conversation = await self().#harness.conversation(Number(failure.child.conversationId) as ConversationId, context);
+        const last = await lastStep(conversation, context).catch(() => undefined);
+        return options.children.failed(last === undefined ? failure : { ...failure, last }, context);
+      },
+      withdraw: async (submission) => {
+        await self().#harness.abortSubmission(Number(submission) as SubmissionId, context, ROOT_CONVERSATION_ID);
+      },
       stop: (id) => self().stopChild(id),
       activity: (conversation) => self().#activity(conversation),
       interrupt: (child) => self().interruptChild(child),
@@ -581,6 +599,8 @@ export class Agent {
         return file;
       },
       beforeKeep: async (child, signal) => agent?.crashTests.beforeChildKeep?.(child, signal),
+      beforeFailed: (reporter) => agent?.crashTests.beforeChildFailure?.(reporter),
+      afterFailed: (reporter) => agent?.crashTests.afterChildFailure?.(reporter),
     });
     const tasks = childrenTools.extension;
     // A child has the main agent's extensions without its channel actions and its task tool, and with its own prompt.
@@ -693,6 +713,7 @@ export class Agent {
     }
     for (const stop of stops) {
       for (const reporter of stop.live) await this.#harness.abortTask(Number(reporter) as TaskId, context);
+      await this.#withdrawFailures(stop);
     }
     this.#unfinishedStops = stops;
   }
@@ -910,11 +931,25 @@ export class Agent {
     }
     this.#warming?.cancel(String(stop.conversationId));
     await (await this.#harness.conversation(stop.conversationId, context))?.abort(context);
+    await this.#withdrawFailures(stop);
     this.#releaseScreen(String(stop.conversationId));
     await this.#root.commit(async (tx) => {
       const record = (await tx.doc(Children, ROOT_CONVERSATION_ID)).children[stop.id];
       if (record) record.stopFinished = true;
     }, context);
+  }
+
+  /** Withdraw the failure wakes of a stopped child that wait in the main agent's queue. */
+  async #withdrawFailures(stop: Stop): Promise<void> {
+    const queued = await this.#root.commit(async (tx) => {
+      const ids: SubmissionId[] = [];
+      for (const reporter of stop.reporters) {
+        const submission = await tx.submissionByRequest(ROOT_CONVERSATION_ID, failureRequestId(reporter));
+        if (submission?.status === "queued") ids.push(submission.id);
+      }
+      return ids;
+    }, context);
+    for (const submission of queued) await this.#harness.abortSubmission(submission, context, ROOT_CONVERSATION_ID);
   }
 
   /**
@@ -1088,6 +1123,7 @@ function stopOf(state: Readonly<ChildrenState>, record: Readonly<ChildRecord>): 
     id: record.id,
     title: record.title,
     conversationId: record.conversationId,
+    reporters: [...record.reporters],
     live: Object.entries(state.live).flatMap(([reporter, child]) => (child === record.id ? [reporter] : [])),
   };
 }

@@ -19,11 +19,11 @@ Slack, Discord and Telegram work today, and so does the person's own terminal (`
 
 ## The one thing to get right: the bot sets itself up
 
-Once the bot is made, **it connects its chat apps itself**. For each app, it creates what that platform needs (on Slack, a Slack app), gets the tokens, writes its own `bot.json` and asks the person only for what it cannot do, such as signing in or approving an install.
+Once the bot is made, **it connects its chat apps itself**. For each app, it creates what that platform needs (on Slack, a Slack app), gets the tokens, writes its own `bot.json` and asks the person only for what it cannot do, such as a code that comes to their phone, or an admin's approval.
 
 So do not create the chat app (such as a Slack app), write a manifest, collect tokens or edit `~/.pots/` by hand for your person, and do not tell them to do any of that first. Your job is to install Pots and make the bot, as below. After that, hand the person over to their bot: they say "join our Slack" in `pots chat`, and the bot does the rest.
 
-The same goes for its other tools: the bot adds its own routines, and skills for the command line tools it uses. Run `pots mcp add` only when your person asks for an MCP server; they sign in to it with `pots mcp login <server>` in their own terminal.
+The same goes for its other tools: the bot adds its own routines, and skills for the command line tools it uses. Run `pots mcp add` only when your person asks for an MCP server; the bot signs in to it itself with `pots mcp login <server>`, in the browser on its screen.
 
 On a computer without a desktop, such as a cloud server reached over SSH, the bot still does this. It explains the choices and lets the person pick:
 
@@ -69,7 +69,7 @@ A person without an AI agent runs `pots init` alone instead: it asks the same th
 Tell your person:
 
 - **Talk to the bot:** `pots chat`. Leave with Ctrl+C; the bot keeps working.
-- **Tell it where to work.** For example, "join our Slack". It sets the app up itself. Then invite it to the right channels (`/invite @its-name`). Like a new hire, it joins only the places it is invited to.
+- **Tell it where to work.** For example, "join our Slack". It sets the app up itself. On Slack it joins the right public channels itself and can create channels; invite it to private ones (`/invite @its-name`).
 - **Which models do which work is theirs to say.** The bot talks at `medium` thinking and hands longer work to children at `xhigh` or `max`, on its own model unless it chooses another one for a child. At its first start it asks your person which models they want for which work, and keeps the answer in its AGENTS.md.
 - **Sign in from anywhere.** When a login expires, or they want another model or Jev, they ask the bot, for example "sign me in to Claude". It sends a one-time link to a login page of Pots' own, where they sign in from any device; the bot is told which models it can use, never the login. When the bot cannot think because its only login expired, `pots login --link` on its computer prints such a link.
 - **Change it by talking to it.** Its persona, responsibilities, model and judge live in its folder, `~/.pots/bots/<id>/`, and the bot edits them itself. People can edit them too; changes apply within seconds.
@@ -78,7 +78,7 @@ Tell your person:
 |---|---|
 | `pots login` | Sign in to models and judges, or add API keys or local servers, one after another (in a terminal); `--list` shows what can be used; `--link` prints a link to a login page for any device instead |
 | `pots mcp add` / `list` / `remove` | MCP servers for every bot and pi on this computer, in pi's `~/.pi/agent/mcp.json`, with the options of `pi mcp` (`pots mcp --help`); the bot calls their tools from code mode scripts: short JavaScript programs it writes to call its tools |
-| `pots mcp login <server>` | Sign in to an MCP server in the browser (in a terminal) |
+| `pots mcp login <server>` | Sign in to an MCP server in the browser |
 | `pots status` | The gateway, the service and each bot |
 | `pots service logs` | The gateway's output |
 | `pots trace` | What a bot did: its last wakes, or one wake from its events to the messages it sent |

@@ -38,6 +38,8 @@ export interface GatewayOptions {
   readonly childWorks?: (routine: string) => boolean;
   /** Where the files of messages are saved, one folder per message. What is in it is deleted FILE_DAYS days after it was saved. */
   readonly filesDir: string;
+  /** Known secrets in text become [secret]: in a routine's output and error, and in a span's error, before they are kept. */
+  readonly mask?: (text: string) => string;
   readonly print: Print;
 }
 

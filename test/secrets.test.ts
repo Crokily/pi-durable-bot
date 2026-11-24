@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { KnownSecrets, MASK, secretsOfText } from "../src/core/secrets.ts";
+import { KnownSecrets, MASK, type SecretSource, secretsOfText } from "../src/core/secrets.ts";
 import { agentRequests, type FakeModel, type FakeRequest, startFakeModel } from "./support/fake-model.ts";
 import { ME, TestGateway, waitFor } from "./support/gateway.ts";
 
@@ -32,9 +32,64 @@ describe("known secrets", () => {
       anthropic: { type: "oauth", access: "sk-ant-oat01-aaaaaaaaaabbbbbbbbbb", refresh: "sk-ant-ort01-ccccccccccdddddddddd", expires: 1, accountId: "acct-1234567890" },
       openai: { type: "api_key", key: "OPENAI_API_KEY" },
       other: { type: "api_key", key: "!security find-generic-password -w" },
+      env: { type: "api_key", key: "${MY_KEY}" },
       local: { baseUrl: "http://localhost:11434/v1", headers: { Authorization: "Bearer local-secret-123" } },
     };
-    expect(secretsOfText(JSON.stringify(auth)).sort()).toEqual(["Bearer local-secret-123", "sk-ant-oat01-aaaaaaaaaabbbbbbbbbb", "sk-ant-ort01-ccccccccccdddddddddd"].sort());
+    expect(secretsOfText(JSON.stringify(auth), { pi: true }).sort()).toEqual(["local-secret-123", "sk-ant-oat01-aaaaaaaaaabbbbbbbbbb", "sk-ant-ort01-ccccccccccdddddddddd"].sort());
+  });
+
+  it("takes the literal values of Pots' own files: uppercase codes, passwords that start with !, padded Base64", () => {
+    const env = ["RECOVERY_CODE=ABCD2345EFGH6789", "PASSWORD=!hunter2-longer", "EMPTY_TOKEN=", "AUTH=Bearer tok-0123456789"];
+    expect(secretsOfText(env.join("\n")).sort()).toEqual(["!hunter2-longer", "ABCD2345EFGH6789", "tok-0123456789"].sort());
+    expect(secretsOfText("JBSWY3DPEHPK3PXP\nc2VjcmV0LXZhbHVl\nYWJjZGVmZ2hpams=\n").sort()).toEqual(["JBSWY3DPEHPK3PXP", "YWJjZGVmZ2hpams=", "c2VjcmV0LXZhbHVl"].sort());
+    // In a JSON file of the secrets folder too: only pi's own files have references.
+    expect(secretsOfText(JSON.stringify({ apiKey: "ABCDEFGH_IJKL" }))).toEqual(["ABCDEFGH_IJKL"]);
+  });
+
+  it("takes each JSON value by its own key, so words and links stay", () => {
+    const mcp = {
+      mcpServers: {
+        claude: { url: "https://mcp.example.com", auth: { provider: "anthropic" }, headers: { Authorization: "Bearer mcp-token-0123456789", "Content-Type": "application/json" } },
+        tool: { command: "npx", args: ["-y", "some-server"], env: { TOKEN_URL: "https://auth.example.com/token", GITHUB_TOKEN: "${GITHUB_TOKEN}", API_KEY: "literal-key-abc123" } },
+        signin: { oauth: { tokenUrl: "https://auth.example.com/token", clientId: "client-0123456789", clientSecret: "!pass show mcp" } },
+      },
+    };
+    expect(secretsOfText(JSON.stringify(mcp), { pi: true }).sort()).toEqual(["literal-key-abc123", "mcp-token-0123456789"].sort());
+    const signIns = { server: { tokens: { access_token: "at-0123456789abcdef", token_type: "Bearer", refresh_token: "rt-0123456789abcdef" } } };
+    expect(secretsOfText(JSON.stringify(signIns), { pi: true }).sort()).toEqual(["at-0123456789abcdef", "rt-0123456789abcdef"].sort());
+  });
+
+  it("reads a file that a source names with that source's reader, also when it is in a folder that is a source", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const dir = folder();
+    writeFileSync(join(dir, "vnc.passwd"), "stored-form-0123456789");
+    const named = { path: join(dir, "vnc.passwd"), read: () => ["decoded-0123456789"] };
+    expect(new KnownSecrets(() => [dir, named]).values()).toEqual(["decoded-0123456789"]);
+    expect(new KnownSecrets(() => [named, dir]).values()).toEqual(["decoded-0123456789"]);
+    let sources: SecretSource[] = [dir];
+    const secrets = new KnownSecrets(() => sources);
+    expect(secrets.values()).toEqual(["stored-form-0123456789"]);
+    sources = [dir, named];
+    vi.setSystemTime(Date.now() + 1_100);
+    expect(secrets.values()).toEqual(["decoded-0123456789"]);
+  });
+
+  it("reads a file that failed again at the next look, and keeps its last values meanwhile", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const dir = folder();
+    const file = join(dir, "s.env");
+    writeFileSync(file, `T=${TOKEN}\n`);
+    let fail = true;
+    const secrets = new KnownSecrets(() => [{ path: file, read: (path) => (fail ? (() => { throw new Error("EACCES"); })() : secretsOfText(readFileSync(path, "utf8"))) }]);
+    expect(secrets.mask(TOKEN)).toBe(TOKEN);
+    // Nothing about the file changed, as after a chmod.
+    fail = false;
+    vi.setSystemTime(Date.now() + 1_100);
+    expect(secrets.mask(TOKEN)).toBe(MASK);
+    fail = true;
+    writeFileSync(file, `T=${TOKEN}\nU=another-secret-value\n`);
+    vi.setSystemTime(Date.now() + 1_100);
+    expect(secrets.mask(TOKEN)).toBe(MASK);
   });
 
   it("masks every known secret in text and in tool results, and keeps a result without one as it is", () => {
@@ -95,14 +150,19 @@ describe("masking in a running bot", { timeout: 90_000 }, () => {
     await model?.close();
   });
 
-  it("gives the model and the log [secret] for a secret in a command's output, also split across chunks, and in a script's result", async () => {
+  it("gives the model and the log [secret] for a secret in a command's output, also split across chunks, in a script's result and in a routine's", async () => {
     const SECRET = "sk-live-0123456789ABCDEFghij";
+    const MCP_TOKEN = "mcp-workspace-0123456789";
+    // TigerVNC's vncpasswd -f for "testpw12".
+    const VNC = "testpw12";
     let file = "";
+    let mcp = "";
     const results = (request: FakeRequest) => request.messages.filter((message) => message.role === "tool").map((message) => message.content);
     model = await startFakeModel((request) => {
       const last = request.messages.at(-1);
       if (last?.role !== "user") return { text: "done" };
       if (last.content.includes("please cat")) return { call: { name: "bash", arguments: { command: `cat '${file}'; printf 'sk-live-01234'; sleep 0.5; printf '56789ABCDEFghij\\n'` } } };
+      if (last.content.includes("please look")) return { call: { name: "bash", arguments: { command: `grep -o 'mcp-[a-z0-9-]*' '${mcp}'; printf 'vnc ${VNC.slice(0, 6)}'; printf '${VNC.slice(6)}\\n'` } } };
       if (last.content.includes("please script")) {
         return { call: { name: "codemode", arguments: { code: `const r = await tools.bash({ command: "cat '${file}'" }); return "script saw " + JSON.stringify(r);` } } };
       }
@@ -112,6 +172,13 @@ describe("masking in a running bot", { timeout: 90_000 }, () => {
     mkdirSync(join(gateway.home, "secrets"), { recursive: true, mode: 0o700 });
     file = join(gateway.home, "secrets", "shop.env");
     writeFileSync(file, `SHOP_API_KEY=${SECRET}\n`, { mode: 0o600 });
+    // The workspace's MCP settings, and a VNC password file as vncpasswd writes it, which bot.json names.
+    mcp = join(gateway.botDir, "workspace", ".pi", "mcp.json");
+    mkdirSync(join(gateway.botDir, "workspace", ".pi"), { recursive: true });
+    writeFileSync(mcp, JSON.stringify({ mcpServers: { docs: { url: "http://127.0.0.1:9/mcp", enabled: false, headers: { Authorization: `Bearer ${MCP_TOKEN}` } } } }));
+    writeFileSync(join(gateway.home, "secrets", "vnc.passwd"), Buffer.from("f977efe6a9b36c4ef977efe6a9b36c4e", "hex"), { mode: 0o600 });
+    const definition = JSON.parse(readFileSync(join(gateway.botDir, "bot.json"), "utf8")) as Record<string, unknown>;
+    writeFileSync(join(gateway.botDir, "bot.json"), JSON.stringify({ ...definition, vnc: { port: 5900, passwordFile: "vnc.passwd" } }));
     await gateway.start();
 
     gateway.say("general", "alice", `@${ME} please cat`);
@@ -124,11 +191,23 @@ describe("masking in a running bot", { timeout: 90_000 }, () => {
     await waitFor(() => scripted() !== undefined, { what: "the script's result" });
     expect(scripted()).toContain(`SHOP_API_KEY=${MASK}`);
 
-    for (const request of model.requests) expect(JSON.stringify(request)).not.toContain(SECRET);
+    gateway.say("general", "alice", `@${ME} please look`);
+    const looked = () => agentRequests(model!).flatMap(results).find((text) => text.includes("vnc "));
+    await waitFor(() => looked() !== undefined, { what: "the second command's result" });
+    expect(looked()).toBe(`${MASK}\nvnc ${MASK}\n`);
+
+    // A routine that prints the secret and fails: its output is kept, and the bot woken with it, masked.
+    gateway.pots("routine", "add", "leak", "--every", "1s", "--run", `cat '${file}'; exit 3`);
+    const woken = () => agentRequests(model!).flatMap((request) => request.messages.filter((message) => message.role === "user").map((message) => message.content)).find((text) => text.includes("routine leak failed"));
+    await waitFor(() => woken() !== undefined, { what: "the routine's failure wake" });
+    gateway.pots("routine", "remove", "leak");
+    expect(woken()).toContain(`SHOP_API_KEY=${MASK}`);
+
+    for (const request of model.requests) for (const secret of [SECRET, MCP_TOKEN, VNC]) expect(JSON.stringify(request)).not.toContain(secret);
     // Stopped, so everything it wrote is on disk; the SQLite file and its WAL.
     await gateway.kill();
     for (const name of readdirSync(gateway.botDir).filter((each) => each.startsWith("bot.sqlite"))) {
-      expect(readFileSync(join(gateway.botDir, name)).includes(Buffer.from(SECRET)), name).toBe(false);
+      for (const secret of [SECRET, MCP_TOKEN, VNC]) expect(readFileSync(join(gateway.botDir, name)).includes(Buffer.from(secret)), name).toBe(false);
     }
   });
 });

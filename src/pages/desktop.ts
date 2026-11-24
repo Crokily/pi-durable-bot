@@ -157,6 +157,11 @@ const hash = (secret: string) => createHash("sha256").update(secret).digest("hex
 const madeFor = (person: string | null) => person ?? "anyone";
 
 /** The desktop links of one bot, in its bot.sqlite, and their connections. */
+/** bot.json's VNC password file: a bare file name is in the secrets folder. */
+export function vncPasswordPath(passwordFile: string, secretsDir: string): string {
+  return isAbsolute(expandHome(passwordFile)) ? expandHome(passwordFile) : join(secretsDir, passwordFile);
+}
+
 export class BotDesktop {
   readonly #options: DesktopOptions;
   readonly #sql: Sql;
@@ -189,7 +194,7 @@ export class BotDesktop {
       );
     }
     if (!vnc.passwordFile) return { port: vnc.port, password: undefined };
-    const file = isAbsolute(expandHome(vnc.passwordFile)) ? expandHome(vnc.passwordFile) : join(this.#options.secretsDir, vnc.passwordFile);
+    const file = vncPasswordPath(vnc.passwordFile, this.#options.secretsDir);
     return { port: vnc.port, password: readVncPassword(file), passwordFile: file };
   }
 

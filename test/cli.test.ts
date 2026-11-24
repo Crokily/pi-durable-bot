@@ -115,8 +115,7 @@ describe("pots", { timeout: 120_000 }, () => {
     ]);
     expect(await pots("wake", "--cancel", String(timer.id))).toBe("cancelled\n");
     expect(await pots("wake", "--cancel", String(at.id))).toBe("cancelled\n");
-    // With no wake of its own left, the bot has its fallback check-in again.
-    expect((JSON.parse(await pots("wake", "--list")) as { set_by: string }[]).map((item) => item.set_by)).toEqual(["fallback"]);
+    expect(JSON.parse(await pots("wake", "--list"))).toEqual([]);
     expect(await fails("wake", "--cancel", "999999")).toBe("ERROR\n  no pending wake 999999");
     expect(await fails("wake", "--in", "3q")).toBe('ERROR\n  bad duration "3q"; use for example 90s, 30m, 2h or 1d');
     expect(await fails("wake", "--at", "someday")).toBe('ERROR\n  bad time "someday"; use for example "2026-10-28 09:00" (local time) or Unix ms');
@@ -145,11 +144,10 @@ describe("pots", { timeout: 120_000 }, () => {
     for (const item of list) await pots("wake", "--cancel", String(item.id));
   });
 
-  it("adds, lists, replaces and removes routines, with the fallback check-in as a built-in one", async () => {
+  it("adds, lists, replaces and removes routines", async () => {
     /** The output with each time as <time>. */
     const plain = (text: string) => text.replace(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \w+ \([^)]*\)/g, "<time>");
-    const fallback = "- fallback check-in (built in, cannot be removed): every 120 minutes while no wake set with pots wake is pending\n  next: <time>\n";
-    expect(plain(await pots("routine", "list"))).toBe(`No routines added.\n${fallback}`);
+    expect(await pots("routine", "list")).toBe("No routines added.\n");
 
     const standup = await pots("routine", "add", "standup", "--cron", "0 9 * * 1-5", "--note", "prepare the standup");
     expect(plain(standup)).toBe('Added routine standup: cron "0 9 * * 1-5", wakes the bot with the note "prepare the standup"\n  next: <time>\n');
@@ -176,14 +174,8 @@ describe("pots", { timeout: 120_000 }, () => {
         '- standup: cron "0 9 * * 1-5", wakes the bot with the note "prepare the standup"',
         "  next: <time>",
         "  last: none in the last 7 days",
-        fallback,
-      ].join("\n"),
+      ].join("\n") + "\n",
     );
-
-    // While a wake set with pots wake is pending, the fallback check-in waits.
-    const wake = JSON.parse(await pots("wake", "--in", "1h")) as { id: number };
-    expect(await pots("routine", "list")).toMatch(/\n {2}next: waits, because a wake set with pots wake is pending\n$/);
-    await pots("wake", "--cancel", String(wake.id));
 
     expect(await fails("routine", "add", "x", "--every", "1h", "--cron", "0 9 * * *", "--note", "")).toBe("ERROR\n  give exactly one of --every and --cron");
     expect(await fails("routine", "add", "x", "--note", "hi")).toBe("ERROR\n  give exactly one of --every and --cron");
@@ -197,7 +189,7 @@ describe("pots", { timeout: 120_000 }, () => {
     expect(await pots("routine", "remove", "backup")).toBe("Removed routine backup.\n");
     expect(await pots("routine", "remove", "mail")).toBe("Removed routine mail.\n");
     expect(await pots("routine", "remove", "standup")).toBe("Removed routine standup.\n");
-    expect(plain(await pots("routine", "list"))).toBe(`No routines added.\n${fallback}`);
+    expect(await pots("routine", "list")).toBe("No routines added.\n");
   });
 
   it("stores, lists, replaces and removes forms as the bot gives them", async () => {

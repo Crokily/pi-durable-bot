@@ -278,7 +278,6 @@ describe("the prompt", () => {
     pots: "pots",
     machine: { os: "Linux 6.8 (arm64)", hostname: "box", user: "ada", shell: "bash" },
     secretsDir: join(work, "secrets"),
-    fallbackWakeMinutes: 120,
     sharedMemory: join(work, "memory"),
   };
 

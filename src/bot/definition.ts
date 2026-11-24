@@ -45,8 +45,6 @@ export interface BotSettings {
   judgeThreshold: number;
   /** How many earlier messages of the place the judge sees. */
   judgeContextMessages: number;
-  /** When the agent has no timed wake set, it is woken this often. */
-  fallbackWakeMinutes: number;
   /** pi-durable compaction, the fallback when the agent does not turn the page. Unset values fit the model's context window. */
   compaction: Compaction;
   /** How many children may work at once. At the cap, the task tool says so and lists them. */
@@ -60,7 +58,6 @@ const DEFAULT_SETTINGS: BotSettings = {
   debounceMaxMs: 20_000,
   judgeThreshold: 0.5,
   judgeContextMessages: 20,
-  fallbackWakeMinutes: 120,
   compaction: {},
   maxChildren: 50,
   autoMemory: true,
@@ -141,7 +138,6 @@ const Definition = Schema.Struct({
     debounceMaxMs: Schema.Finite.pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_SETTINGS.debounceMaxMs))),
     judgeThreshold: Schema.Finite.pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_SETTINGS.judgeThreshold))),
     judgeContextMessages: Schema.Finite.pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_SETTINGS.judgeContextMessages))),
-    fallbackWakeMinutes: Schema.Finite.pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_SETTINGS.fallbackWakeMinutes))),
     compaction: Schema.Struct({
       reserveTokens: Schema.optionalKey(Schema.Finite),
       keepRecentTokens: Schema.optionalKey(Schema.Finite),

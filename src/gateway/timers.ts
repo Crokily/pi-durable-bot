@@ -51,9 +51,9 @@ export interface Timer {
   note: string;
   /**
    * "agent": set with pots wake, by the agent, its scripts or a person. "routine": a routine's note, or a failed run of
-   * a routine (run_id). "fallback": the check-in while no wake set with pots wake is pending.
+   * a routine (run_id). Older rows can have "fallback", the check-in of earlier versions.
    */
-  set_by: "agent" | "routine" | "fallback";
+  set_by: "agent" | "routine";
   /** Where the wake comes from: pots wake --from (or $POTS_FROM), or the routine's name. */
   source: string | null;
   /** pots wake --id. */
@@ -95,9 +95,7 @@ const DAY_MS = 86_400_000;
 const noRunner: RunCommand = async () => ({ error: "this gateway cannot run commands" });
 
 /**
- * Timed wakes and routines. The agent sets as many wakes as it likes. While no wake set with pots wake is pending, one
- * fallback wake is kept, fallbackMinutes after the moment there was none left (the start, the last firing, or a
- * cancel); routines do not count. A routine wakes the bot with its note at its times, runs its command, or starts a
+ * Timed wakes and routines. The agent sets as many wakes as it likes. A routine wakes the bot with its note at its times, runs its command, or starts a
  * child with its brief; the command and the child decide themselves whether to wake the bot. A failed run, or a child
  * that could not start, wakes the bot once, until a run succeeds.
  */
@@ -110,8 +108,6 @@ export class Timers extends Context.Service<
     add(dueAt: number, note: string, options?: WakeOptions): Effect.Effect<AddedTimer, LogError | BadTime | BadName>;
     /** False when there is no pending timer with this ID. */
     cancel(id: number): Effect.Effect<boolean, LogError>;
-    /** The fallback interval changed: put the pending fallback wake at the new interval from now. */
-    readonly resetFallback: Effect.Effect<void, LogError>;
     readonly pending: Effect.Effect<Timer[], LogError>;
     /** Add a routine, or replace the one with the same name. */
     addRoutine(input: RoutineInput): Effect.Effect<{ routine: Routine; replaced: boolean }, LogError | BadName | BadRoutine>;
@@ -135,6 +131,8 @@ export class Timers extends Context.Service<
           await sql.exec(ROUTINES_SCHEMA);
           const routineColumns = new Set((await sql.all<{ name: string }>("PRAGMA table_info(bot_routines)")).map((column) => column.name));
           for (const [name, type] of ROUTINE_ADDED_COLUMNS) if (!routineColumns.has(name)) await sql.exec(`ALTER TABLE bot_routines ADD COLUMN ${name} ${type}`);
+          // The fallback check-in of earlier versions comes no more.
+          await sql.run("UPDATE bot_timers SET state = 'replaced' WHERE state = 'pending' AND set_by = 'fallback'");
         });
         const loop = yield* FiberHandle.make();
         const routineLoop = yield* FiberHandle.make();
@@ -160,14 +158,6 @@ export class Timers extends Context.Service<
           );
           return (await tx.get<Timer>(`SELECT ${COLUMNS} FROM bot_timers WHERE id = last_insert_rowid()`))!;
         };
-
-        /** Keep a fallback wake while no wake set with pots wake is pending. Routines do not count. */
-        const ensureFallback = Effect.gen(function* () {
-          if ((yield* pending).some((timer) => timer.set_by !== "routine")) return;
-          const now = yield* Clock.currentTimeMillis;
-          const dueAt = now + config.fallbackWakeMinutes() * 60_000;
-          yield* db(() => sql.run("INSERT INTO bot_timers (due_at, note, state, set_by, created_at) VALUES (?, '', 'pending', 'fallback', ?)", dueAt, now));
-        });
 
         /** A routine's wake with its routine, and the failed run it is about. */
         const withRoutine = (timer: Timer): Effect.Effect<DueTimer, LogError> =>
@@ -201,7 +191,6 @@ export class Timers extends Context.Service<
             if (stopped || timer.due_at > (yield* Clock.currentTimeMillis)) break;
             yield* fire(timer);
           }
-          yield* ensureFallback;
           return true;
         }).pipe(
           Effect.catch((error) => Effect.sync(() => config.print("timer failed", { error: error.message })).pipe(Effect.as(false))),
@@ -384,7 +373,8 @@ export class Timers extends Context.Service<
 
         /**
          * At the start: runs a stop or a crash cut off are stopped, and times that passed while the gateway was stopped
-         * are missed, so each routine's next time is its next one from now.
+         * are missed, so each routine's next time is its next one from now. A cron's next time is counted again in the
+         * computer's time zone now.
          */
         const settleRoutines = Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis;
@@ -394,6 +384,9 @@ export class Timers extends Context.Service<
               await tx.run("DELETE FROM bot_routine_runs WHERE started_at < ?", now - RUN_DAYS * DAY_MS);
               const missed = await tx.all<Routine>("SELECT * FROM bot_routines WHERE next_at <= ?", now);
               for (const routine of missed) await tx.run("UPDATE bot_routines SET next_at = ? WHERE name = ?", nextAfter(routine, now) ?? NEVER, routine.name);
+              // The computer's time zone may have changed while the gateway was stopped: a cron's next time is counted again.
+              const crons = await tx.all<Routine>("SELECT * FROM bot_routines WHERE cron IS NOT NULL AND next_at > ?", now);
+              for (const routine of crons) await tx.run("UPDATE bot_routines SET next_at = ? WHERE name = ?", nextAfter(routine, now) ?? NEVER, routine.name);
               return missed;
             }),
           );
@@ -403,7 +396,6 @@ export class Timers extends Context.Service<
         return Timers.of({
           start: Effect.gen(function* () {
             stopped = false;
-            yield* ensureFallback.pipe(lock.withPermits(1));
             yield* settleRoutines.pipe(lock.withPermits(1));
             yield* schedule;
             yield* scheduleRoutines;
@@ -430,7 +422,6 @@ export class Timers extends Context.Service<
                       const first = await tx.get<Timer & { state: string }>(`SELECT ${COLUMNS}, state FROM bot_timers WHERE request_id = ?`, options.requestId);
                       if (first) return { ...first, repeated: true };
                     }
-                    await tx.run("UPDATE bot_timers SET state = 'replaced' WHERE state = 'pending' AND set_by = 'fallback'");
                     return insertWake(tx, { dueAt, note, setBy: "agent", now, ...options });
                   }),
                 ),
@@ -443,16 +434,9 @@ export class Timers extends Context.Service<
                 const found = yield* db(() => sql.get("SELECT 1 AS x FROM bot_timers WHERE id = ? AND state = 'pending'", id));
                 if (!found) return false;
                 yield* db(() => sql.run("UPDATE bot_timers SET state = 'cancelled' WHERE id = ?", id));
-                yield* ensureFallback;
                 return true;
               }),
             ),
-          resetFallback: changed(
-            Effect.gen(function* () {
-              yield* db(() => sql.run("UPDATE bot_timers SET state = 'replaced' WHERE state = 'pending' AND set_by = 'fallback'"));
-              yield* ensureFallback;
-            }),
-          ),
           pending,
           addRoutine: (input) =>
             Effect.gen(function* () {
@@ -506,17 +490,13 @@ export class Timers extends Context.Service<
                 return found !== undefined;
               }),
             ).pipe(lock.withPermits(1), Effect.tap(() => scheduleRoutines)),
-          routines: Effect.gen(function* () {
-            const routines = yield* db(async () => {
-              const list: RoutineListing["routines"] = [];
-              for (const routine of await sql.all<Routine>("SELECT * FROM bot_routines ORDER BY name")) {
-                const last = await sql.get<RoutineRun>("SELECT * FROM bot_routine_runs WHERE routine = ? ORDER BY id DESC LIMIT 1", routine.name);
-                list.push(last ? { ...routine, last } : routine);
-              }
-              return list;
-            });
-            const fallback = (yield* pending).find((timer) => timer.set_by === "fallback");
-            return { routines, fallback: { minutes: config.fallbackWakeMinutes(), ...(fallback ? { next: fallback.due_at } : {}) } };
+          routines: db(async () => {
+            const routines: RoutineListing["routines"] = [];
+            for (const routine of await sql.all<Routine>("SELECT * FROM bot_routines ORDER BY name")) {
+              const last = await sql.get<RoutineRun>("SELECT * FROM bot_routine_runs WHERE routine = ? ORDER BY id DESC LIMIT 1", routine.name);
+              routines.push(last ? { ...routine, last } : routine);
+            }
+            return { routines };
           }),
         });
       }),

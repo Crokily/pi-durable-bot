@@ -107,7 +107,6 @@ export class Recorder {
 export interface CoreOptions {
   readonly settings?: Partial<WakerSettings>;
   readonly judge?: Judge;
-  readonly fallbackWakeMinutes?: number;
   /** Fails a timer's wake when it returns true. */
   readonly failTimer?: (timer: DueTimer) => boolean;
   /** Holds a timer's wake until the promise it returns resolves, as a bot that is slow to take it. */
@@ -126,7 +125,6 @@ export const withCore = <A, E, R>(options: CoreOptions, body: (recorder: Recorde
       bot: "coworker",
       judge: () => options.judge,
       settings: () => ({ ...SETTINGS, ...options.settings }),
-      fallbackWakeMinutes: () => options.fallbackWakeMinutes ?? 120,
       fireTimer: async (timer) => {
         if (options.failTimer?.(timer)) throw new Error("the bot is busy");
         await options.holdTimer?.(timer);

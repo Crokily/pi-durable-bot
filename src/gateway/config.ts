@@ -25,8 +25,6 @@ export interface GatewayOptions {
   /** The judge of events that do not mention the bot; undefined: every such event wakes the bot. */
   readonly judge: () => Judge | undefined;
   readonly settings: () => WakerSettings;
-  /** While no wake set with pots wake is pending, the bot is woken this often. Routines do not count. */
-  readonly fallbackWakeMinutes: () => number;
   /** Hand a due timer to the bot. Resolves once the wake is durable. caller: the wake's span. */
   readonly fireTimer: (timer: DueTimer, caller?: TelemetrySpan) => Promise<Delivered>;
   /** Run a routine's command as the bot's bash tool runs one, with env added. Without it, routines with --run fail to start. */

@@ -45,6 +45,11 @@ export interface BotOptions {
   readonly longPromptCache?: boolean;
   /** Changes to the gateway's environment; undefined takes a variable out. */
   readonly env?: Record<string, string | undefined>;
+  /**
+   * Pots adds the look routine at the bot's first start. Without this, the bot starts as one that had it added
+   * already, so no look starts a child in the middle of a test.
+   */
+  readonly look?: boolean;
 }
 
 export interface PlatformRecord {
@@ -88,6 +93,11 @@ export class TestGateway {
       settings: { debounceMs: 300, debounceMaxMs: 2_000, ...options.settings },
     };
     writeFileSync(join(this.botDir, "bot.json"), JSON.stringify(definition, null, 2));
+    if (!options.look) {
+      const db = new DatabaseSync(join(this.botDir, "bot.sqlite"));
+      db.exec("CREATE TABLE bot_state (key TEXT PRIMARY KEY, value TEXT NOT NULL); INSERT INTO bot_state VALUES ('look_added', 'test')");
+      db.close();
+    }
     // Dollars per million tokens: a missed cache entry of the fake model's 100 input tokens costs $100. The short entry
     // (the children's) and the long one (the main agent's) last as long here.
     const cache = options.promptCacheSeconds

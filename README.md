@@ -59,7 +59,7 @@ Most AI bots are a command line with a chat bubble. You @ them, they answer, the
 
 | | A chat bot | pi-durable-bot |
 |---|---|---|
-| **What it sees** | The message that mentions it | Everything in the places it was invited to: chats, DMs, emails, events, pages it watches |
+| **What it sees** | The message that mentions it | Everything in the places it has joined: chats, DMs, emails, events, pages it watches |
 | **When it acts** | When you @ it | When it decides it should. It can also answer when you @ it |
 | **What it remembers** | This thread, maybe | One long memory across every channel, kept on disk |
 | **How it works** | Calls the tools someone wired in | Writes and runs its own code on its own computer |
@@ -166,9 +166,9 @@ pots init
 3. **Who decides on group messages that do not mention it.** By default the bot itself: every such message wakes it. Or Jev, a fast judge from TypeSafe, with your TypeSafe API key, or a judge model you already set up in pi; the bot then wakes only for the messages about its work.
 4. **In one sentence, what it is for.** Optional. The bot writes its own persona and responsibilities from it.
 
-Then the gateway starts as a background service (it starts again at login) and you are talking to your bot in the terminal. It first checks that it can use the computer's screen and walks you through any permission it needs, such as Screen Recording and Accessibility on a Mac. On a server with no desktop, it works without a screen and asks you before it sets one up. Tell it which chat apps to join. It sets them up itself on its computer and signs in with what the computer has, such as your accounts in its browser and your password manager. It asks you only for what it cannot do, like a code that comes to your phone or an admin's approval. Leave with Ctrl+C; come back with `pots chat`.
+Then the gateway starts as a background service (it starts again at login) and you are talking to your bot in the terminal. It first checks that it can use the computer's screen and walks you through any permission it needs, such as Screen Recording and Accessibility on a Mac. On a server with no desktop, it works without a screen and asks you before it sets one up. Tell it which chat apps to join. It sets them up itself on its computer and signs in with what the computer has, such as your accounts in its browser and your password manager. It asks you to do only the steps that need you, like entering a code from your phone, or getting an admin's approval. Leave with Ctrl+C; come back with `pots chat`.
 
-It works in the places it is in, like a new hire who is added to the right channels. On Slack it can also join public channels and create channels itself; a private channel needs an invite.
+It works in the places it is in, like a new hire who is added to the right channels. On Slack it can also join public channels and create channels itself; an existing private channel needs a member to invite it.
 
 To add another bot, ask a bot you have to make one, or run `pots bot new <name> --about "<what it is for>"`. The new bot sets itself up the same way, and when another bot already uses the screen, it offers to set up one of its own ([Add another bot](docs/for-agents.md#add-another-bot)).
 

@@ -21,6 +21,7 @@ import type { CacheWarmingMode } from "../agent/warming.ts";
 import { loadChannel } from "../channels/load.ts";
 import type { Address, ChannelAdapter, ChannelConfig } from "../core/channel.ts";
 import { MEMORY_DIR, POTS_HOME, SECRETS_DIR } from "../core/home.ts";
+import { defaultSecretSources, KnownSecrets } from "../core/secrets.ts";
 import { VERSION } from "../core/version.ts";
 import type { Judge } from "../core/judge.ts";
 import { formatTime } from "../core/time.ts";
@@ -331,8 +332,15 @@ export class Bot implements WakeTarget {
     const indexes = async () => ({ own: await readIndex(folders.own), shared: await readIndex(folders.shared) });
     /** The notes of what the memory passes changed, for the next wake: in the process, as in Claude Code. */
     const notes: MemoryNote[] = [];
+    // The secrets of this computer, and the files bot.json names: its channels' tokens and its VNC password.
+    const secrets = new KnownSecrets(() => [
+      ...defaultSecretSources(),
+      ...current().channels.flatMap((channel) => (typeof channel.secrets === "string" ? [channel.secrets] : [])),
+      ...(current().vnc?.passwordFile ? [current().vnc!.passwordFile!] : []),
+    ]);
     const agent = await Agent.open({
       database: sql,
+      secrets,
       models: env.models,
       ...(env.cacheWarming ? { cacheWarming: env.cacheWarming } : {}),
       model: definition.model,

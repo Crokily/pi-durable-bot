@@ -31,6 +31,7 @@ import {
   SystemEntry,
   section,
   type ToolRegistration,
+  ToolTask,
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { createFitImagesExtension } from "@earendil-works/pi-durable/images/fit";
@@ -59,6 +60,7 @@ import {
   failureRequestId,
   lastStep,
 } from "./children.ts";
+import type { KnownSecrets } from "../core/secrets.ts";
 import type { Codemode } from "./codemode.ts";
 import type { Mcp } from "./mcp.ts";
 import { deleteLeftForks, lastAnswer, type MemoryHost, MemoryPasses, readPaths, withAgeNote } from "./memory.ts";
@@ -134,6 +136,8 @@ export function openDatabase(path: string): Promise<Database> {
 
 export interface AgentOptions {
   database: Database;
+  /** The secrets known on this computer: in every tool's output, they become [secret] before the model and the log get it. */
+  secrets?: KnownSecrets;
   /** pi's model layer, from openModels(). */
   models: Models;
   /** pi's setting cacheWarming, read at each use: the prompt cache warming of the main agent and its children. Without it, none. */
@@ -343,19 +347,41 @@ export class Agent {
     // When each running call of bash, screen and codemode last gave output, so a child's description can say how old its
     // last output is. Only in memory: a call does not run on after a restart.
     const outputs = new Map<string, number | undefined>();
+    const secrets = options.secrets;
     const timed = <T extends ToolRegistration>(tool: T): T =>
       defineTool({
         ...tool,
         execute: async (args, api, call) => {
           const key = String(api.taskId);
           outputs.set(key, undefined);
+          // Masked as it streams, since what a call has given so far is kept in the log while it runs.
+          const masked = secrets?.stream();
+          const decoder = new TextDecoder();
           const output = (chunk: string | Uint8Array, skipped?: Parameters<typeof api.output>[1]) => {
             outputs.set(key, Date.now());
-            api.output(chunk, skipped);
+            if (!masked) return api.output(chunk, skipped);
+            const text = masked.write(typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true }));
+            if (text !== "" || skipped !== undefined) api.output(text, skipped);
           };
+          const flush = () => {
+            const rest = masked?.flush();
+            if (rest) api.output(rest);
+          };
+          const wrapped = new Proxy(api, {
+            get: (target, property) =>
+              property === "output"
+                ? output
+                : property === "retainedOutput"
+                  ? () => {
+                      flush();
+                      return target.retainedOutput();
+                    }
+                  : Reflect.get(target, property, target),
+          });
           try {
-            return await tool.execute(args, new Proxy(api, { get: (target, property) => (property === "output" ? output : Reflect.get(target, property, target)) }), call);
+            return await tool.execute(args, wrapped, call);
           } finally {
+            flush();
             outputs.delete(key);
           }
         },
@@ -545,7 +571,8 @@ export class Agent {
         searchTool(createGrepToolDefinition(options.workspace)),
         searchTool(createFindToolDefinition(options.workspace)),
       ],
-      hooks: [requestHooks],
+      // Every agent has these tools, so every tool result of every agent, also of a codemode script's calls, passes here.
+      hooks: [requestHooks, ...(secrets ? [hook(ToolTask, { afterTool: (_call, result) => secrets.maskResult(result) })] : [])],
     });
     // pi's code mode, for the main agent and its children. As in pi, a script waits for the MCP servers it names, or for
     // all of them when it looks tools up, so it sees their tools. A server that connected meanwhile came after this

@@ -8,7 +8,7 @@ import type { Models } from "@earendil-works/pi-ai";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import type { TelemetrySpan } from "@earendil-works/pi-telemetry";
 import { Agent, type Database, openDatabase } from "../agent/agent.ts";
-import { describeChild } from "../agent/children.ts";
+import { type ChildFailure, describeChild, failureRequestId } from "../agent/children.ts";
 import type { MemoryNote } from "../agent/memory.ts";
 import { createCodemode } from "../agent/codemode.ts";
 import { SCREEN_VARIABLES, screenOf } from "../agent/screen.ts";
@@ -46,6 +46,7 @@ import {
   memorySection,
   type PromptFacts,
   renderCacheUse,
+  renderChildFailure,
   renderContext,
   renderDream,
   renderExtraction,
@@ -371,6 +372,7 @@ export class Bot implements WakeTarget {
           { name: "remembered", render: async () => (memoryOn() ? childMemorySection(facts(), await indexes()) : undefined), pin: true },
         ],
         place: () => (bot ? bot.#currentPlace() : undefined),
+        failed: (failure) => self().#deliverChildFailure(failure),
       },
       // What a new version says counts at once; without an upgrade, the sections stay as the page began.
       ...(shownVersion === VERSION
@@ -419,6 +421,9 @@ export class Bot implements WakeTarget {
     // Right after the bot took a wake, before the gateway records that. The next start must deliver the same wake again,
     // which the agent counts once, instead of deciding its events anew.
     gateway.waker.afterDeliver = crashTest(paths.crashAfterWake, "crash test: dying after the wake", "wakeId");
+    // Around the wake of a child's failure. The next start must wake the main agent once.
+    agent.crashTests.beforeChildFailure = crashTest(paths.crashBeforeChildFailure, "crash test: dying before the child's failure wake", "reporter");
+    agent.crashTests.afterChildFailure = crashTest(paths.crashAfterChildFailure, "crash test: dying after the child's failure wake", "reporter");
     // Right after a stop marked a child stopped, before its work ended. The next start must end that work.
     agent.crashTests.afterStopMark = crashTest(paths.crashAfterChildStop, "crash test: dying after marking the child stopped", "child");
     // After a child answered, before its reporter keeps the answer: held while the file is there, or until the reporter
@@ -563,6 +568,19 @@ export class Bot implements WakeTarget {
     const child = timer.set_by === "agent" && timer.child !== null ? this.#agent.children.find((each) => each.id === timer.child) : undefined;
     const text = renderTimerWake(timer, await this.#agent.contextStatus(), this.#definition.settings.fallbackWakeMinutes, children, child);
     return this.#submit(`timer:${timer.id}`, timer.set_by === "agent" ? "timer" : timer.set_by, child?.place, text, false, caller);
+  }
+
+  /** A child could not go on: a wake for the main agent, once per reporter, also when this runs again after a restart. */
+  async #deliverChildFailure(failure: ChildFailure): Promise<string> {
+    // Handed over before a restart: the same submission, and no second wake in the trace.
+    const id = failureRequestId(failure.reporter);
+    const before = (await this.#sql.all<{ submission: string }>("SELECT submission FROM bot_wakes WHERE id = ?", id))[0];
+    if (before) return before.submission;
+    const text = renderChildFailure(failure, await this.#agent.contextStatus());
+    const delivered = await this.#gateway.wake({ reason: "child", child: failure.child.id, ...(failure.child.place ? { place: failure.child.place } : {}) }, (caller) =>
+      this.#submit(id, "child", failure.child.place, text, false, caller),
+    );
+    return delivered.submission;
   }
 
   async #submit(id: string, reason: string, place: Address | undefined, text: string, steer: boolean, caller?: TelemetrySpan): Promise<Delivered> {

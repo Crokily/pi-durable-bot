@@ -1,6 +1,6 @@
 import { basename } from "node:path";
 import type { CacheUse, ContextStatus } from "../agent/agent.ts";
-import { type ChildInfo, describeChild } from "../agent/children.ts";
+import { age, type ChildFailure, type ChildInfo, describeChild } from "../agent/children.ts";
 import type { MemoryFolders, MemoryNote, MemoryProgress } from "../agent/memory.ts";
 import type { LeftScope } from "../agent/scopes.ts";
 import type { PersonInfo } from "../core/channel.ts";
@@ -47,7 +47,7 @@ export function workSection(facts: PromptFacts): string {
 - Plain text is only one way to reply. Pages, and the channel's own buttons, menus, forms and tables, often read and answer better; choose what fits each time. When a reply runs to several messages, send them one after another: sent at the same time, they can arrive out of order.
 
 # Children
-- With the task tool you start children: agents that work in the background, with read, write, edit, bash, grep, find, screen and codemode. A child starts with an empty conversation and the brief you give it. Its end does not wake you: its final message is kept, and the task tool's result gives it. A child can wake you itself; to answer it or give it more, send it a message.
+- With the task tool you start children: agents that work in the background, with read, write, edit, bash, grep, find, screen and codemode. A child starts with an empty conversation and the brief you give it. Its end does not wake you, unless it failed: its final message is kept, and the task tool's result gives it. A child can wake you itself; to answer it or give it more, send it a message.
 - Give a child the work that runs commands, looks things up, or takes more than a minute or two, so that you stay free to answer people quickly. Before you hand work to a child, reply to the person first. Discussion and judgment that depend on the conversation stay with you.
 - When you hand work to a child, say in the brief that this is work you delegate to it, so it must tell you when it is done.
 - Check what a child reports before you tell people.
@@ -539,6 +539,20 @@ function renderRoutineFailure(timer: DueTimer, now: number): string[] {
   else lines.push("Output: (none)");
   lines.push("Later failures of this routine do not wake you until one of its runs succeeds.");
   return lines;
+}
+
+/** A child could not go on: why, and what it did last. */
+export function renderChildFailure(failure: ChildFailure, status: ContextStatus, now = Date.now()): string {
+  const child = failure.child;
+  const ran = child.since === undefined ? "" : `, ran ${age(now - child.since)}`;
+  const lines = [
+    `[wake] your child ${child.id} failed: ${failure.reason}`,
+    `Now: ${formatTime(now)}`,
+    `Child: ${child.id} "${child.title}"${child.place ? `, for ${child.place}` : ""}${child.routine ? `, started by routine ${child.routine}` : ""}, started ${formatTime(child.startedAt)}${ran}`,
+  ];
+  if (failure.last) lines.push(`Last, it ${failure.last}`);
+  lines.push(renderContext(status));
+  return lines.join("\n");
 }
 
 export function renderHandoff(note: string, notes: string, notesPath: string, children: readonly ChildInfo[] = []): string {

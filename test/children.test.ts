@@ -6,7 +6,7 @@ import { ME, pause, TestGateway, waitFor } from "./support/gateway.ts";
 
 // Children from outside: a real gateway whose fake main agent starts a child with the task tool, or a routine starts
 // one. A child's end that wakes the main agent, or a child that goes on after a stop, would show only as a confused
-// bot, so these are checked here.
+// bot, so these are checked here; so is the one wake of a child that fails.
 
 let model: FakeModel;
 let gateway: TestGateway;
@@ -27,11 +27,19 @@ const isChild = (request: FakeRequest) => request.system.includes("You are a chi
  * tell", it wakes the main agent with pots wake first. "on <model>" starts the child on that model, and "please tell
  * <child> more" sends it a message. For "please probe" the child runs a command that hangs after one line of output,
  * from bash or from a script; the main agent sends it "wrap up" for "wrap up the probe", and interrupts it for
- * "interrupt the probe".
+ * "interrupt the probe". For "please fail", the child runs a command, then its model fails for good; for "please retry",
+ * its model fails once with an error that is retried, then answers. For a child's failure, the main agent passes on its
+ * first line in the place.
  */
 function script(request: FakeRequest): FakeReply {
   const last = request.messages.at(-1);
   if (isChild(request)) {
+    const brief = request.messages[0]?.content ?? "";
+    const ran = request.messages.some((message) => message.role === "tool");
+    if (brief.includes("fail after a nap")) return ran ? { fail: { status: 401, message: "the login expired" } } : { call: { name: "bash", arguments: { command: "sleep 4" } } };
+    if (brief.includes("fail after a cut")) return ran ? { call: { name: "bash", arguments: { command: "echo never-ran" } }, finish: "content_filter" } : { call: { name: "bash", arguments: { command: "echo step one" } } };
+    if (brief.includes("fail after a step")) return last?.role === "user" ? { call: { name: "bash", arguments: { command: "echo step one" } } } : { fail: { status: 401, message: "the login expired" } };
+    if (brief.includes("flaky") && flaky++ === 0) return { fail: { status: 503, message: "overloaded" } };
     if (last?.role === "tool" && last.content.includes('"id"')) return { text: "told the main agent" };
     if (last?.role !== "user") return { text: "done waiting" };
     if (last.content.includes("and tell")) return { call: { name: "bash", arguments: { command: `pots wake --note "the answer is 42, Alice should know"` } } };
@@ -50,6 +58,7 @@ function script(request: FakeRequest): FakeReply {
     return { text: "the answer is 42" };
   }
   if (last?.role !== "user") return { text: "done" };
+  if (last.content.startsWith("[wake] your child")) return { call: { name: "send", arguments: { to: "test:#general", text: `report: ${wakeLine(last.content)}` } } };
   const place = /\b[a-z0-9][a-z0-9-]*:#[\w-]+/.exec(last.content)?.[0];
   if (last.content.startsWith("[wake] wake from your child")) {
     const note = /^Note: (.*)/m.exec(last.content)?.[1] ?? "?";
@@ -72,6 +81,11 @@ function script(request: FakeRequest): FakeReply {
     return { call: { name: "task", arguments: { action: "start", title: "waiter", brief: `wait for go, then answer (${on ?? "no model"})`, ...choice } } };
   }
   if (last.content.includes("please write at length")) return { call: { name: "task", arguments: { action: "start", title: "long", brief: "answer at length" } } };
+  if (last.content.includes("please hold")) return { call: { name: "bash", arguments: { command: "sleep 10" } } };
+  if (last.content.includes("please fail slowly")) return { call: { name: "task", arguments: { action: "start", title: "doomed", brief: "fail after a nap" } } };
+  if (last.content.includes("please fail cut off")) return { call: { name: "task", arguments: { action: "start", title: "doomed", brief: "fail after a cut" } } };
+  if (last.content.includes("please fail")) return { call: { name: "task", arguments: { action: "start", title: "doomed", brief: "fail after a step" } } };
+  if (last.content.includes("please retry")) return { call: { name: "task", arguments: { action: "start", title: "flaky", brief: "flaky, then answer" } } };
   if (last.content.includes("please nap")) return { call: { name: "task", arguments: { action: "start", title: "nap", brief: "nap first, then answer" } } };
   if (last.content.includes("please note")) return { call: { name: "task", arguments: { action: "start", title: "note", brief: "save a memory", thinking: "max" } } };
   if (last.content.includes("please research")) {
@@ -81,10 +95,14 @@ function script(request: FakeRequest): FakeReply {
   return { text: "nothing to do" };
 }
 
+/** How many requests the flaky child made. */
+let flaky = 0;
+
 /** A command that hangs after one line of output; the process that hangs writes its ID to hang.pid in the workspace. */
 const HANG = "sleep 6131 & echo $! > hang.pid; echo probing 5901; wait";
 
 async function setUp(options: { moreModels?: boolean; definition?: Record<string, unknown>; promptCacheSeconds?: number } = {}): Promise<void> {
+  flaky = 0;
   model = await startFakeModel(script);
   // The fake models have pi's long prompt cache entry, and pi is told to use it everywhere: still only the main agent asks.
   gateway = new TestGateway({
@@ -102,6 +120,10 @@ async function setUp(options: { moreModels?: boolean; definition?: Record<string
 }
 
 const reports = () => gateway.sent().filter((record) => record.text?.startsWith("report:"));
+/** The wakes for a child's failure, as the bot recorded them. */
+const failureWakes = () => gateway.query<{ id: string; place: string | null; text: string }>("SELECT id, place, text FROM bot_wakes WHERE reason = 'child'");
+/** Drop the output lines of the test's own failures, which afterEach would count. */
+const forgetFailures = () => gateway.output.splice(0, gateway.output.length, ...gateway.output.filter((line) => !/failed/i.test(String(line.message))));
 /** Whether a child ended and waits for a message, as pots children shows it. */
 const ended = (id: string) => new RegExp(`^${id} "[^"]*": ended`, "m").test(gateway.pots("children"));
 /** The child's final message as the task tool's result gives it to the main agent, after a person asks for it. */
@@ -203,6 +225,116 @@ describe("children", { timeout: 90_000 }, () => {
       { child: "c1", source: null },
       { child: null, source: "c1" },
     ]);
+  });
+
+  it("wakes the main agent once when a child fails, for its place, with why and what it did last", async () => {
+    await setUp();
+    gateway.say("general", "alice", `@${ME} please fail`);
+    await waitFor(() => reports().length === 1, { what: "the failure's report" });
+    expect(reports()[0]!.text).toMatch(/^report: \[wake\] your child c1 failed: model_error: .*the login expired/);
+    const wake = failureWakes();
+    expect(wake).toHaveLength(1);
+    expect(wake[0]!.place).toBe("test:#general");
+    expect(wake[0]!.text).toMatch(/^Child: c1 "doomed", for test:#general, started .*, ran \d+ s$/m);
+    expect(wake[0]!.text).toMatch(/^Last, it called bash: echo step one$/m);
+    expect(gateway.pots("children")).toMatch(/^c1 "doomed": failed \(model_error: .*the login expired/m);
+    await pause(2_000);
+    expect(failureWakes()).toHaveLength(1);
+    expect(reports()).toHaveLength(1);
+    forgetFailures();
+  });
+
+  for (const when of ["before", "after"] as const) {
+    it(`wakes the main agent once for a child's failure when the gateway dies ${when} the wake`, async () => {
+      await setUp();
+      gateway.crashAroundNextChildFailure(when);
+      gateway.say("general", "alice", `@${ME} please fail`);
+      await gateway.exited();
+      expect(gateway.output.some((line) => line.message === `crash test: dying ${when} the child's failure wake`)).toBe(true);
+      expect(reports()).toHaveLength(0);
+
+      await gateway.start();
+      await waitFor(() => reports().length === 1, { what: "the failure's report" });
+      await pause(2_000);
+      expect(reports()).toHaveLength(1);
+      expect(failureWakes()).toHaveLength(1);
+      expect(mainRequests().filter((request) => request.messages.at(-1)?.content.startsWith("[wake] your child"))).toHaveLength(1);
+      forgetFailures();
+    });
+  }
+
+  it("wakes the main agent once for a brief and a message that fail in one run, and again for a later failure", async () => {
+    await setUp();
+    gateway.say("general", "alice", `@${ME} please fail slowly`);
+    await waitFor(() => /In bash for \d+ s: sleep 4/.test(gateway.pots("children")), { what: "the child's nap" });
+    // Taken between the child's steps: it joins the run that fails.
+    gateway.say("general", "alice", `@${ME} please tell c1 more`);
+    await waitFor(() => taskResult("Sent to c1") !== undefined, { what: "the send" });
+    await waitFor(() => reports().length === 1, { what: "the failure's report" });
+    expect(model.requests.filter(isChild).at(-1)!.messages.at(-1)!.content).toBe("[message from the main agent]\nmore");
+    await pause(2_000);
+    expect(failureWakes()).toHaveLength(1);
+    expect(reports()).toHaveLength(1);
+
+    // A later message fails in a run of its own: a wake again.
+    gateway.say("general", "alice", `@${ME} please tell c1 more`);
+    await waitFor(() => reports().length === 2, { what: "the second failure's report" });
+    await pause(2_000);
+    expect(failureWakes()).toHaveLength(2);
+    forgetFailures();
+  });
+
+  it("names in a failure's wake the last step that ran, not tool calls of an answer that was cut off", async () => {
+    await setUp();
+    gateway.say("general", "alice", `@${ME} please fail cut off`);
+    await waitFor(() => failureWakes().length === 1, { what: "the failure wake", timeout: 30_000 });
+    expect(failureWakes()[0]!.text).toMatch(/^Last, it called bash: echo step one$/m);
+    expect(failureWakes()[0]!.text).not.toContain("never-ran");
+    forgetFailures();
+  });
+
+  it("withdraws a failure wake that waits in the main agent's queue when the child is stopped", async () => {
+    await setUp();
+    gateway.say("general", "alice", `@${ME} please fail slowly`);
+    await waitFor(() => /In bash for \d+ s: sleep 4/.test(gateway.pots("children")), { what: "the child's nap" });
+    // The main agent is busy when the failure comes, so its wake waits in the queue.
+    gateway.say("general", "alice", `@${ME} please hold`);
+    await waitFor(() => failureWakes().length === 1, { what: "the failure wake" });
+    const wake = () => gateway.query<{ status: string; reason: string | null }>(`SELECT status, json_extract(record, '$.reason') AS reason FROM pi_submissions WHERE request_id LIKE '"child-end:%'`);
+    expect(wake()).toEqual([{ status: "queued", reason: null }]);
+    expect(gateway.pots("children", "--stop", "c1")).toMatch(/Stopped c1/);
+    await waitFor(() => wake()[0]?.status === "unanswered", { what: "the withdrawn wake" });
+    expect(wake()).toEqual([{ status: "unanswered", reason: "aborted" }]);
+    // The main agent ends its command and never sees the wake.
+    await waitFor(() => mainRequests().some((request) => request.messages.at(-1)?.role === "tool" && request.messages.at(-3)!.content.includes("please hold")), { what: "the end of the main agent's command", timeout: 20_000 });
+    await pause(1_000);
+    expect(mainRequests().some((request) => request.messages.some((message) => message.content.startsWith("[wake] your child")))).toBe(false);
+    expect(reports()).toHaveLength(0);
+    forgetFailures();
+  });
+
+  it("does not wake the main agent for a model request that fails once and is retried", async () => {
+    await setUp();
+    gateway.say("general", "alice", `@${ME} please retry`);
+    await waitFor(() => ended("c1"), { what: "the child's end", timeout: 30_000 });
+    expect(flaky).toBe(2);
+    await pause(1_000);
+    expect(failureWakes()).toHaveLength(0);
+    expect(await resultOf("c1")).toMatch(/\nIts last final message:\nthe answer is 42$/);
+    forgetFailures();
+  });
+
+  it("wakes the main agent each time a routine's child fails", async () => {
+    await setUp();
+    gateway.pots("routine", "add", "doomed", "--every", "3s", "--child", "fail after a step");
+    await waitFor(() => failureWakes().length === 2, { what: "two failure wakes", timeout: 30_000 });
+    gateway.pots("routine", "remove", "doomed");
+    const [first, second] = failureWakes();
+    expect(first!.place).toBeNull();
+    expect(first!.text).toMatch(/^\[wake\] your child c1 failed: model_error/);
+    expect(first!.text).toMatch(/^Child: c1 "doomed", started by routine doomed, started /m);
+    expect(second!.text).toMatch(/^\[wake\] your child c2 failed: model_error/);
+    forgetFailures();
   });
 
   it("starts a child for a routine without waking the main agent, and skips the routine's time while that child works", async () => {
@@ -316,6 +448,7 @@ describe("children", { timeout: 90_000 }, () => {
     await pause(2_000);
     expect(model.requests.filter(isChild)).toHaveLength(2);
     expect(wakeLine(gateway.pots("children"))).toMatch(/^c1 "research": stopped/);
+    expect(failureWakes()).toHaveLength(0);
   });
 
   it("keeps a child's answer when a stop comes after the answer, before its reporter kept it", async () => {
@@ -382,6 +515,7 @@ describe("children", { timeout: 90_000 }, () => {
     expect(after.messages[3]!.content).toBe("[message from the main agent]\nwrap up");
     expect(hangRuns()).not.toBe(true);
     expect(gateway.pots("children")).toMatch(/^c1 "probe": ended \d+ s ago, waits for a message, for test:#general, thinking xhigh$/m);
+    expect(failureWakes()).toHaveLength(0);
   });
 
   it("interrupts a command that a child's script runs, and the child goes on", async () => {

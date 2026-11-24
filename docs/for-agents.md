@@ -105,7 +105,7 @@ A real example: on 2026-11-14, Probe, the bot that develops Pots, made Bloom, a 
 ## When something goes wrong
 
 - `pots status` shows whether the gateway runs and each bot's state. When the bot cannot use its model, which is usually a model login, it says "I could not work on this" in the place that woke it; `pots status` and `pots chat` show why.
-- `pots children` lists the children a bot started for longer work in the background, and `pots children --stop <id>` or `--stop-all` stops them; a stopped child does nothing more.
+- `pots children` lists the children a bot started for longer work in the background, also those its children started, and `pots children --stop <id>` or `--stop-all` stops them, with what they started; a stopped child does nothing more.
 - If a bot's `bot.json` has an error, the reason is in `bot.json.error` next to it, and the old definition stays in use.
 - `pots service logs` and `pots trace` show what happened.
 - Report bugs at https://github.com/Crokily/pi-durable-bot/issues.

@@ -56,6 +56,8 @@ import {
   childInfo,
   childrenExtension,
   describeActivity,
+  descendants,
+  endWaits,
   failureRequestId,
   lastStep,
 } from "./children.ts";
@@ -492,7 +494,7 @@ export class Agent {
       if (!part.pin || text === undefined) return text;
       return input.shown[part.name] ?? (await firstText(input.conversationId, part.name, context)) ?? text;
     };
-    // A child has the main agent's coding tools and screen, with its own prompt: no channel actions and no task tool.
+    // A child has the main agent's coding tools, screen and task tool, with its own prompt: no channel actions.
     const child = defineExtension({
       name: "child",
       tools: [screenTool],
@@ -578,10 +580,10 @@ export class Agent {
       max: () => options.children.max(),
       place: () => options.children.place(),
       extensions: () => childExtensions,
+      last: async (conversationId, context) => lastStep(await self().#harness.conversation(conversationId, context), context).catch(() => undefined),
       // With what the child did last, read from its conversation.
       failed: async (failure, context) => {
-        const conversation = await self().#harness.conversation(Number(failure.child.conversationId) as ConversationId, context);
-        const last = await lastStep(conversation, context).catch(() => undefined);
+        const last = await lastStep(await self().#harness.conversation(Number(failure.child.conversationId) as ConversationId, context), context).catch(() => undefined);
         return options.children.failed(last === undefined ? failure : { ...failure, last }, context);
       },
       withdraw: async (submission) => {
@@ -603,8 +605,8 @@ export class Agent {
       afterFailed: (reporter) => agent?.crashTests.afterChildFailure?.(reporter),
     });
     const tasks = childrenTools.extension;
-    // A child has the main agent's extensions without its channel actions and its task tool, and with its own prompt.
-    const childExtensions = { add: [child], remove: [bot, tasks] };
+    // A child has the main agent's extensions without its channel actions, and with its own prompt.
+    const childExtensions = { add: [child], remove: [bot] };
     const memory = options.memory ? new MemoryPasses({ host: options.memory, sql: options.database, cwd: options.workspace, context, log: options.log }) : undefined;
     const registry = createRegistry();
     registry.install(fitImages);
@@ -907,18 +909,25 @@ export class Agent {
       const state = await tx.doc(Children, ROOT_CONVERSATION_ID);
       const record = Object.hasOwn(state.children, id) ? state.children[id] : undefined;
       if (!record) return undefined;
-      if (record.stopFinished) return { title: record.title, stopped: true } as const;
-      // A stop that a crash cut off is done again from here.
-      const marked = record.stoppedAt === undefined;
-      record.stoppedAt ??= Date.now();
-      delete record.since;
-      return { stopped: false, marked, ...stopOf(state, record) } as const;
+      // With the children it started, and theirs, in the same commit, so none of them goes on without the others.
+      const stops: (Stop & { marked: boolean })[] = [];
+      for (const each of [record, ...descendants(state, id).map((below) => state.children[below]!)]) {
+        if (each.stopFinished) continue;
+        // A stop that a crash cut off is done again from here.
+        const marked = each.stoppedAt === undefined;
+        each.stoppedAt ??= Date.now();
+        delete each.since;
+        await endWaits(tx, each);
+        stops.push({ marked, ...stopOf(state, each) });
+      }
+      return { title: record.title, stops };
     }, context);
     if (!found) return `No child ${id}.`;
-    if (found.stopped) return `${id} ("${found.title}") was stopped before.`;
-    if (found.marked) this.crashTests.afterStopMark?.(id);
-    await this.#finishStop(found);
-    return `Stopped ${id} ("${found.title}"). Nothing comes back from it.`;
+    for (const stop of found.stops) if (stop.marked) this.crashTests.afterStopMark?.(stop.id);
+    for (const stop of found.stops) await this.#finishStop(stop);
+    if (found.stops[0]?.id !== id) return `${id} ("${found.title}") was stopped before.`;
+    const below = found.stops.slice(1).map((stop) => stop.id);
+    return `Stopped ${id} ("${found.title}")${below.length > 0 ? ` and the children it started: ${below.join(", ")}` : ""}. Nothing comes back from ${below.length > 0 ? "them" : "it"}.`;
   }
 
   /** End a stopped child's work, then record that, so a stop cut off by a crash is finished at the next start. */
@@ -968,7 +977,9 @@ export class Agent {
   /** Stop every child that is not stopped yet. Returns what happened to each. */
   async stopChildren(): Promise<string[]> {
     const results: string[] = [];
-    for (const child of this.#children) if (child.stoppedAt === undefined) results.push(await this.stopChild(child.id));
+    // A child stops with the one that started it.
+    const live = new Set(this.#children.flatMap((child) => (child.stoppedAt === undefined ? [child.id] : [])));
+    for (const child of this.#children) if (live.has(child.id) && !(child.parent && live.has(child.parent))) results.push(await this.stopChild(child.id));
     return results;
   }
 

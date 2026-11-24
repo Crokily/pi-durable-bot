@@ -88,6 +88,8 @@ export function botPaths(dir: string) {
     crashBeforeChildFailure: join(dir, "crash-before-child-failure"),
     crashAfterChildFailure: join(dir, "crash-after-child-failure"),
     holdChildKeep: join(dir, "hold-child-keep"),
+    holdAfterChildStop: join(dir, "hold-after-child-stop"),
+    holdChildStart: join(dir, "hold-child-start"),
     crashBeforeMemoryPass: join(dir, "crash-before-memory-pass"),
     /** A note from pots init: the bot is woken with it at its first start, then the file is removed. */
     firstWake: join(dir, "first-wake.md"),

@@ -106,15 +106,17 @@ const turnPage = Command.make("turn-page", { note: Flag.String("note").pipe(Flag
 const children = Command.make(
   "children",
   {
-    stop: Flag.String("stop").pipe(Flag.optional, Flag.withDescription("Stop the child with this ID, and what it runs.")),
-    all: Flag.Boolean("stop-all").pipe(Flag.withDefault(false), Flag.withDescription("Stop every child.")),
+    stop: Flag.String("stop").pipe(Flag.optional, Flag.withDescription("Stop the child with this ID, what it runs and the children it started. In a child's commands, only a child it started.")),
+    all: Flag.Boolean("stop-all").pipe(Flag.withDefault(false), Flag.withDescription("Stop every child; in a child's commands, every child it started.")),
     bot,
   },
   (input) =>
     Effect.gen(function* () {
       const id = yield* resolveBot(input.bot);
-      if (input.all) return yield* printResult(yield* control(id, "POST", "/children/stop", { all: true }));
-      if (Option.isSome(input.stop)) return yield* printResult(yield* control(id, "POST", "/children/stop", { id: input.stop.value }));
+      // In a child's commands, Pots sets POTS_CHILD to its ID: it stops only the children it started.
+      const by = process.env.POTS_CHILD ? { by: process.env.POTS_CHILD } : {};
+      if (input.all) return yield* printResult(yield* control(id, "POST", "/children/stop", { all: true, ...by }));
+      if (Option.isSome(input.stop)) return yield* printResult(yield* control(id, "POST", "/children/stop", { id: input.stop.value, ...by }));
       const result = (yield* control(id, "GET", "/children")) as { text: string };
       yield* printResult(result.text);
     }),

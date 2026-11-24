@@ -157,12 +157,12 @@ describe("children", { timeout: 90_000 }, () => {
     await setUp();
     gateway.say("general", "alice", `@${ME} please research`);
     await waitFor(() => ended("c1"), { what: "the child's end" });
-    // The child started from the brief alone, with its ID, the working tools but no channel actions and no task tool,
+    // The child started from the brief alone, with its ID, the working tools and the task tool but no channel actions,
     // and its prompt does not tell it how to use them.
     const child = model.requests.find(isChild)!;
     expect(child.messages.map((message) => message.role)).toEqual(["user"]);
     expect(child.messages[0]!.content).toBe("[brief from the main agent; you are child c1]\nfind the answer");
-    expect(child.tools).toEqual(["read", "write", "edit", "bash", "grep", "find", "codemode", "screen"]);
+    expect(child.tools).toEqual(["read", "write", "edit", "bash", "grep", "find", "task", "codemode", "screen"]);
     expect(child.system).not.toMatch(/pots send|pots react|pots call|ask-secret/);
     expect(gateway.pots("children")).toMatch(/^c1 "research": ended .* ago, waits for a message, for test:#general, thinking xhigh$/m);
     // The main agent's requests keep the provider's long prompt cache entry, as it is woken minutes to an hour apart; the

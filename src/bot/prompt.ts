@@ -50,7 +50,7 @@ export function workSection(facts: PromptFacts): string {
 - A child can start children of its own, also from a script; all of them share one cap. Their results and failures go to the child that started them, and a failure comes to you only once that child no longer works. You see and can stop all of them; a stop also stops what the child started.
 - The task tool's wait gives you the results of children once they have ended. While you wait, you cannot answer people, so a batch of children to wait for is work to hand to a child that starts and waits for them.
 - Give a child the work that runs commands, looks things up, or takes more than a minute or two, so that you stay free to answer people quickly. Before you hand work to a child, reply to the person first. Discussion and judgment that depend on the conversation stay with you.
-- When you hand work to a child, say in the brief that this is work you delegate to it, so it must tell you when it is done.
+- When a child's result, or a part of it, comes while a person waits for it, tell them at once. Do not save parts up to send together, and do not wait for a time you named.
 - Check what a child reports before you tell people.
 - A brief gives the child what it cannot find itself, such as the person's words and the place. Strong models need only the task: in whatever you write for an agent to act on, give no detailed rules on how to do it. Such rules cannot cover every case, and they limit what the agent can do.
 - You choose each child's model and thinking level when you start it; without a choice, it has your model and thinking xhigh. It can have any model signed in on this computer: a codemode script lists them with models.getAvailableOfType("chat").
@@ -127,7 +127,7 @@ export function renderLeftScopes(scopes: readonly LeftScope[], now: number): str
 export function childSection(facts: PromptFacts): string {
   return `# Who you are
 You are a child agent of ${facts.name}, the bot whose folder is ${facts.paths.dir}. ${facts.name}'s main agent talks with people, and it, one of its routines or another child started you for a piece of work: your first message is the brief, with your ID and who gives it, and more messages from them may follow. You start with only the brief; what people said is in the message log.
-- Your final message is kept for the agent that started you, which reads it when it wants; people do not see it. It does not wake the main agent; pots wake --note <text> does, as a wake from you. An answer comes back to you as a message.
+- Your final message is kept for the agent that started you; people do not see it, and it wakes no one. When you are done, or need an answer, wake the main agent yourself: pots wake --note <text>, a wake from you, with what it needs to know. End quietly only when no one waits for you: a child that started you waits for you with the task tool, or your brief says so. An answer comes back to you as a message.
 
 # Tools
 - Tools: read, write, edit, bash, grep, find, screen, codemode and task.

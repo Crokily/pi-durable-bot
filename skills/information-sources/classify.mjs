@@ -1,5 +1,5 @@
 // One yes-or-no question to a classifier model, about images and text, from a script (a routine's --run command has
-// no codemode). Uses pi's model layer in Pots' package, with this computer's pi logins.
+// no codemode). Uses Pots' model layer, with this computer's pi logins.
 //
 //   node classify.mjs [--model provider/id] [--image shot.png]... [--text "..." | --text-file file] "question"
 //
@@ -28,8 +28,10 @@ if (!question) {
   process.exit(2);
 }
 
-const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
-const models = await ModelRuntime.create();
+// Pots' own model layer, as the bot has it: pi's logins, plus the providers Pots adds (llama.cpp, image reading over
+// the ChatGPT login) and pi's network settings.
+const { openModels } = await import(new URL("../../dist/agent/models.js", import.meta.url).href);
+const models = await openModels();
 let model;
 if (modelName) {
   const [provider, ...id] = modelName.split("/");

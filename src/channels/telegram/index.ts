@@ -356,7 +356,7 @@ class TelegramChannel implements ChannelAdapter {
       place: this.#place(m.chat),
       message: this.message(chat, m.message_id),
       ...(thread ? { thread, threadRoot: thread } : {}),
-      ...(answered ? { replyTo: this.message(chat, answered.message_id), replied: this.#replied(answered) } : {}),
+      ...(answered ? { replyTo: this.message(chat, answered.message_id) } : {}),
       ...(author ? { person: author } : {}),
       fromMe: sendId !== undefined || m.from?.id === this.#bot!.id,
       mentionsMe: parsed.isMention === true,
@@ -475,17 +475,6 @@ class TelegramChannel implements ChannelAdapter {
       fromMe: false,
       text: `clicked ${button}`,
       raw: query,
-    };
-  }
-
-  /** The message a reply answers, as Telegram gives it with the reply. */
-  #replied(m: TgMessage): NonNullable<Happening["replied"]> {
-    const author = m.sender_chat ? this.#chatAsPerson(m.sender_chat) : m.from ? this.#person(m.from) : undefined;
-    return {
-      at: m.date * 1000,
-      ...(author ? { person: author } : {}),
-      fromMe: m.from?.id === this.#bot!.id && !m.sender_chat,
-      text: m.forum_topic_created?.name ?? this.#sdk!.translate(m).text ?? "",
     };
   }
 

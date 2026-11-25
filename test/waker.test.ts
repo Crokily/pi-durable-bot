@@ -531,6 +531,32 @@ describe("the judge", () => {
     );
   });
 
+  it.effect("sees the bot's message in the same second before a new one as the message it follows (Telegram's times)", () => {
+    const judge = flaky(0);
+    return withCore({ judge: judge.judge }, (recorder) =>
+      Effect.gen(function* () {
+        const waker = yield* Waker;
+        waker.setTarget(recorder.target());
+        const root = message("general", "a topic", { person: "bloom", at: 1_000 });
+        const thread = { thread: root.message!, threadRoot: root.message! };
+        yield* logHappening(root);
+        yield* logHappening({ ...message("general", "done", { fromMe: true, at: 2_000 }), ...thread });
+        const event = yield* logHappening({ ...message("general", "thanks", { person: "colin", at: 2_000 }), ...thread });
+        yield* waker.add(event);
+        yield* advance(3_000);
+        const input = judge.asked[0]!.input;
+        assert.deepStrictEqual(
+          input.conversation.at(-1)!.messages.map((m) => [m.author, m.replyingTo, m.text]),
+          [
+            ["bloom", undefined, "a topic"],
+            ["Coworker (me)", "bloom", "done"],
+            ["colin", "Coworker (me)", "thanks"],
+          ],
+        );
+      }),
+    );
+  });
+
   it.effect("sees the message a reply in an old thread follows, also when 20 newer messages in the place hide it", () => {
     const judge = flaky(0);
     return withCore({ judge: judge.judge }, (recorder) =>
@@ -551,7 +577,8 @@ describe("the judge", () => {
           input.conversation.at(-1)!.messages.map((m) => [m.author, m.replyingTo, m.text]),
           [
             ["Coworker (me)", undefined, "@bloom a draft"],
-            ["bloom", "Coworker (me)", "the last answer"],
+            // Older than the place's last messages: what came between it and the start is not shown.
+            ["bloom", undefined, "the last answer"],
             ["colin", "bloom", "and the second part?"],
           ],
         );

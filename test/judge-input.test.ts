@@ -15,8 +15,15 @@ import { type LoggedMessage, MessageLog } from "../src/gateway/log.ts";
 const BOT = { name: "Probe", responsibilities: "Pots development", place: "dev (channel)" };
 const PEOPLE: Record<string, string> = { colin: "Colin", bloom: "Bloom", probe: "Probe", carol: "Carol" };
 
-/** A logged message at minute `at`, by a person ("probe" is the bot), in a thread (its root's address). */
-function logged(address: string, by: string, at: number, text: string, options: { thread?: string; replyTo?: string; deleted?: boolean } = {}): LoggedMessage {
+let seq = 0;
+/** A logged message at minute `at`, by a person ("probe" is the bot), in a thread (its root's address); logged in call order. */
+function logged(
+  address: string,
+  by: string,
+  at: number,
+  text: string,
+  options: { thread?: string; replyTo?: string; deleted?: boolean; fromEdit?: boolean } = {},
+): LoggedMessage {
   return {
     address,
     place: "p",
@@ -26,9 +33,10 @@ function logged(address: string, by: string, at: number, text: string, options: 
     from_me: by === "probe" ? 1 : 0,
     text,
     at: at * 60_000,
-    edited_at: null,
+    edited_at: options.fromEdit ? at * 60_000 : null,
     deleted_at: options.deleted ? 1 : null,
     reply_to: options.replyTo ?? null,
+    seq: ++seq,
   };
 }
 
@@ -159,14 +167,61 @@ describe("the judge's input", () => {
     const last = logged("b", "bloom", 1, "the last answer", { thread: "t1" });
     const busy = Array.from({ length: 3 }, (_, i) => logged(`x${i}`, "colin", 2 + i, `elsewhere ${i}`));
     const answer = logged("n", "colin", 9, "and the second part?", { thread: "t1" });
-    assert.deepStrictEqual(judgeInputFollows([event(answer), event(root)]), [{ thread: "t1", at: 9 * 60_000, person: "colin" }]);
+    assert.deepStrictEqual(judgeInputFollows([event(answer), event(root)]), [{ thread: "t1", at: 9 * 60_000, seq: answer.seq, person: "colin" }]);
     const input = judgeInput(BOT, busy, new Map([root, last].map((m) => [m.address, m])), [event(answer)]);
     assert.deepStrictEqual(
       input.conversation.at(-1)!.messages.map((m) => [m.author, m.replyingTo, m.text]),
       [
         ["Probe (me)", undefined, "@Bloom the draft"],
-        ["Bloom", "Probe (me)", "the last answer"],
+        // Older than the place's last messages: what came between it and the thread's start is not shown.
+        ["Bloom", undefined, "the last answer"],
         ["Colin", "Bloom", "and the second part?"],
+      ],
+    );
+  });
+
+  it("gives an earlier message no one it answers when its thread's messages before it are not shown", () => {
+    // Probe started t1, Carol asked, Bloom answered Carol; then 20 posts elsewhere. Only Bloom's answer is among the
+    // place's last messages, with the thread's start brought in from before.
+    const root = logged("t1", "probe", 0, "the plan", { thread: "t1" });
+    const answer = logged("b", "bloom", 2, "yes, Carol", { thread: "t1" });
+    const busy = Array.from({ length: 20 }, (_, i) => logged(`x${i}`, "colin", 3 + i, `elsewhere ${i}`));
+    const input = judgeInput(BOT, [answer, ...busy], new Map([[root.address, root]]), [event(logged("n", "colin", 30, "thanks", { thread: "t1" }))]);
+    assert.deepStrictEqual(
+      input.conversation.at(-1)!.messages.map((m) => [m.author, m.replyingTo]),
+      [
+        ["Probe (me)", undefined],
+        ["Bloom", undefined],
+        ["Colin", "Bloom"],
+      ],
+    );
+    // Without the new event, Bloom's answer does not follow the thread's start either.
+    const quiet = judgeInput(BOT, [answer], new Map([[root.address, root]]), [event(logged("o", "colin", 30, "elsewhere"))]);
+    assert.deepStrictEqual(quiet.conversation[0]!.messages.map((m) => [m.author, m.replyingTo]), [["Bloom", undefined]]);
+  });
+
+  it("does not take a message the log has only from an edit as one a new message follows", () => {
+    // Bloom answered last; then Carol edited a post from before the bot was there, which the log has at the edit's time.
+    const root = logged("t1", "probe", 0, "the plan", { thread: "t1" });
+    const last = logged("b", "bloom", 1, "the last answer", { thread: "t1" });
+    const edited = logged("e", "carol", 2, "an old post, edited", { thread: "t1", fromEdit: true });
+    const input = judgeInput(BOT, [root, last, edited], new Map(), [event(logged("n", "colin", 3, "ship it", { thread: "t1" }))]);
+    assert.strictEqual(input.latest[0]!.replyingTo, "Bloom");
+  });
+
+  it("orders messages at the same time as the log logged them", () => {
+    // Telegram gives times in seconds: Bloom started a topic, Probe posted, and Colin posted in the same second.
+    const root = logged("t1", "bloom", 0, "a topic", { thread: "t1" });
+    const mine = logged("p", "probe", 1, "done", { thread: "t1" });
+    const colin = logged("n", "colin", 1, "thanks", { thread: "t1" });
+    // The log finds Probe's post as the one Colin's follows (log.lastInThread); it is not among the earlier messages.
+    const input = judgeInput(BOT, [root], new Map([[mine.address, mine]]), [event(colin)]);
+    assert.deepStrictEqual(
+      input.conversation[0]!.messages.map((m) => [m.author, m.replyingTo]),
+      [
+        ["Bloom", undefined],
+        ["Probe (me)", "Bloom"],
+        ["Colin", "Probe (me)"],
       ],
     );
   });
@@ -221,6 +276,33 @@ describe("the judge's input", () => {
     assert.deepStrictEqual(
       input.conversation.map((thread) => [thread.startedBy, thread.messages.map((m) => [m.author, m.replyingTo, m.text])]),
       [
+        [
+          "Probe (me)",
+          [
+            ["Probe (me)", "Bloom", "second"],
+            ["Colin", "Probe (me)", "third"],
+          ],
+        ],
+      ],
+    );
+  });
+
+  it("shows the Telegram message a reply answers in the reply's thread also when it is among the earlier messages", () => {
+    // B answers A, C answers B. B is among the earlier messages, in A's thread; it is shown in both.
+    const a = logged("A", "bloom", 0, "first", { thread: "A" });
+    const b = logged("B", "probe", 1, "second", { thread: "A", replyTo: "A" });
+    const c = logged("C", "colin", 9, "third", { thread: "B", replyTo: "B" });
+    const input = judgeInput(BOT, [a, b], new Map(), [event(c)]);
+    assert.deepStrictEqual(
+      input.conversation.map((thread) => [thread.startedBy, thread.messages.map((m) => [m.author, m.replyingTo, m.text])]),
+      [
+        [
+          "Bloom",
+          [
+            ["Bloom", undefined, "first"],
+            ["Probe (me)", "Bloom", "second"],
+          ],
+        ],
         [
           "Probe (me)",
           [
@@ -289,28 +371,48 @@ describe("the log", () => {
       yield* log.apply("mem", "e2", [{ kind: "message", at: 2, place, message: "mem:#dev/2", fromMe: false, ...by("bloom"), ...thread, text: "an answer" }]);
       yield* log.apply("mem", "e3", [{ kind: "message", at: 3, place, message: "mem:#dev/3", fromMe: false, ...by("colin"), ...thread, text: "more" }]);
       yield* log.apply("mem", "e4", [{ kind: "message", at: 4, place, message: "mem:#dev/4", fromMe: false, ...by("colin"), text: "elsewhere" }]);
-      assert.strictEqual((yield* log.lastInThread("mem:#dev/1", 9, "mem:@colin"))?.text, "an answer");
-      assert.strictEqual((yield* log.lastInThread("mem:#dev/1", 9, null))?.text, "more");
-      assert.strictEqual((yield* log.lastInThread("mem:#dev/1", 2, "mem:@colin"))?.text, "a draft");
-      assert.strictEqual(yield* log.lastInThread("mem:#dev/1", 1, null), undefined);
+      assert.strictEqual((yield* log.lastInThread("mem:#dev/1", 9, undefined, "mem:@colin"))?.text, "an answer");
+      assert.strictEqual((yield* log.lastInThread("mem:#dev/1", 9, undefined, null))?.text, "more");
+      assert.strictEqual((yield* log.lastInThread("mem:#dev/1", 2, undefined, "mem:@colin"))?.text, "a draft");
+      assert.strictEqual(yield* log.lastInThread("mem:#dev/1", 1, undefined, null), undefined);
+      // An edit of a message it did not have: not one a message follows, as its time is the edit's.
+      yield* log.apply("mem", "e5", [{ kind: "edit", at: 5, place, message: "mem:#dev/0", fromMe: false, ...by("carol"), ...thread, text: "old, edited" }]);
+      assert.strictEqual((yield* log.lastInThread("mem:#dev/1", 9, undefined, "mem:@colin"))?.text, "an answer");
     }).pipe(Effect.scoped),
   );
 
-  it.effect("keeps the message a reply answers as the platform gave it, when it does not have it, without an event", () =>
+  it.effect("counts a message at the same time as before an event's message when it logged it first", () =>
     Effect.gen(function* () {
       const log = yield* memoryLog;
       const place = { address: "mem:#dev", kind: "channel" as const };
-      const carol = { address: "mem:@carol", name: "Carol" };
-      const replied = { at: 1, person: carol, fromMe: false, text: "from before the bot" };
-      const events = yield* log.apply("mem", "e1", [
-        { kind: "message", at: 5, place, message: "mem:#dev/5", thread: "mem:#dev/1", threadRoot: "mem:#dev/1", replyTo: "mem:#dev/1", replied, fromMe: false, text: "yes" },
+      const by = (who: string) => ({ person: { address: `mem:@${who}`, name: who } });
+      const thread = { thread: "mem:#dev/1", threadRoot: "mem:#dev/1" };
+      yield* log.apply("mem", "e1", [{ kind: "message", at: 1000, place, message: "mem:#dev/1", fromMe: false, ...by("bloom"), text: "a topic" }]);
+      yield* log.apply("mem", "e2", [{ kind: "message", at: 2000, place, message: "mem:#dev/2", fromMe: true, ...by("bot"), ...thread, text: "done" }]);
+      yield* log.apply("mem", "e3", [{ kind: "message", at: 2000, place, message: "mem:#dev/3", fromMe: false, ...by("colin"), ...thread, text: "thanks" }]);
+      yield* log.apply("mem", "e4", [{ kind: "message", at: 2000, place, message: "mem:#dev/4", fromMe: false, ...by("carol"), text: "later" }]);
+      const colin = (yield* log.message("mem:#dev/3"))!;
+      assert.deepStrictEqual(
+        (yield* log.messagesBefore("mem:#dev", colin.at, 10, colin.seq)).map((m) => m.text),
+        ["a topic", "done"],
+      );
+      assert.deepStrictEqual((yield* log.messagesBefore("mem:#dev", colin.at, 10)).map((m) => m.text), ["a topic"]);
+      assert.strictEqual((yield* log.lastInThread("mem:#dev/1", colin.at, colin.seq, "mem:@colin"))?.text, "done");
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("keeps no row for the message a reply answers, so that message's own delivery later is its event", () =>
+    Effect.gen(function* () {
+      const log = yield* memoryLog;
+      const place = { address: "mem:#dev", kind: "channel" as const };
+      // A live reply before backfill brings the message it answers, which mentions the bot.
+      yield* log.apply("mem", "e1", [{ kind: "message", at: 5, place, message: "mem:#dev/5", replyTo: "mem:#dev/1", fromMe: false, text: "yes" }]);
+      assert.strictEqual(yield* log.message("mem:#dev/1"), undefined);
+      const events = yield* log.apply("mem", "e2", [
+        { kind: "message", at: 1, place, message: "mem:#dev/1", fromMe: false, mentionsMe: true, files: [{ name: "a.txt" }], text: "@bot look" },
       ]);
       assert.strictEqual(events.length, 1);
-      const [old] = yield* log.messages(["mem:#dev/1"]);
-      assert.deepStrictEqual([old?.person_name, old?.text, old?.at, old?.thread, old?.from_me], ["Carol", "from before the bot", 1, "mem:#dev/1", 0]);
-      // One the log has stays as it is.
-      yield* log.apply("mem", "e2", [{ kind: "message", at: 6, place, message: "mem:#dev/6", replyTo: "mem:#dev/5", replied: { ...replied, text: "other" }, fromMe: false, text: "no" }]);
-      assert.strictEqual((yield* log.message("mem:#dev/5"))?.text, "yes");
+      assert.deepStrictEqual([events[0]!.mentions_me, events[0]!.files], [1, JSON.stringify([{ name: "a.txt" }])]);
     }).pipe(Effect.scoped),
   );
 

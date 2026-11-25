@@ -165,8 +165,6 @@ describe("translate", () => {
         thread: "telegram:#-100200/22",
         threadRoot: "telegram:#-100200/22",
         replyTo: "telegram:#-100200/22",
-        // The message it answers, as Telegram gives it with the reply: the log keeps it when it does not have it.
-        replied: { at: 1793080262_000, person: expect.objectContaining({ address: "telegram:@999" }), fromMe: true, text: "Shall I deploy?" },
         text: "yes please",
       }),
     ]);
@@ -185,7 +183,6 @@ describe("translate", () => {
         message: "telegram:#-100300/9",
         thread: "telegram:#-100300/7",
         replyTo: "telegram:#-100300/8",
-        replied: { at: 1793080265_000, person: expect.objectContaining({ address: "telegram:@111", name: "alice" }), fromMe: false, text: "deploy failed on step 3" },
       }),
     ]);
 

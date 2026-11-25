@@ -175,13 +175,14 @@ export class Waker extends Context.Service<
 
       const askJudge = (judge: Judge, bot: WakeTarget, place: PlaceInfo, events: UndecidedEvent[], settings: WakerSettings) =>
         Effect.gen(function* () {
-          const earlier = yield* log.messagesBefore(place.address, events[0]!.at, settings.judgeContextMessages);
           const latest: NewEvent[] = [];
           for (const event of events) latest.push(yield* describe(event, bot.name));
+          const first = latest[0]!;
+          const earlier = yield* log.messagesBefore(place.address, first.at, settings.judgeContextMessages, first.kind === "message" ? first.message?.seq : undefined);
           // The message each new one follows in its thread, the start of each thread, the messages answered, and what those answer.
-          const follows = yield* Effect.forEach(judgeInputFollows(latest), (follow) => log.lastInThread(follow.thread, follow.at, follow.person));
-          const first = [...follows.filter((m) => m !== undefined), ...(yield* log.messages(judgeInputNeeds(earlier, latest)))];
-          const known = [...first, ...(yield* log.messages(judgeInputNeeds(earlier, latest, first)))];
+          const follows = yield* Effect.forEach(judgeInputFollows(latest), (follow) => log.lastInThread(follow.thread, follow.at, follow.seq, follow.person));
+          const needed = [...follows.filter((m) => m !== undefined), ...(yield* log.messages(judgeInputNeeds(earlier, latest)))];
+          const known = [...needed, ...(yield* log.messages(judgeInputNeeds(earlier, latest, needed)))];
           const responsibilities = yield* Effect.promise(() => bot.responsibilities());
           const input = judgeInput(
             { name: bot.name, responsibilities, place: `${place.name ?? place.address} (${place.kind})` },

@@ -107,7 +107,7 @@ export const LOG_SCHEMA = `Times are Unix ms. Columns that hold an address (plac
   text: the message text for message and edit, the emoji for reactions, what happened for system, interaction, form and form_opened. from_me = 1: done by you (for update: a change to your own message). raw: the platform's data (JSON), for details and for call.
   wake: how the gateway handled the event: self (yours, no notice), log (only logged), mention, dm, relevant (the judge saw a need), judge_no (the judge saw none), heard (no judge set), interaction (your button, menu, command or form was used), steer. NULL: not decided yet.
 - gw_messages(address, channel, place, thread, person, from_me, mentions_me, text, mentions, files, at, edited_at, deleted_at, send_id, raw, reply_to)
-  One row per message with its current text. thread: the thread the message is in; a message that starts a thread has its own address there. reply_to: the message it answers, where the platform says so (a reply on Telegram or Discord); when the log did not have that message, it has it as the reply gave it (no raw, no event).
+  One row per message with its current text. thread: the thread the message is in; a message that starts a thread has its own address there. reply_to: the message it answers, where the platform says so (a reply on Telegram or Discord).
   deleted_at is set for deleted messages; the text stays. mentions and files are JSON.
 - gw_places(address, channel, name, kind): kind is channel, dm (one-to-one) or group.
 - gw_people(address, channel, name, real_name)
@@ -150,7 +150,12 @@ export interface LoggedMessage {
   deleted_at: number | null;
   /** The message this one answers, where the platform says so. */
   reply_to: string | null;
+  /** The log's order: of two messages at the same time, the one it logged first has the lower seq (rowid). */
+  seq: number;
 }
+
+const MESSAGE_SELECT = `SELECT m.address, m.place, m.thread, m.person, p.name AS person_name, m.from_me, m.text, m.at, m.edited_at, m.deleted_at,
+  m.reply_to, m.rowid AS seq FROM gw_messages m LEFT JOIN gw_people p ON p.address = m.person`;
 
 export interface InboxRow {
   channel: string;
@@ -199,11 +204,17 @@ export class MessageLog extends Context.Service<
     threads(place: Address): Effect.Effect<Address[], LogError>;
     /** The places of a channel account that the log knows. */
     places(channel: string): Effect.Effect<Address[], LogError>;
-    /** Messages in a place before an event, oldest first. */
-    messagesBefore(place: Address, at: number, limit: number): Effect.Effect<LoggedMessage[], LogError>;
+    /**
+     * Messages in a place before an event, oldest first. seq: the seq of the event's message; those at the same time
+     * that the log has from before it count as before it (platforms such as Telegram give times in seconds).
+     */
+    messagesBefore(place: Address, at: number, limit: number, seq?: number): Effect.Effect<LoggedMessage[], LogError>;
     message(address: Address): Effect.Effect<LoggedMessage | undefined, LogError>;
-    /** The last message in a thread before a time, by someone other than a person (null: anyone). */
-    lastInThread(thread: Address, at: number, notBy: Address | null): Effect.Effect<LoggedMessage | undefined, LogError>;
+    /**
+     * The last message in a thread before a time (and seq, as in messagesBefore), by someone other than a person (null:
+     * anyone). Not a message the log has only from an edit: its time is the edit's, not when it was written.
+     */
+    lastInThread(thread: Address, at: number, seq: number | undefined, notBy: Address | null): Effect.Effect<LoggedMessage | undefined, LogError>;
     /** The messages with these addresses that the log has. */
     messages(addresses: readonly Address[]): Effect.Effect<LoggedMessage[], LogError>;
     // Outbox
@@ -311,14 +322,15 @@ function makeLog(sql: Sql): MessageLog["Service"] {
     places: (channel) =>
       db(async () => (await sql.all<{ address: string }>("SELECT address FROM gw_places WHERE channel = ? ORDER BY address", channel)).map((row) => row.address)),
 
-    messagesBefore: (place, at, limit) =>
+    messagesBefore: (place, at, limit, seq) =>
       db(async () => {
         const rows = await sql.all<LoggedMessage>(
-          `SELECT m.address, m.place, m.thread, m.person, p.name AS person_name, m.from_me, m.text, m.at, m.edited_at, m.deleted_at, m.reply_to
-           FROM gw_messages m LEFT JOIN gw_people p ON p.address = m.person
-           WHERE m.place = ? AND m.at < ? ORDER BY m.at DESC LIMIT ?`,
+          `${MESSAGE_SELECT}
+           WHERE m.place = ? AND m.at <= ? AND (m.at < ? OR m.rowid < ?) ORDER BY m.at DESC, m.rowid DESC LIMIT ?`,
           place,
           at,
+          at,
+          seq ?? 0,
           limit,
         );
         return rows.reverse();
@@ -327,20 +339,22 @@ function makeLog(sql: Sql): MessageLog["Service"] {
     message: (address) =>
       db(() =>
         sql.get<LoggedMessage>(
-          `SELECT m.address, m.place, m.thread, m.person, p.name AS person_name, m.from_me, m.text, m.at, m.edited_at, m.deleted_at, m.reply_to
-           FROM gw_messages m LEFT JOIN gw_people p ON p.address = m.person WHERE m.address = ?`,
+          `${MESSAGE_SELECT} WHERE m.address = ?`,
           address,
         ),
       ),
 
-    lastInThread: (thread, at, notBy) =>
+    lastInThread: (thread, at, seq, notBy) =>
       db(() =>
         sql.get<LoggedMessage>(
-          `SELECT m.address, m.place, m.thread, m.person, p.name AS person_name, m.from_me, m.text, m.at, m.edited_at, m.deleted_at, m.reply_to
-           FROM gw_messages m LEFT JOIN gw_people p ON p.address = m.person
-           WHERE m.thread = ? AND m.at < ? AND (? IS NULL OR m.person IS NOT ? OR m.from_me = 1) ORDER BY m.at DESC LIMIT 1`,
+          `${MESSAGE_SELECT}
+           WHERE m.thread = ? AND m.at <= ? AND (m.at < ? OR m.rowid < ?) AND (m.edited_at IS NULL OR m.edited_at != m.at)
+             AND (? IS NULL OR m.person IS NOT ? OR m.from_me = 1)
+           ORDER BY m.at DESC, m.rowid DESC LIMIT 1`,
           thread,
           at,
+          at,
+          seq ?? 0,
           notBy,
           notBy,
         ),
@@ -351,8 +365,7 @@ function makeLog(sql: Sql): MessageLog["Service"] {
         ? Effect.succeed([])
         : db(() =>
             sql.all<LoggedMessage>(
-              `SELECT m.address, m.place, m.thread, m.person, p.name AS person_name, m.from_me, m.text, m.at, m.edited_at, m.deleted_at, m.reply_to
-               FROM gw_messages m LEFT JOIN gw_people p ON p.address = m.person WHERE m.address IN (SELECT value FROM json_each(?))`,
+              `${MESSAGE_SELECT} WHERE m.address IN (SELECT value FROM json_each(?))`,
               JSON.stringify(addresses),
             ),
           ),
@@ -404,13 +417,6 @@ async function applyOne(tx: SqlExecutor, channel: string, eventId: string, h: Ha
         h.message,
       );
       return undefined;
-    }
-    // The message it answers, as the platform gave it with the reply, when the log does not have it.
-    if (h.replyTo && h.replied && !(await tx.get("SELECT 1 AS known FROM gw_messages WHERE address = ?", h.replyTo))) {
-      if (h.replied.person) await putPerson(tx, channel, h.replied.person, now);
-      const replied: Happening = { kind: "message", ...h.replied, ...(h.place ? { place: h.place } : {}) };
-      // In the reply's thread, unless the reply's thread is the message it answers: then that becomes a thread root below.
-      await insertMessage(tx, channel, h.replyTo, replied, { thread: thread === h.replyTo ? null : thread, raw: null, editedAt: null, sendId: null });
     }
     await insertMessage(tx, channel, h.message, h, { thread, raw, editedAt: null, sendId: h.sendId ?? null });
     // A reply makes its root a thread root.

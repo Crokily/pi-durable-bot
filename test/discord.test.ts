@@ -327,7 +327,6 @@ describe("Discord channel", () => {
           type: 19,
           content: "agreed",
           message_reference: { channel_id: "20", message_id: "501" },
-          referenced_message: message({ id: "501", content: "ship it?", author: { id: "77", username: "carol" }, timestamp: "2026-01-01T00:00:00.000Z" }),
         }),
       ],
       ["THREAD_CREATE", { ...thread("610", "20", "Plan"), newly_created: true }],
@@ -335,14 +334,8 @@ describe("Discord channel", () => {
       ["MESSAGE_CREATE", message({ id: "702", message_reference: { type: 1, channel_id: "21", message_id: "900" }, content: "fwd" })],
     ]);
     const [inChannel, , inThread, forwarded] = await Promise.all(events.map(async (event) => (await translate(event.raw))[0]!));
-    // With the message it answers, as Discord gives it: the log keeps it when it does not have it.
-    expect(inChannel).toMatchObject({
-      message: "discord:#20/700",
-      replyTo: "discord:#20/501",
-      replied: { at: Date.parse("2026-01-01T00:00:00.000Z"), person: { address: "discord:@77" }, fromMe: false, text: "ship it?" },
-    });
+    expect(inChannel).toMatchObject({ message: "discord:#20/700", replyTo: "discord:#20/501" });
     expect(inThread).toMatchObject({ message: "discord:#20/610/701", thread: "discord:#20/610", replyTo: "discord:#20/610/611" });
-    expect(inThread).not.toHaveProperty("replied");
     expect(forwarded).not.toHaveProperty("replyTo");
   });
 

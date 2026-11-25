@@ -218,7 +218,8 @@ export class TestGateway {
         // no user manager, or nothing ran
       }
     }
-    rmSync(this.home, { recursive: true, force: true });
+    // On Windows a process that just ended, such as an MCP server, can hold a file there for a moment.
+    rmSync(this.home, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
 
   /** Run a pots command against this home, and return what it printed. */

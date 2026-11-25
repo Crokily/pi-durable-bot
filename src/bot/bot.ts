@@ -170,6 +170,8 @@ export class Bot implements WakeTarget {
   readonly #failureNotices = new Map<Address, { sendId: string; state: "sending" | "sent" | "unsent" }>();
   /** The ends of runs, one at a time: what they change follows each other. */
   #runEnds: Promise<void> = Promise.resolve();
+  /** The failure notices on their way. The bot stops after them, so that its stop does not cut one off. */
+  readonly #noticesSending = new Set<Promise<void>>();
   /** Places the agent sent or reacted to in its current busy period. */
   readonly #touched = new Set<Address>();
 
@@ -539,9 +541,9 @@ export class Bot implements WakeTarget {
 
   /**
    * Stop in this order: no new wakes (a decision in progress is finished and delivered), then the agent (its work in
-   * progress is interrupted and goes on after the next start), then the gateway. The gateway takes the agent's actions
-   * until the agent has stopped, so an action is never refused while the agent still works. Last, the scopes of the
-   * commands that were still running then.
+   * progress is interrupted and goes on after the next start), then what the ends of its runs do, such as a failure
+   * notice, then the gateway. The gateway takes the agent's actions until the agent has stopped, so an action is never
+   * refused while the agent still works. Last, the scopes of the commands that were still running then.
    */
   async stop(): Promise<void> {
     this.#env.pages.unregister(this.id);
@@ -554,6 +556,9 @@ export class Bot implements WakeTarget {
       await this.#control.stop();
       await this.#gateway.pauseWakes();
       await this.#agent.close();
+      // What the ends of the last runs do, such as their failure notices, before the gateway and the database stop.
+      await this.#runEnds;
+      await Promise.allSettled(this.#noticesSending);
     } finally {
       // Also when a step above failed: a bot that is stopped must not keep its channels or its file open.
       try {
@@ -727,13 +732,15 @@ export class Bot implements WakeTarget {
       const settle = (state: "sent" | "unsent") => {
         if (this.#failureNotices.get(place)?.sendId === notice.sendId) this.#failureNotices.set(place, { ...notice, state });
       };
-      this.#gateway.send(notice.sendId, place, failureNotice(limit), inputs).then(
+      const sending = this.#gateway.send(notice.sendId, place, failureNotice(limit), inputs).then(
         () => settle("sent"),
         (cause: unknown) => {
           settle("unsent");
           this.#print("could not say that the run failed", { place, error: String(cause) });
         },
       );
+      this.#noticesSending.add(sending);
+      void sending.finally(() => this.#noticesSending.delete(sending));
     }
   }
 

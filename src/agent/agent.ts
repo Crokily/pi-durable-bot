@@ -192,6 +192,13 @@ export interface AgentOptions {
   refreshPinned?: () => Promise<void>;
   /** The memory passes after each run of the main conversation, the dream and the age note; without it, there are none. */
   memory?: MemoryHost;
+  /**
+   * A host's policy, asked before every tool call of the main agent and its children, also of a codemode script's calls:
+   * pi-durable's beforeTool. It lets the call run (undefined), changes its arguments, refuses it before it runs
+   * ({ block: reason }, which the agent gets as the result), or parks it until a signal or a time ({ sleep }), such as an
+   * approval. Without it, every call runs.
+   */
+  toolPolicy?: ToolHooks["beforeTool"];
   /** pi's code mode: the codemode tool of the main agent and of every child, also without an MCP server. */
   codemode: Codemode;
   /**
@@ -574,8 +581,13 @@ export class Agent {
         searchTool(createGrepToolDefinition(options.workspace)),
         searchTool(createFindToolDefinition(options.workspace)),
       ],
-      // Every agent has these tools, so every tool result of every agent, also of a codemode script's calls, passes here.
-      hooks: [requestHooks, ...(secrets ? [hook(ToolTask, { afterTool: (_call, result) => secrets.maskResult(result) })] : [])],
+      // Every agent has these tools, so every tool call and result of every agent, also of a codemode script's calls,
+      // passes here: the host's tool policy before the call, the secrets after it.
+      hooks: [
+        requestHooks,
+        ...(options.toolPolicy ? [hook(ToolTask, { beforeTool: options.toolPolicy })] : []),
+        ...(secrets ? [hook(ToolTask, { afterTool: (_call, result) => secrets.maskResult(result) })] : []),
+      ],
     });
     // pi's code mode, for the main agent and its children. As in pi, a script waits for the MCP servers it names, or for
     // all of them when it looks tools up, so it sees their tools. A server that connected meanwhile came after this

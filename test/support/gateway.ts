@@ -26,6 +26,8 @@ export interface BotOptions {
   readonly settings?: Record<string, unknown>;
   /** More models for children: fake/helper and fake/other, and locked/model, whose provider has no key. */
   readonly moreModels?: boolean;
+  /** Another provider, spare, with the model spare/backup, at the same fake model. */
+  readonly spareProvider?: boolean;
   /** Also a terminal channel, for `pots chat`. */
   readonly terminal?: boolean;
   /**
@@ -123,6 +125,7 @@ export class TestGateway {
           models: ["coworker", ...(options.moreModels ? ["helper", "other"] : [])].map((id) => ({ id, contextWindow: 128_000, input: ["text", "image"], ...cache })),
         },
         // No key: pi knows its model, but it is not signed in.
+        ...(options.spareProvider ? { spare: { baseUrl: options.model.url, api: "openai-completions", apiKey: "fake", models: [{ id: "backup", contextWindow: 128_000 }] } } : {}),
         ...(options.moreModels ? { locked: { baseUrl: options.model.url, api: "openai-completions", models: [{ id: "model", contextWindow: 128_000 }] } } : {}),
       },
     };

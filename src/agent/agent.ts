@@ -690,7 +690,8 @@ export class Agent {
           steeringMode: "all",
           followUpMode: "all",
           afterFailedRun: "continue",
-          retry: { maxRetries: 4, baseDelayMs: 2_000 * TIME_SCALE },
+          // Whole milliseconds: pi-durable keeps the time of the next try as one.
+          retry: { maxRetries: 4, baseDelayMs: Math.ceil(2_000 * TIME_SCALE) },
           // The fallback when the agent does not turn the page itself.
           get compaction() {
             const main = agent ? agent.#model : modelRef(options.model);
@@ -1121,12 +1122,13 @@ export class Agent {
 
   /**
    * Whether a failed run's error goes away by itself, as pi-ai sees it: a network outage, an overloaded provider, a usage
-   * limit. reset: for a usage limit, when the main model's window starts again, as its provider's last answer said.
+   * limit. provider: the main model's. reset: for a usage limit, when the main model may work again (UsageLimits.reset).
    */
-  retryable(error: string): { reset?: number } | undefined {
+  retryable(error: string): { provider: string; reset?: { at: number; known: boolean } } | undefined {
     if (!isRetryableAssistantError({ stopReason: "error", errorMessage: error } as AssistantMessage)) return undefined;
-    const reset = RATE_LIMIT.test(error) ? this.#limits.reset(this.#model.provider) : undefined;
-    return reset === undefined ? {} : { reset };
+    const provider = this.#model.provider;
+    const reset = RATE_LIMIT.test(error) ? this.#limits.reset(provider) : undefined;
+    return reset === undefined ? { provider } : { provider, reset };
   }
 
   /** The submissions the current run works on, or undefined while idle. */

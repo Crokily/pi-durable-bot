@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { agentRequests, coworker, type FakeModel, judgeRequests, startFakeModel, wakeLine, wakes } from "./support/fake-model.ts";
+import { agentRequests, coworker, type FakeModel, type FakeRequest, judgeRequests, startFakeModel, wakeLine, wakes } from "./support/fake-model.ts";
 import { CHANNEL, ME, pause, TestGateway, waitFor } from "./support/gateway.ts";
 import { formatTime } from "../src/core/time.ts";
 
@@ -534,13 +534,15 @@ describe("when the model cannot be used", { timeout: 60_000 }, () => {
     gateway.output.splice(0, gateway.output.length, ...gateway.output.filter((line) => line.message !== "agent run failed"));
   });
 
-  it("after a usage limit whose end the model's last answer gave, wakes the bot a minute after that end, and says when", async () => {
+  it("after a usage limit that the model's last answer showed near its end, wakes the bot a minute after that end, and says when it tries", async () => {
     let down = false;
-    // The 5-hour window is almost used up, and starts again in a few seconds (the header has whole seconds).
-    const reset = Math.ceil((Date.now() + 6_000) / 1000);
-    const headers = { "anthropic-ratelimit-unified-5h-utilization": "0.99", "anthropic-ratelimit-unified-5h-reset": String(reset), "anthropic-ratelimit-unified-7d-utilization": "0.4", "anthropic-ratelimit-unified-7d-reset": String(reset + 86_400) };
+    // The 5-hour window is almost used up, and starts again a few seconds after the first answer (the header has whole
+    // seconds).
+    let reset: number | undefined;
     model = await startFakeModel((request) => {
       if (down) return { fail: { status: 429, message: "This request would exceed your account's rate limit. Please try again later." } };
+      reset ??= Math.ceil((Date.now() + 6_000) / 1000);
+      const headers = { "anthropic-ratelimit-unified-5h-utilization": "0.99", "anthropic-ratelimit-unified-5h-reset": String(reset), "anthropic-ratelimit-unified-7d-utilization": "0.4", "anthropic-ratelimit-unified-7d-reset": String(reset + 86_400) };
       const reply = coworker(request);
       return "fail" in reply ? reply : { ...reply, headers };
     });
@@ -554,13 +556,14 @@ describe("when the model cannot be used", { timeout: 60_000 }, () => {
     down = true;
     gateway.say("dm-alice", "alice", "and now?");
     await waitFor(() => gateway.sent().length === 2, { what: "the notice" });
+    // The 429 does not say which limit: Pots guesses, so it says only when it tries again.
     expect(gateway.sent()[1]!.text).toBe(
-      `I could not work on this: my model did not answer. It reached a usage limit, which ends at ${formatTime(reset * 1000)}. The reason is in pots status on the computer I run on.`,
+      `I could not work on this: my model did not answer. It may have reached a usage limit. I will try again at ${formatTime(reset! * 1000 + MINUTE)}. The reason is in pots status on the computer I run on.`,
     );
     await waitFor(() => modelBack().length === 1, { what: "the wake of Pots" });
-    expect(modelBack()[0]!.due_at).toBe(reset * 1000 + MINUTE);
+    expect(modelBack()[0]!.due_at).toBe(reset! * 1000 + MINUTE);
 
-    await waitFor(() => Date.now() > reset * 1000, { what: "the end of the limit", timeout: 10_000 });
+    await waitFor(() => Date.now() > reset! * 1000, { what: "the end of the limit", timeout: 10_000 });
     down = false;
     await waitFor(() => gateway.sent().length === 3, { what: "the answer after the limit", timeout: 15_000 });
     expect(wakeLine(wakes(model).at(-1)!)).toMatch(/^\[wake\] your model could not be reached/);
@@ -568,5 +571,140 @@ describe("when the model cannot be used", { timeout: 60_000 }, () => {
     expect(modelBack()).toHaveLength(1);
 
     gateway.output.splice(0, gateway.output.length, ...gateway.output.filter((line) => line.message !== "agent run failed"));
+  });
+
+  const recovery = (request: FakeRequest) => request.messages.at(-1)?.content.startsWith("[wake] your model could not be reached") === true;
+  const forget = () => gateway.output.splice(0, gateway.output.length, ...gateway.output.filter((line) => line.message !== "agent run failed"));
+
+  it("after a usage limit whose end the 429 itself gives, also with no answer before, wakes the bot after that end, and an outage then gets its own retries", async () => {
+    // A minute is 6 ms, and Pots stops trying after 2.16 s of an outage: less than the limit lasts.
+    const scale = 0.0001;
+    let reset = 0;
+    const refused = () => ({
+      "anthropic-ratelimit-unified-status": "rejected",
+      "anthropic-ratelimit-unified-reset": String(reset),
+      "anthropic-ratelimit-unified-5h-status": "rejected",
+      "anthropic-ratelimit-unified-5h-utilization": "1.0",
+      "anthropic-ratelimit-unified-5h-reset": String(reset),
+      "anthropic-ratelimit-unified-7d-status": "allowed",
+      "anthropic-ratelimit-unified-7d-utilization": "0.5",
+      "anthropic-ratelimit-unified-7d-reset": String(reset + 86_400),
+    });
+    // At the end of the limit, the provider is unavailable for a moment: one run, pi's first try and its 4 retries.
+    let outage = 5;
+    model = await startFakeModel((request) => {
+      // The limit ends a few seconds after the first request.
+      reset ||= Math.ceil((Date.now() + 4_000) / 1000);
+      if (Date.now() < reset * 1000) return { fail: { status: 429, message: "This request would exceed your account's rate limit. Please try again later.", headers: refused() } };
+      if (outage-- > 0) return { fail: { status: 503, message: "The service is temporarily unavailable" } };
+      return coworker(request);
+    });
+    gateway = new TestGateway({ model, env: { POTS_TEST_TIME_SCALE: String(scale) } });
+    await gateway.start();
+
+    gateway.say("dm-alice", "alice", "hello");
+    await waitFor(() => gateway.sent().length === 1, { what: "the notice" });
+    expect(gateway.sent()[0]!.text).toBe(
+      `I could not work on this: my model did not answer. It reached a usage limit, which ends at ${formatTime(reset * 1000)}. The reason is in pots status on the computer I run on.`,
+    );
+    await waitFor(() => modelBack().length === 1, { what: "the wake of Pots" });
+    expect(modelBack()[0]!.due_at).toBe(reset * 1000 + 60_000 * scale);
+
+    await waitFor(() => gateway.sent().length === 2, { what: "the answer after the outage at the end of the limit", timeout: 15_000 });
+    expect(modelBack().length).toBeGreaterThanOrEqual(2);
+    expect(gateway.sent()[1]!.text).toMatch(/^ack: \[wake\] your model could not be reached/);
+    forget();
+  });
+
+  it("takes up a recovery run that a restart interrupted, and wakes the bot again when it fails", async () => {
+    let interrupt: (() => void) | undefined;
+    const interrupted = new Promise<void>((resolve) => (interrupt = resolve));
+    let down = true;
+    model = await startFakeModel(async (request) => {
+      // The recovery request waits, so the gateway stops while pi tries it.
+      if (recovery(request) && interrupt) {
+        interrupt();
+        interrupt = undefined;
+        await pause(3_000);
+      }
+      return down ? { fail: { status: 503, message: "The service is temporarily unavailable" } } : coworker(request);
+    });
+    gateway = new TestGateway({ model, env: { POTS_TEST_TIME_SCALE: String(SCALE) } });
+    await gateway.start();
+
+    gateway.say("dm-alice", "alice", "are you there?");
+    await waitFor(() => gateway.sent().length === 1, { what: "the notice" });
+    await interrupted;
+    await gateway.stop();
+    expect(modelBack().map((timer) => timer.state)).toEqual(["fired"]);
+    await gateway.start();
+    // The run goes on after the start, fails, and its end sets the next wake.
+    await waitFor(() => modelBack().length === 2, { what: "the next wake of Pots", timeout: 20_000 });
+    down = false;
+    await waitFor(() => gateway.sent().length === 2, { what: "the answer after the model came back" });
+    expect(gateway.sent()[1]!.text).toMatch(/^ack: \[wake\] your model could not be reached/);
+    forget();
+  });
+
+  it("takes no extra turn for its wake when the bot works then: the run's end says whether the model works", async () => {
+    let down = true;
+    model = await startFakeModel(async (request) => {
+      if (down) return { fail: { status: 503, message: "The service is temporarily unavailable" } };
+      // The answer to the second DM takes longer than the wake of Pots is away.
+      if (request.messages.at(-1)?.content.includes("second")) await pause(3 * MINUTE);
+      return coworker(request);
+    });
+    gateway = new TestGateway({ model, env: { POTS_TEST_TIME_SCALE: String(SCALE) } });
+    await gateway.start();
+
+    gateway.say("dm-alice", "alice", "first");
+    await waitFor(() => gateway.sent().length === 1 && modelBack().length === 1, { what: "the notice, and the wake of Pots" });
+    down = false;
+    gateway.say("dm-alice", "alice", "second");
+    await waitFor(() => modelBack()[0]!.state === "fired", { what: "the wake of Pots to come while the bot works" });
+    await waitFor(() => gateway.sent().length === 2, { what: "the answer" });
+    expect(gateway.sent()[1]!.text).toBe("ack: [wake] DM");
+    await pause(3 * MINUTE);
+    expect(gateway.sent()).toHaveLength(2);
+    expect(agentRequests(model).some(recovery)).toBe(false);
+    expect(modelBack()).toHaveLength(1);
+    expect(gateway.query("SELECT value FROM bot_state WHERE key = 'model_down'")).toEqual([]);
+    forget();
+  });
+
+  it("does not keep waiting for one provider's usage limit once the bot uses another", async () => {
+    let down = false;
+    const reset = Math.ceil(Date.now() / 1000) + 3_600;
+    const headers = { "anthropic-ratelimit-unified-5h-utilization": "0.99", "anthropic-ratelimit-unified-5h-reset": String(reset) };
+    model = await startFakeModel((request) => {
+      if (request.model === "backup") return down ? { fail: { status: 503, message: "The service is temporarily unavailable" } } : coworker(request);
+      if (down) return { fail: { status: 429, message: "This request would exceed your account's rate limit. Please try again later." } };
+      const reply = coworker(request);
+      return "fail" in reply ? reply : { ...reply, headers };
+    });
+    gateway = new TestGateway({ model, spareProvider: true, env: { POTS_TEST_TIME_SCALE: String(SCALE) } });
+    await gateway.start();
+
+    const idle = () => gateway.output.filter((line) => line.message === "agent idle").length;
+    const before = idle();
+    gateway.say("dm-alice", "alice", "hello");
+    await waitFor(() => gateway.sent().length === 1 && idle() > before, { what: "the first answer, and the end of its run" });
+    down = true;
+    gateway.say("dm-alice", "alice", "and now?");
+    await waitFor(() => modelBack().length === 1, { what: "the wake after the limit" });
+    expect(modelBack()[0]!.due_at).toBe(reset * 1000 + MINUTE);
+
+    // Another provider, which is unavailable for a moment.
+    await gateway.stop();
+    const file = join(gateway.botDir, "bot.json");
+    writeFileSync(file, JSON.stringify({ ...(JSON.parse(readFileSync(file, "utf8")) as object), model: "spare/backup" }));
+    await gateway.start();
+    gateway.say("dm-alice", "alice", "still there?");
+    await waitFor(() => modelBack().length === 2, { what: "a wake for the other provider" });
+    expect(modelBack()[0]!.state).toBe("cancelled");
+    expect(modelBack()[1]!.due_at - modelBack()[1]!.created_at).toBeLessThan(2 * MINUTE);
+    down = false;
+    await waitFor(() => gateway.sent().some((sent) => /^ack: \[wake\] your model could not be reached/.test(sent.text ?? "")), { what: "the answer after the other provider came back" });
+    forget();
   });
 });

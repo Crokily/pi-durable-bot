@@ -30,8 +30,8 @@ export type FakeReply =
   | { readonly text: string; readonly headers?: Record<string, string> }
   /** finish: how the stream ends instead of tool_calls, such as content_filter for a provider that cut the answer off. */
   | { readonly call: { readonly name: string; readonly arguments: Record<string, unknown> }; readonly finish?: string; readonly headers?: Record<string, string> }
-  /** An HTTP error, such as 401 for a login that expired. */
-  | { readonly fail: { readonly status: number; readonly message: string } };
+  /** An HTTP error, such as 401 for a login that expired; headers, such as the usage limit that a 429 is for. */
+  | { readonly fail: { readonly status: number; readonly message: string; readonly headers?: Record<string, string> } };
 
 export interface FakeModel {
   /** The base URL, for models.json. */
@@ -46,7 +46,7 @@ export interface FakeModel {
  * which may wait; by default a pass answers "Nothing to save." and a dream "Nothing changed.".
  */
 export async function startFakeModel(
-  script: (request: FakeRequest) => FakeReply = coworker,
+  script: (request: FakeRequest) => FakeReply | Promise<FakeReply> = coworker,
   options: { delayMs?: number; memory?: (request: FakeRequest) => FakeReply | Promise<FakeReply> } = {},
 ): Promise<FakeModel> {
   const requests: FakeRequest[] = [];
@@ -68,11 +68,11 @@ export async function startFakeModel(
       const request = { ...toRequest(body), ...(typeof session === "string" ? { session } : {}), ...app };
       requests.push(request);
       if (options.delayMs) await new Promise((resolve) => setTimeout(resolve, options.delayMs));
-      const reply = isMemoryPass(request) || isDream(request) ? await (options.memory ?? noMemory)(request) : script(request);
+      const reply = isMemoryPass(request) || isDream(request) ? await (options.memory ?? noMemory)(request) : await script(request);
       // A gateway that died while it waited for this answer.
       if (res.destroyed) return;
       if ("fail" in reply) {
-        res.writeHead(reply.fail.status, { "content-type": "application/json" });
+        res.writeHead(reply.fail.status, { "content-type": "application/json", ...reply.fail.headers });
         res.end(JSON.stringify({ error: { message: reply.fail.message, type: "invalid_request_error" } }));
         return;
       }

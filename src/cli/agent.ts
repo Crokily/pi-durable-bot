@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { Effect, Option } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
-import { control, printResult, resolveBot, userError } from "./control.ts";
+import { commandChild, control, printResult, resolveBot, userError } from "./control.ts";
 
 // The channel actions and the bot's own controls, for the agent's shell, its scripts and scheduled jobs, and people.
 
@@ -82,8 +82,8 @@ const wake = Command.make(
       if (Option.isSome(input.cancel)) return yield* printResult(yield* control(id, "POST", "/wakes/cancel", { id: input.cancel.value }));
       const at = Option.isSome(input.in) ? Date.now() + (yield* duration(input.in.value)) : Option.isSome(input.at) ? yield* time(input.at.value) : Date.now();
       const from = Option.getOrUndefined(input.from) ?? process.env.POTS_FROM;
-      // In a child's commands, Pots sets POTS_CHILD to its ID: the wake comes from that child.
-      const child = process.env.POTS_CHILD;
+      // In a child's commands, the wake comes from that child; to another bot, from no child of its own.
+      const child = commandChild(id);
       const body = { at, note: input.note, ...(from ? { from } : {}), ...(child ? { child } : {}), ...(Option.isSome(input.id) ? { id: input.id.value } : {}) };
       yield* printResult(yield* control(id, "POST", "/wake", body));
     }),
@@ -113,8 +113,9 @@ const children = Command.make(
   (input) =>
     Effect.gen(function* () {
       const id = yield* resolveBot(input.bot);
-      // In a child's commands, Pots sets POTS_CHILD to its ID: it stops only the children it started.
-      const by = process.env.POTS_CHILD ? { by: process.env.POTS_CHILD } : {};
+      // In a child's commands, it stops only the children it started; in another bot, any of its children.
+      const child = commandChild(id);
+      const by = child ? { by: child } : {};
       if (input.all) return yield* printResult(yield* control(id, "POST", "/children/stop", { all: true, ...by }));
       if (Option.isSome(input.stop)) return yield* printResult(yield* control(id, "POST", "/children/stop", { id: input.stop.value, ...by }));
       const result = (yield* control(id, "GET", "/children")) as { text: string };

@@ -142,6 +142,18 @@ describe("pots", { timeout: 120_000 }, () => {
     // Only the page server's wakes may say that an answer came from a page.
     expect(await fails("wake", "--from", "pages")).toContain("--from pages is kept for the answers that come from your pages");
     for (const item of list) await pots("wake", "--cancel", String(item.id));
+
+    // $POTS_CHILD, as a child's commands have it, goes only to that child's own bot ($POTS_BOT): another bot's child
+    // that hands this bot something is not one of this bot's children.
+    const fromChild = async (bot: string) =>
+      JSON.parse((await gateway.run(["wake", "--bot", "coworker", "--in", "30m", "--note", "handed over"], { env: { POTS_BOT: bot, POTS_CHILD: "c7" } })).stdout) as {
+        id: number;
+        child: string | null;
+      };
+    const own = await fromChild("coworker");
+    const other = await fromChild("elsewhere");
+    expect([own.child, other.child]).toEqual(["c7", null]);
+    for (const item of [own, other]) await pots("wake", "--cancel", String(item.id));
   });
 
   it("adds, lists, replaces and removes routines", async () => {

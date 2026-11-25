@@ -353,7 +353,8 @@ describe("children that start children", { timeout: 90_000 }, () => {
     await waitFor(() => /^c3 "two": working/m.test(gateway.pots("children")), { what: "the first lead's children" });
     gateway.say("general", "alice", `@${ME} please lead start two`);
     await waitFor(() => /^c6 "two": working/m.test(gateway.pots("children")), { what: "the second lead's children" });
-    const as = { env: { POTS_CHILD: "c4" } };
+    // As a child's commands have them: its ID and its bot.
+    const as = { env: { POTS_BOT: "coworker", POTS_CHILD: "c4" } };
     expect((await gateway.run(["children", "--stop", "c2"], as)).stdout).toMatch(/No child c2 of yours/);
     expect((await gateway.run(["children", "--stop-all"], as)).stdout).toMatch(/^Stopped c5 \("one"\)\. .*\nStopped c6 \("two"\)\./);
     const children = gateway.pots("children");

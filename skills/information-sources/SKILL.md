@@ -1,6 +1,6 @@
 ---
 name: information-sources
-description: "Watching what a person wants kept an eye on that is not one of your chat channels: their mail, an issue tracker or analytics, a chat app they use in the browser or on the desktop (Slack, WeChat), a broker, a game store, social media. The ways to see that something is new, from an API to a screenshot, what each costs and how soon it sees things, how they fit routines, a cheap model that reads screenshots from a script, and methods that worked on a Pots computer: Slack through the browser's sign-in, and desktop notifications on Linux. Use when someone asks you to watch, check or keep up with something for them, or when a watch costs too much or tells them too late."
+description: "Watching what a person wants kept an eye on that is not one of your chat channels: their mail, an issue tracker or analytics, a chat app they use in the browser or on the desktop (Slack, WeChat), a broker, a game store, social media. The ways to see that something is new, from an API to a screenshot, what each costs and how soon it sees things, what to know for each source (how soon the person needs to know, what is worth telling, what you already told them, their interests), how it fits routines, a cheap model that reads screenshots from a script, and methods for some sources: Slack as the person sees it, and desktop notifications on Linux. Use when someone asks you to watch, check or keep up with something for them, or when a watch costs too much or tells them too late."
 ---
 
 # Information sources
@@ -26,6 +26,16 @@ What each step cost on one Pots computer (2026-11; dollars at API list prices, w
 | One run of a `--child` routine whose child reads new mail and decides | | about $0.50 |
 | One wake of the main agent | | $0.30–0.90, the most when its prompt cache has expired |
 
+## What to know for each source
+
+Sources differ in what the person wants from them, and one source can differ from item to item. When you set up a watch, these are worth knowing; ask the person what you cannot tell from what they said:
+
+- **How soon they need to know.** A colleague who asks them something in a chat may need an answer within minutes; a game update can wait for hours; talk about an actor they follow may be fine in an evening summary. This decides how often to check, and whether a listener is worth it.
+- **What is worth telling them.** For example: someone asks them for something, a deadline, money, something broken, a decision only they can make. Chatter, and what they already saw or answered, usually is not.
+- **What to do with it.** Handle it quietly when they agreed to that before (update the game, file the receipt), tell them now, or keep it for a summary at a time they like. One source can need all three.
+- **What you already told them.** Keep a record, one line per item (what, when, where you told them), and give it to the model that decides, so the same news does not come twice.
+- **Their interests, per source.** A short plain-text note: what they want, what they do not want, what is urgent. Give the model only the part for that source, and keep it current from how they react: a 👍 or 👎, a reply, items they ignore. At the start, a first round of a few items and a question ("do you want these? how often?") gives the note a start.
+
 ## Ways to watch a source
 
 From the cheapest and surest to the most expensive:
@@ -33,7 +43,7 @@ From the cheapest and surest to the most expensive:
 1. **An official API, CLI or MCP server** (Gmail, Slack, GitHub, Sentry, PostHog, a broker's API). Exact data, often with a "since" filter. It needs a sign-in or a key; look at what the key can do.
 2. **The source's own data, without an official API**: the JSON that a site's web page loads (the browser's developer tools show the requests; many work with the browser's sign-in cookies), RSS or Atom feeds, files that a desktop app or a game launcher writes on this computer. Nearly as cheap as 1, but it can change without notice, and some sites' terms forbid it.
 3. **What the system shows**: desktop notifications, unread counts on an icon or in a tab's title, window titles. Free and immediate, but only what the app shows (often a name and the first line), and only while the app runs and may notify. For closed apps such as WeChat on the desktop, this and 4 are often all there is.
-4. **A screenshot, read by a cheap model that reads images.** Anything the screen shows. The app must be open and not covered by another window, and the model sees only what is in the picture.
+4. **A screenshot, read by a cheap model that reads images.** Anything the screen shows. The app must be open and not covered by another window, and the model sees only what is in the picture. Compare the area with the last screenshot (a hash) and skip the model when nothing changed.
 5. **A strong model on the screen**: it looks, scrolls and clicks. The slowest and most expensive way, and other agents cannot use the screen while it works. It fits acting (replying, updating, buying) after 1–4 found something to do.
 
 They mix: a notification or an unread count (3) says when to look, a cheap model on a screenshot (4) says whether it matters, and a strong model (5) acts.
@@ -44,7 +54,7 @@ They mix: a notification or an unread count (3) says when to look, a cheap model
 - A run is skipped while the last one still runs. A failed run (an exit code that is not 0, or its `--timeout`, 10 minutes by default) wakes you once. When the source is down for a moment, the command can exit with 0 and try at the next time, and wake you when it stays broken, as when a sign-in expired.
 - Keep the last state in a file next to the script, and move it on only after a check that worked, so nothing is lost between runs.
 - `pots wake --id <item ID>` sets no second wake with the same ID, so one item wakes you once.
-- Give the model of step 2 a file with what it needs to know: who matters to the person, what they care about, what you already told them. Keep it current, or it repeats old news.
+- Give the model of step 2 the interests note and the record of what you told them, as files the script reads at each run.
 - `--child` starts a child at each time, for a check that needs tools and judgment each time (reading mail and deciding). `--note` wakes the main agent, which reads its whole conversation again: the most expensive, for what has to come to you every time.
 - From the cheapest: `--run` with no model, `--run` with a cheap model, `--run` with one call to a strong model, `--child`, `--note`.
 
@@ -70,13 +80,17 @@ Tried with 8 mock screenshots of Slack and WeChat (a quiet channel, chatter, a d
 - Jev takes at most 1568 pixels a side; a larger image fails with "Invalid image dimensions". At 960×600 it missed a small @mention that it saw at 1536×960. Shrink screenshots to about 1568 pixels, not much smaller, or crop them to the app's window. An image of 1536×960 is about 4,400 input tokens.
 - Say in the question what counts and what does not: who the person is, the names people call them, and that requests to others, bot posts and greetings do not count. On a screenshot of channel chatter, "does something need their attention?" got 0.67; the question with those details got 0.15.
 
-## Methods that worked on a Pots computer
+## Methods for some sources
 
 Written from real watches, without the people's details. When you get a way to watch another source working, keep it where other bots on this computer find it: a skill in `~/.agents/skills/` with the method, and the person's details in your own files.
 
-### Slack in the browser, through the person's sign-in
+### Slack, as the person sees it
 
-For a workspace the person uses in the browser on this computer, watched as they see it (all their channels and DMs), when you are not in that workspace with an app of your own (the slack-channel skill). Tried on Linux with Google Chrome:
+For a workspace the person uses, watched as they see it (all their channels and DMs), when you are not in it with an app of your own (the slack-channel skill). Two ways.
+
+**A read-only Slack app of the person's own.** They create an app (https://api.slack.com/apps) with read scopes only, as user scopes: `channels:history`, `groups:history`, `im:history`, `mpim:history`, `channels:read`, `groups:read`, `im:read`, `mpim:read`, `users:read`. Installed by them, it gives a user token (`xoxp-…`) that reads their conversations with the methods in step 3 below (at `https://slack.com/api/<method>`, with the header `Authorization: Bearer xoxp-…`). It cannot post, and they can revoke it alone. Installing it needs the right to install apps in the workspace: admins have it; in some workspaces others need an admin's approval. Not tried on a Pots computer yet.
+
+**The person's browser session.** The token this way gives (`xoxc-…`, used with the `d` cookie) is the person's signed-in session: it reads all they can read, and posts, reacts and changes settings as them, until that session ends. "Read only" is only what your script allows itself. Anyone who can read the file you keep them in can do the same; where several bots run as one system user, each of them can. It is not a way Slack offers for automation. Tell the person this, and about the app above, and let them choose. Tried on Linux with Google Chrome, for a workspace they use in the browser on this computer:
 
 1. Read the cookies `d` and `d-s` of `.slack.com` from the Chrome profile's `Cookies` file, a SQLite database (copy it first: Chrome keeps it open). Their values are encrypted. On Linux the key comes from the secret "Chrome Safe Storage" in the keyring (Secret Service, for example Python's `secretstorage`; the keyring is unlocked after a desktop login): PBKDF2 with SHA-1, salt `saltysalt`, 1 iteration, 16 bytes. A value that starts with `v11` is AES-128-CBC with that key and an IV of 16 spaces, after the 3 bytes of the prefix; `v10` uses the password `peanuts` instead of the secret. Newer Chrome puts the SHA-256 of the host before the value: drop those 32 bytes. macOS and Windows keep the key elsewhere (the Keychain; on Windows, app-bound encryption since Chrome 127); not tried.
 2. Load `https://<workspace>.slack.com/ssb/redirect` with a plain GET and the header `Cookie: d=<d, URL-encoded>; d-s=<d-s>`. The page has `"api_token":"xoxc-…"`. `auth.test` checks it.
@@ -85,8 +99,6 @@ For a workspace the person uses in the browser on this computer, watched as they
 
 - **Read state.** These calls and the page load mark nothing as read; `conversations.mark` would, and a message posted as the person moves their own read mark in that channel. The Slack web client marks what it shows as read. To sign in for them without it: after the sign-in, the browser lands on "Launching…" and offers to open the desktop app; cancel, and do not choose to use Slack in the browser. The cookie is set by then. (Blocking `app.slack.com` in `/etc/hosts` during the sign-in made sure the client did not load.) A sign-in with an email code in a headless browser met reCAPTCHA; in the browser on the screen it worked.
 - **What it cost.** Every 2 hours, 14 channels and 18 DMs, about 10 s a check; one Opus call with low thinking on the new messages only when someone else posted: 3 calls in a day, about $0.10 together.
-- **What the token can do.** Tell the person before you use it. The xoxc token with the `d` cookie is their signed-in session: it reads all they can read, and posts, reacts and changes settings as them, until that session ends. "Read only" is only what your script allows itself. Anyone who can read the file you keep them in can do the same; where several bots run as one system user, each of them can. It is not a way Slack offers for automation.
-- **The other choice.** A Slack app of the person's own (https://api.slack.com/apps) with read scopes only, as user scopes: `channels:history`, `groups:history`, `im:history`, `mpim:history`, `channels:read`, `groups:read`, `im:read`, `mpim:read`, `users:read`. Installed by the person, it gives a user token (`xoxp-…`) that reads their conversations through the same methods, cannot post, and can be revoked alone. Installing it needs the right to install apps in the workspace: admins have it; in some workspaces others need an admin's approval. The person chooses.
 
 ### Desktop notifications on Linux
 

@@ -646,6 +646,49 @@ describe("when the model cannot be used", { timeout: 60_000 }, () => {
     forget();
   });
 
+  it("loses none of its wakes to a kill right after a failed run, also in the middle of its retries, and does not wake again at each start", async () => {
+    let down = true;
+    model = await startFakeModel((request) => (down ? { fail: { status: 503, message: "The service is temporarily unavailable" } } : coworker(request)));
+    gateway = new TestGateway({ model, env: { POTS_TEST_TIME_SCALE: String(SCALE) } });
+    await gateway.start();
+
+    // The gateway dies right after the failed run, before it sets its wake.
+    gateway.crashBeforeNextRunEnd();
+    gateway.say("dm-alice", "alice", "are you there?");
+    await gateway.exited();
+    expect(modelBack()).toEqual([]);
+    await gateway.start();
+    await waitFor(() => gateway.sent().length === 1 && modelBack().length === 1, { what: "the notice and the wake of Pots after the start" });
+    expect(gateway.sent()[0]!.text).toMatch(/^I could not work on this: /);
+
+    // The run of that wake fails too, and the gateway dies before it sets the next one.
+    gateway.crashBeforeNextRunEnd();
+    await gateway.exited();
+    expect(modelBack().map((timer) => timer.state)).toEqual(["fired"]);
+    await gateway.start();
+    await waitFor(() => modelBack().length === 2, { what: "the next wake of Pots after the start" });
+    const second = modelBack()[1]!;
+    expect(second.due_at - second.created_at).toBeGreaterThanOrEqual(2 * MINUTE - 50);
+    expect(second.due_at - second.created_at).toBeLessThan(3 * MINUTE);
+
+    down = false;
+    await waitFor(() => gateway.sent().length === 2, { what: "the answer after the model came back" });
+    expect(gateway.sent()[1]!.text).toMatch(/^ack: \[wake\] your model could not be reached/);
+    expect(wakes(model).at(-1)!.match(/^- /gm)).toHaveLength(1);
+    await waitFor(() => gateway.query("SELECT value FROM bot_state WHERE key = 'model_down'").length === 0, { what: "the end of Pots' wakes" });
+
+    // What was seen is not seen again at the next start.
+    const recoveries = agentRequests(model).filter(recovery).length;
+    await gateway.stop();
+    await gateway.start();
+    await pause(3 * MINUTE);
+    expect(gateway.sent()).toHaveLength(2);
+    expect(modelBack()).toHaveLength(2);
+    expect(agentRequests(model).filter(recovery)).toHaveLength(recoveries);
+    expect(gateway.output.filter((line) => line.message === "a run ended before the last stop without its end being seen")).toHaveLength(2);
+    forget();
+  });
+
   it("takes no extra turn for its wake when the bot works then: the run's end says whether the model works", async () => {
     let down = true;
     model = await startFakeModel(async (request) => {

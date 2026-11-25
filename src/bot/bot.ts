@@ -112,7 +112,7 @@ const MINUTE = 60_000 * TIME_SCALE;
 /** The gaps between Pots' wakes while the model cannot be reached, in minutes; the last one repeats. */
 const MODEL_BACK_GAPS = [1, 2, 4, 8, 15, 30];
 /** Pots stops trying this long after the first wake that got no answer, unless the model's usage limit says when it ends. */
-const MODEL_BACK_FOR = 6 * 60 * MINUTE;
+const MODEL_BACK_FOR = 24 * 60 * MINUTE;
 const MODEL_BACK_NOTE = "Your model could not be reached: Pots wakes you when it may work again.";
 
 /** Runs whose model could not be reached, since the last run that worked; in bot_state, so a restart keeps it. */
@@ -172,6 +172,8 @@ export class Bot implements WakeTarget {
   #runEnds: Promise<void> = Promise.resolve();
   /** The failure notices on their way. The bot stops after them, so that its stop does not cut one off. */
   readonly #noticesSending = new Set<Promise<void>>();
+  /** Crash tests: right after a run of the main agent ended, before what its end changes. */
+  #crashBeforeRunEnd: ((run: string) => void) | undefined;
   /** Places the agent sent or reacted to in its current busy period. */
   readonly #touched = new Set<Address>();
 
@@ -216,22 +218,79 @@ export class Bot implements WakeTarget {
       const ran = working.length > 0 && inputs?.[0] !== working[0] ? working : undefined;
       working = inputs ?? [];
       if (!ran) return;
-      this.#runEnds = this.#runEnds.then(async () => {
-        const error = await this.#agent.runError(ran).catch(() => undefined);
-        if (!error) {
-          this.#failureNotices.clear();
-          await this.#modelBack().catch((cause: unknown) => this.#print("could not end the wakes after the model came back", { error: String(cause) }));
-          return;
-        }
-        this.#lastError = { at: Date.now(), error };
-        this.#print("agent run failed", { error });
-        const limit = await this.#modelDown(ran, error).catch((cause: unknown) => {
-          this.#print("could not set a wake for when the model works again", { error: String(cause) });
-          return undefined;
-        });
-        this.#tellFailure(ran, limit);
-      });
+      this.#runEnded(ran);
     });
+  }
+
+  /**
+   * What the end of a run changes: a run that worked ends Pots' wakes for the model, one that failed may set the next
+   * and tells the places. Then the run counts as seen in bot_state, so that a start after a kill in between finds it
+   * (#runEndsMissed). One at a time, in the order the runs ended.
+   */
+  #runEnded(ran: readonly string[]): void {
+    this.#runEnds = this.#runEnds.then(async () => {
+      this.#crashBeforeRunEnd?.(ran[0]!);
+      const error = await this.#agent.runError(ran).catch(() => undefined);
+      if (!error) {
+        this.#failureNotices.clear();
+        await this.#modelBack().catch((cause: unknown) => this.#print("could not end the wakes after the model came back", { error: String(cause) }));
+        await this.#seeRuns(ran);
+        return;
+      }
+      this.#lastError = { at: Date.now(), error };
+      this.#print("agent run failed", { error });
+      const limit = await this.#modelDown(ran, error).catch((cause: unknown) => {
+        this.#print("could not set a wake for when the model works again", { error: String(cause) });
+        return undefined;
+      });
+      await this.#seeRuns(ran);
+      this.#tellFailure(ran, limit);
+    });
+  }
+
+  /** The last submission whose run's end #runEnded saw, in bot_state. */
+  async #runsSeen(): Promise<number | undefined> {
+    const row = await this.#sql.get<{ value: string }>("SELECT value FROM bot_state WHERE key = 'runs_seen'");
+    return row ? Number(row.value) : undefined;
+  }
+
+  async #seeRuns(ran: readonly string[]): Promise<void> {
+    const last = Math.max(...ran.map(Number));
+    await this.#sql
+      .run(
+        "INSERT INTO bot_state (key, value) VALUES ('runs_seen', ?) ON CONFLICT (key) DO UPDATE SET value = MAX(CAST(value AS INTEGER), CAST(excluded.value AS INTEGER))",
+        String(last),
+      )
+      .catch((cause: unknown) => this.#print("could not note the end of a run", { error: String(cause) }));
+  }
+
+  /**
+   * At start, before the agent goes on: runs that ended after the last one #runEnded saw, because the last process was
+   * killed in between. Their end counts now, as if it came now; a run that still works ends later, as any run.
+   */
+  async #runEndsMissed(): Promise<void> {
+    const seen = await this.#runsSeen();
+    const working = new Set(this.#agent.runInputs ?? []);
+    const after = (
+      await this.#sql.all<{ submission: string }>(
+        "SELECT DISTINCT submission FROM bot_wakes WHERE submission IS NOT NULL AND CAST(submission AS INTEGER) > ? ORDER BY CAST(submission AS INTEGER)",
+        seen ?? 0,
+      )
+    )
+      .map((row) => row.submission)
+      .filter((submission) => !working.has(submission));
+    // The first start of a version before this one: what ended before is not looked at again.
+    if (seen === undefined) {
+      if (after.length > 0) await this.#seeRuns(after);
+      else await this.#sql.run("INSERT OR IGNORE INTO bot_state (key, value) VALUES ('runs_seen', '0')");
+      return;
+    }
+    const ended = await this.#agent.ended(after);
+    if (ended.length === 0) return;
+    this.#print("a run ended before the last stop without its end being seen", { inputs: ended });
+    // The last of them says whether the model worked; when it did not, the wakes of all of them got no answer.
+    const last = ended.at(-1)!;
+    this.#runEnded((await this.#agent.runError([last]).catch(() => undefined)) ? ended : [last]);
   }
 
   static async start(id: string, dir: string, definition: BotDefinition, env: BotEnvironment, print: Print): Promise<Bot> {
@@ -509,6 +568,9 @@ export class Bot implements WakeTarget {
       while (existsSync(paths.holdChildKeep) && !signal.aborted) await new Promise((resolve) => setTimeout(resolve, 100));
       signal.throwIfAborted();
     };
+    // Right after a run of the main agent ended, before its end is seen. The next start must see it: a failed run whose
+    // error goes away by itself sets Pots' wake for when the model works again.
+    bot.#crashBeforeRunEnd = crashTest(paths.crashBeforeRunEnd, "crash test: dying before the end of a run is seen", "run");
     // Right before a memory pass forks the main conversation. The next start must make the pass.
     agent.crashTests.beforeMemoryPass = () => crashTest(paths.crashBeforeMemoryPass, "crash test: dying before the memory pass", "bot")(id);
     for (const row of await sql.all<{ submission: string; place: string }>(
@@ -520,6 +582,7 @@ export class Bot implements WakeTarget {
     try {
       adapters = await Promise.all(definition.channels.map((channel) => bot!.#loadChannel(channel)));
       await gateway.start(bot, adapters);
+      await bot.#runEndsMissed();
       await agent.resume();
       await timers.start();
       if (existsSync(paths.firstWake)) {
@@ -783,9 +846,11 @@ export class Bot implements WakeTarget {
       pending = false;
     }
     if (!pending) {
+      // One wake per failed run, also when a start after a kill looks at the same run again (#runEndsMissed).
+      const requestId = `model-back:${Math.max(...inputs.map(Number))}`;
       if (reset !== undefined) {
         const at = reset.at + MINUTE;
-        down.timer = (await this.#timers.add(at, MODEL_BACK_NOTE, { source: MODEL_BACK })).id;
+        down.timer = (await this.#timers.add(at, MODEL_BACK_NOTE, { source: MODEL_BACK, requestId })).id;
         down.limitOf = retryable.provider;
         down.from = at;
         down.attempt = 0;
@@ -796,7 +861,7 @@ export class Bot implements WakeTarget {
           await this.#writeModelDown(undefined);
           return undefined;
         }
-        down.timer = (await this.#timers.add(at, MODEL_BACK_NOTE, { source: MODEL_BACK })).id;
+        down.timer = (await this.#timers.add(at, MODEL_BACK_NOTE, { source: MODEL_BACK, requestId })).id;
         delete down.limitOf;
         down.attempt++;
       }

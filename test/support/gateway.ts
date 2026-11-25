@@ -256,6 +256,11 @@ export class TestGateway {
     writeFileSync(join(this.botDir, "crash-before-memory-pass"), "");
   }
 
+  /** Make the gateway die right after the next run of the main agent ends, before the bot sees its end. */
+  crashBeforeNextRunEnd(): void {
+    writeFileSync(join(this.botDir, "crash-before-run-end"), "");
+  }
+
   /** Make the gateway die right after the next stop marks a child stopped, before the child's work ends. */
   crashAfterNextChildStop(): void {
     writeFileSync(join(this.botDir, "crash-after-child-stop"), "");

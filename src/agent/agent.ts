@@ -1120,6 +1120,17 @@ export class Agent {
     return undefined;
   }
 
+  /** Those of these submissions whose run ended: answered, or not and no longer can be. In the same order. */
+  async ended(inputs: readonly string[]): Promise<string[]> {
+    const ended: string[] = [];
+    for (const id of inputs) {
+      const submission = await this.#harness.submission(Number(id) as SubmissionId, context);
+      const { status } = (submission ? await submission.status(context) : { status: undefined }) as { status?: string };
+      if (status === "done" || status === "unanswered") ended.push(id);
+    }
+    return ended;
+  }
+
   /**
    * Whether a failed run's error goes away by itself, as pi-ai sees it: a network outage, an overloaded provider, a usage
    * limit. provider: the main model's. reset: for a usage limit, when the main model may work again (UsageLimits.reset).

@@ -91,7 +91,7 @@ interface ApiMessage {
   mention_roles?: string[];
   attachments?: ApiAttachment[];
   embeds?: { type?: string; title?: string; description?: string; fields?: { name: string; value: string }[] }[];
-  /** On a pin's system message: the message that was pinned. */
+  /** On a pin's system message: the message that was pinned. On a reply: the message it answers. */
   message_reference?: { message_id?: string };
   message_snapshots?: { message: { content?: string; attachments?: ApiAttachment[] } }[];
 }
@@ -578,6 +578,10 @@ export class DiscordChannel implements ChannelAdapter {
         place: await this.#placeInfo(where.place, guildId),
         message: this.#messageAt(where, message.id),
         ...(thread ? { thread, ...(kind === "message" ? { threadRoot: thread } : {}) } : {}),
+        // A reply answers a message in the same channel or thread.
+        ...(message.type === MessageType.Reply && message.message_reference?.message_id
+          ? { replyTo: this.#messageAt(where, message.message_reference.message_id) }
+          : {}),
         ...(author ? { person: await this.#personInfo(author) } : {}),
         fromMe: author !== undefined && author.id === this.#botUserId,
         mentionsMe,

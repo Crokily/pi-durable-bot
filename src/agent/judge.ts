@@ -17,14 +17,14 @@ export function createJudge(setting: JudgeSetting, models: Models, mainModel: ()
   return {
     async judge(input, trace) {
       const classifier = await requireModel(models, setting, (provider, id) => models.getModelOfType("classifier", provider, id));
-      const result = await models.classify(classifier, { state: judgeState(input), questions: judgeQuestions(input.name) }, trace ? { telemetry: trace } : {});
+      const result = await models.classify(classifier, judgeRequest(input), trace ? { telemetry: trace } : {});
       if (result.stopReason !== "stop") throw new Error(result.errorMessage ?? result.stopReason);
       return { related: probability(result.answers.related), respond: probability(result.answers.respond) };
     },
   };
 }
 
-const CHAT_JUDGE_PROMPT = `You judge events in a team chat for one team member. The user message is JSON: "state" has the team member, what they are responsible for, the place, earlier messages and the new events; "questions" has two yes-or-no questions about the new events.
+const CHAT_JUDGE_PROMPT = `You judge events in a team chat for one team member. The user message is JSON: "state" has the team member, what they are responsible for, the place, the earlier messages and the new events by thread, and the new events; "questions" has two yes-or-no questions about the new events.
 For each question, give the probability from 0 to 1 that the answer is yes. Answer with only this JSON: {"related": <probability>, "respond": <probability>}`;
 
 function chatJudge(models: Models, mainModel: () => string): Judge {
@@ -34,7 +34,7 @@ function chatJudge(models: Models, mainModel: () => string): Judge {
       // A short judgment: the lowest thinking level the model has.
       const levels = getSupportedThinkingLevels(model);
       const reasoning = (["minimal", "low"] as const).find((level) => levels.includes(level));
-      const content = JSON.stringify({ state: judgeState(input), questions: judgeQuestions(input.name) }, null, 1);
+      const content = JSON.stringify(judgeRequest(input), null, 1);
       const reply = await models.completeSimple(
         model,
         { systemPrompt: CHAT_JUDGE_PROMPT, messages: [{ role: "user", content, timestamp: Date.now() }] },
@@ -48,15 +48,43 @@ function chatJudge(models: Models, mainModel: () => string): Judge {
   };
 }
 
+/** What the judge is given: the state and the two questions. Both kinds of judge get the same. */
+export function judgeRequest(input: JudgeInput): { state: JsonObject; questions: Record<keyof JudgeAnswer, ClassifierQuestion> } {
+  return { state: judgeState(input), questions: judgeQuestions(input.name) };
+}
+
 function judgeState(input: JudgeInput): JsonObject {
   return {
     team_member: input.name,
     what_this_team_member_is_responsible_for: input.responsibilities,
     place: input.place,
-    earlier_messages: input.earlier.map((item) => ({ ...item })),
-    new_events: input.latest.map((item) => ({ ...item })),
+    conversation: input.conversation.map((thread) => ({
+      thread: threadLabel(thread.startedBy, "none: a message in the channel"),
+      ...(thread.hasNew ? { the_new_message_is_in_this_thread: true } : {}),
+      messages: thread.messages.map((m) => ({
+        ...(m.new ? { new: true } : {}),
+        ...(m.what !== undefined ? { what: m.what } : {}),
+        author: m.author,
+        ...(m.replyingTo !== undefined ? { replying_to: m.replyingTo ?? UNKNOWN_REPLY } : {}),
+        time: m.time,
+        ...(m.text !== undefined ? { text: m.text } : {}),
+      })),
+    })),
+    new_events: input.latest.map((item) => ({
+      what: item.what,
+      author: item.author,
+      time: item.time,
+      ...(item.text !== undefined ? { text: item.text } : {}),
+      thread: threadLabel(item.threadStartedBy, "none"),
+      ...(item.replyingTo !== undefined ? { replying_to: item.replyingTo ?? UNKNOWN_REPLY } : {}),
+    })),
   };
 }
+
+/** What the judge is told when the message a reply answers, or the start of a thread, is not there to see. */
+const UNKNOWN_REPLY = "unknown: the message it answers is not available";
+const threadLabel = (startedBy: string | null | undefined, none: string) =>
+  startedBy === undefined ? none : startedBy === null ? "started by someone unknown: its first message is not available" : `started by ${startedBy}`;
 
 function judgeQuestions(name: string): Record<keyof JudgeAnswer, ClassifierQuestion> {
   return {
@@ -67,8 +95,11 @@ function judgeQuestions(name: string): Record<keyof JudgeAnswer, ClassifierQuest
     },
     respond: {
       type: "bool",
-      instructions: `Does ${name} need to respond to the new events?`,
-      criteria: { true: `${name} should respond`, false: `${name} does not need to respond` },
+      instructions: `Does ${name} need to respond to the new events? A message that replies to another team member is for that team member to answer, unless it also asks ${name}.`,
+      criteria: {
+        true: `${name} should respond: the events are addressed to ${name} or reply to ${name}, or no one else is the one to answer`,
+        false: `${name} does not need to respond: the events reply to someone else, or need no answer`,
+      },
     },
   };
 }

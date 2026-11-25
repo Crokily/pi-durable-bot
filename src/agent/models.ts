@@ -186,13 +186,15 @@ export async function judgeProblem(models: Models, judge: string, mainModel = ""
   const { createJudge } = await import("./judge.ts");
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error("no answer within 60 seconds")), 60_000)));
+  const time = new Date().toISOString();
+  const text = "Is the build green?";
   try {
     const asked = createJudge(judge, models, () => mainModel)?.judge({
       name: "Pots",
       responsibilities: "The team's releases.",
       place: "general (channel)",
-      earlier: [],
-      latest: [{ what: "new message", author: "alice", time: new Date().toISOString(), text: "Is the build green?" }],
+      conversation: [{ hasNew: true, messages: [{ new: true, author: "alice", time, text }] }],
+      latest: [{ what: "new message", author: "alice", time, text }],
     });
     await Promise.race([asked, timeout]);
     return undefined;

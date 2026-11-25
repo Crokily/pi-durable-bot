@@ -346,6 +346,8 @@ class TelegramChannel implements ChannelAdapter {
     this.#learnTopics(m);
     const parsed = this.#sdk!.translate(m);
     const thread = this.#threadOf(m);
+    // The message it answers. In a forum topic, Telegram gives a message that answers nothing the topic's first message.
+    const answered = m.reply_to_message && !(m.is_topic_message && m.reply_to_message.message_id === m.message_thread_id) ? m.reply_to_message : undefined;
     // A message on behalf of a chat (a channel post, an anonymous admin) has that chat as its sender.
     const author = m.sender_chat ? this.#chatAsPerson(m.sender_chat) : m.from ? this.#person(m.from) : undefined;
     return {
@@ -354,6 +356,7 @@ class TelegramChannel implements ChannelAdapter {
       place: this.#place(m.chat),
       message: this.message(chat, m.message_id),
       ...(thread ? { thread, threadRoot: thread } : {}),
+      ...(answered ? { replyTo: this.message(chat, answered.message_id) } : {}),
       ...(author ? { person: author } : {}),
       fromMe: sendId !== undefined || m.from?.id === this.#bot!.id,
       mentionsMe: parsed.isMention === true,

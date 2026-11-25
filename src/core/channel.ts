@@ -55,6 +55,8 @@ export const Happening = Schema.Struct({
   threadRoot: Schema.optional(Schema.String),
   /** The message this is, or is about. */
   message: Schema.optional(Schema.String),
+  /** The message this one answers, where the platform says so (a reply). */
+  replyTo: Schema.optional(Schema.String),
   /** Who did it. */
   person: Schema.optional(PersonInfo),
   /** Done by this channel account itself. */

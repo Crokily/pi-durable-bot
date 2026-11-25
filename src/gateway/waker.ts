@@ -1,11 +1,12 @@
 import { Cause, Clock, Context, Effect, Fiber, FiberMap, FiberSet, Layer, Option, Result, type Tracer } from "effect";
 import type { PlaceInfo } from "../core/channel.ts";
-import type { Judge, JudgeItem } from "../core/judge.ts";
+import type { Judge } from "../core/judge.ts";
 import type { PlaceWake, PlaceWakeReason, ThreadStart, WakeEvent, WakeFile, WakeTarget } from "../core/wake.ts";
 import { Channels } from "./channels.ts";
 import { GatewayConfig } from "./config.ts";
 import { DeliverError, failureText, JudgeError, type LogError, message, NoWakeTarget } from "./errors.ts";
 import { Attachments } from "./files.ts";
+import { judgeInput, judgeInputNeeds, type NewEvent } from "./judge-input.ts";
 import { type LoggedMessage, MessageLog, type UndecidedEvent } from "./log.ts";
 import { LINK, Telemetry } from "./telemetry.ts";
 import { WakeSpans } from "./tracing.ts";
@@ -175,16 +176,16 @@ export class Waker extends Context.Service<
       const askJudge = (judge: Judge, bot: WakeTarget, place: PlaceInfo, events: UndecidedEvent[], settings: WakerSettings) =>
         Effect.gen(function* () {
           const earlier = yield* log.messagesBefore(place.address, events[0]!.at, settings.judgeContextMessages);
-          const latest: JudgeItem[] = [];
+          const latest: NewEvent[] = [];
           for (const event of events) latest.push(yield* describe(event, bot.name));
+          const known = yield* log.messages(judgeInputNeeds(earlier, latest));
           const responsibilities = yield* Effect.promise(() => bot.responsibilities());
-          const input = {
-            name: bot.name,
-            responsibilities,
-            place: `${place.name ?? place.address} (${place.kind})`,
-            earlier: earlier.map((logged) => messageItem(logged, bot.name)),
+          const input = judgeInput(
+            { name: bot.name, responsibilities, place: `${place.name ?? place.address} (${place.kind})` },
+            earlier,
+            new Map(known.map((logged) => [logged.address, logged])),
             latest,
-          };
+          );
           let lastError: unknown;
           for (const wait of [0, ...JUDGE_RETRY_MS]) {
             if (wait) yield* Effect.sleep(wait);
@@ -216,26 +217,23 @@ export class Waker extends Context.Service<
         });
 
       /** An event as the judge sees it: what happened, with the current state of the message it is about. */
-      const describe = (event: UndecidedEvent, name: string): Effect.Effect<JudgeItem, LogError> =>
+      const describe = (event: UndecidedEvent, name: string): Effect.Effect<NewEvent, LogError> =>
         Effect.gen(function* () {
           const author = event.person_name ?? event.person ?? "unknown";
           const time = new Date(event.at).toISOString();
           const logged = event.message ? yield* log.message(event.message) : undefined;
           const state = logged?.deleted_at ? " (since deleted)" : "";
-          const thread = event.thread ? { thread: event.thread } : {};
+          const where = { kind: event.kind, person: event.person, thread: event.thread, at: event.at, ...(logged ? { message: logged } : {}) };
           switch (event.kind) {
             case "message":
-              return { what: `new message${state}`, author, time, text: logged?.text ?? event.text ?? "", ...thread };
+              return { ...where, item: { what: `new message${state}`, author, time, text: logged?.text ?? event.text ?? "" } };
             case "edit":
-              return { what: `edited a message${state}`, author, time, text: logged?.text ?? event.text ?? "", ...thread };
+              return { ...where, item: { what: `edited a message${state}`, author, time, text: logged?.text ?? event.text ?? "" } };
             default: {
               const about = logged ? ` on ${logged.from_me ? `${name}'s` : `${logged.person_name ?? "someone"}'s`} message${state}` : "";
               return {
-                what: `${event.kind}${event.text && event.kind !== "update" ? ` ${event.text}` : ""}${about}`,
-                author,
-                time,
-                ...(logged ? { text: logged.text } : {}),
-                ...thread,
+                ...where,
+                item: { what: `${event.kind}${event.text && event.kind !== "update" ? ` ${event.text}` : ""}${about}`, author, time, ...(logged ? { text: logged.text } : {}) },
               };
             }
           }
@@ -361,15 +359,5 @@ function toWakeEvent(event: UndecidedEvent, messages: ReadonlyMap<string, Logged
     ...(MESSAGE_KINDS.has(event.kind) && logged?.deleted_at != null ? { deleted: true } : {}),
     ...(threadStart ? { threadStart } : {}),
     ...(files.length ? { files } : {}),
-  };
-}
-
-function messageItem(message: LoggedMessage, name: string): JudgeItem {
-  return {
-    what: message.deleted_at ? "message (since deleted)" : "message",
-    author: message.from_me ? `${name} (me)` : (message.person_name ?? message.person ?? "unknown"),
-    time: new Date(message.at).toISOString(),
-    text: message.text,
-    ...(message.thread ? { thread: message.thread } : {}),
   };
 }

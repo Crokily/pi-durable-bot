@@ -317,6 +317,20 @@ describe("Discord channel", () => {
     expect(post).toMatchObject({ place: { address: "discord:#21", name: "Lab #ideas" }, message: "discord:#21/800", thread: "discord:#21/800" });
   });
 
+  it("gives the message a reply answers, in a channel and in a thread, and none for a forwarded message", async () => {
+    const { gateway, translate } = await connect();
+    const events = await gateway([
+      ["MESSAGE_CREATE", message({ id: "700", type: 19, content: "agreed", message_reference: { channel_id: "20", message_id: "501" } })],
+      ["THREAD_CREATE", { ...thread("610", "20", "Plan"), newly_created: true }],
+      ["MESSAGE_CREATE", message({ id: "701", type: 19, channel_id: "610", channel_type: 11, content: "which one?", message_reference: { channel_id: "610", message_id: "611" } })],
+      ["MESSAGE_CREATE", message({ id: "702", message_reference: { type: 1, channel_id: "21", message_id: "900" }, content: "fwd" })],
+    ]);
+    const [inChannel, , inThread, forwarded] = await Promise.all(events.map(async (event) => (await translate(event.raw))[0]!));
+    expect(inChannel).toMatchObject({ message: "discord:#20/700", replyTo: "discord:#20/501" });
+    expect(inThread).toMatchObject({ message: "discord:#20/610/701", thread: "discord:#20/610", replyTo: "discord:#20/610/611" });
+    expect(forwarded).not.toHaveProperty("replyTo");
+  });
+
   it("makes a server's welcome message a join, once, and leaves out the bot's own", async () => {
     const { gateway, translate } = await connect();
     const [mine, alice] = await gateway([

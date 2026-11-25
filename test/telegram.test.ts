@@ -160,18 +160,21 @@ describe("translate", () => {
     ]);
     // A reply to the bot addresses it, and its thread is the message it answers.
     expect(await translate(updates.replyToBot)).toEqual([
-      expect.objectContaining({ mentionsMe: true, thread: "telegram:#-100200/22", threadRoot: "telegram:#-100200/22", text: "yes please" }),
+      expect.objectContaining({ mentionsMe: true, thread: "telegram:#-100200/22", threadRoot: "telegram:#-100200/22", replyTo: "telegram:#-100200/22", text: "yes please" }),
     ]);
 
     // A forum topic is a thread; its first message is the service message that created it, with the topic's name.
     expect(await translate(updates.topicStart)).toEqual([
       expect.objectContaining({ kind: "message", message: "telegram:#-100300/7", thread: "telegram:#-100300/7", text: "Deploys", mentionsMe: false }),
     ]);
-    expect(await translate(updates.topicMessage)).toEqual([
-      expect.objectContaining({ message: "telegram:#-100300/8", thread: "telegram:#-100300/7", threadRoot: "telegram:#-100300/7", mentionsMe: false }),
+    // Telegram gives a message in a topic the topic's first message as reply_to_message; it answers nothing.
+    const [inTopic] = await translate(updates.topicMessage);
+    expect(inTopic).toEqual(expect.objectContaining({ message: "telegram:#-100300/8", thread: "telegram:#-100300/7", threadRoot: "telegram:#-100300/7", mentionsMe: false }));
+    expect(inTopic).not.toHaveProperty("replyTo");
+    // A reply inside the topic stays in the topic's thread, and answers its message.
+    expect(await translate(updates.topicReply)).toEqual([
+      expect.objectContaining({ message: "telegram:#-100300/9", thread: "telegram:#-100300/7", replyTo: "telegram:#-100300/8" }),
     ]);
-    // A reply inside the topic stays in the topic's thread.
-    expect(await translate(updates.topicReply)).toEqual([expect.objectContaining({ message: "telegram:#-100300/9", thread: "telegram:#-100300/7" })]);
 
     expect(await translate(updates.edit)).toEqual([
       expect.objectContaining({ kind: "edit", at: 1793080320_000, message: "telegram:#-100200/20", text: "lunch at 1pm?", fromMe: false }),

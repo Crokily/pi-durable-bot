@@ -1,20 +1,46 @@
 // The interface between the gateway's waker and the judge of events that do not mention the bot. Common words only.
 import type { TelemetrySpan } from "@earendil-works/pi-telemetry";
 
-/** One event or earlier message, as the judge sees it. */
+/** A new event, as the judge sees it. */
 export interface JudgeItem {
   readonly what: string;
   readonly author: string;
   readonly time: string;
   readonly text?: string;
-  readonly thread?: string;
+  /** Who started the thread the event is in; none when it is not in a thread. */
+  readonly threadStartedBy?: string;
+  /** The author of the message it answers. */
+  readonly replyingTo?: string;
+}
+
+/** A message of the place, or a new event, in its thread. */
+export interface JudgeMessage {
+  /** One of the new events. */
+  readonly new?: boolean;
+  /** What it is, when it is not a plain message: a deleted message, an edit, a reaction. */
+  readonly what?: string;
+  readonly author: string;
+  /** The author of the message it answers. */
+  readonly replyingTo?: string;
+  readonly time: string;
+  readonly text?: string;
+}
+
+/** A thread, or a message that is not in a thread, with its messages in time order. */
+export interface JudgeThread {
+  /** Who started the thread; none for a message that is not in a thread. */
+  readonly startedBy?: string;
+  /** New events are in it. */
+  readonly hasNew: boolean;
+  readonly messages: readonly JudgeMessage[];
 }
 
 export interface JudgeInput {
   readonly name: string;
   readonly responsibilities: string;
   readonly place: string;
-  readonly earlier: readonly JudgeItem[];
+  /** The earlier messages and the new events by thread: threads in order of their last message, those with new events last. */
+  readonly conversation: readonly JudgeThread[];
   readonly latest: readonly JudgeItem[];
 }
 

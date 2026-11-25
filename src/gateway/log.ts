@@ -56,7 +56,8 @@ CREATE TABLE IF NOT EXISTS gw_messages (
   edited_at INTEGER,
   deleted_at INTEGER,
   send_id TEXT,
-  raw TEXT
+  raw TEXT,
+  reply_to TEXT
 );
 CREATE INDEX IF NOT EXISTS gw_messages_place ON gw_messages (place, at);
 CREATE INDEX IF NOT EXISTS gw_messages_thread ON gw_messages (thread, at);
@@ -105,8 +106,8 @@ export const LOG_SCHEMA = `Times are Unix ms. Columns that hold an address (plac
   Everything that happened, in order: kind is message, edit, delete, reaction_added, reaction_removed, join, leave, update (a change to a message that is not its text, for example a link preview), system (a notice from the platform, such as a pin, a new channel name or a thread that started; its text says what happened), command, interaction (someone used a button or a menu), form (someone submitted a form of yours, or one did not open), form_opened (a button opened a form of yours; its submission comes as form), or another word the channel uses.
   text: the message text for message and edit, the emoji for reactions, what happened for system, interaction, form and form_opened. from_me = 1: done by you (for update: a change to your own message). raw: the platform's data (JSON), for details and for call.
   wake: how the gateway handled the event: self (yours, no notice), log (only logged), mention, dm, relevant (the judge saw a need), judge_no (the judge saw none), heard (no judge set), interaction (your button, menu, command or form was used), steer. NULL: not decided yet.
-- gw_messages(address, channel, place, thread, person, from_me, mentions_me, text, mentions, files, at, edited_at, deleted_at, send_id, raw)
-  One row per message with its current text. thread: the thread the message is in; a message that starts a thread has its own address there.
+- gw_messages(address, channel, place, thread, person, from_me, mentions_me, text, mentions, files, at, edited_at, deleted_at, send_id, raw, reply_to)
+  One row per message with its current text. thread: the thread the message is in; a message that starts a thread has its own address there. reply_to: the message it answers, where the platform says so (a reply on Telegram or Discord).
   deleted_at is set for deleted messages; the text stays. mentions and files are JSON.
 - gw_places(address, channel, name, kind): kind is channel, dm (one-to-one) or group.
 - gw_people(address, channel, name, real_name)
@@ -147,6 +148,8 @@ export interface LoggedMessage {
   at: number;
   edited_at: number | null;
   deleted_at: number | null;
+  /** The message this one answers, where the platform says so. */
+  reply_to: string | null;
 }
 
 export interface InboxRow {
@@ -216,6 +219,9 @@ export class MessageLog extends Context.Service<
       MessageLog,
       Effect.gen(function* () {
         yield* db(() => sql.exec(SCHEMA));
+        // Logs from before a column was added get it.
+        const columns = new Set((yield* db(() => sql.all<{ name: string }>("PRAGMA table_info(gw_messages)"))).map((column) => column.name));
+        if (!columns.has("reply_to")) yield* db(() => sql.exec("ALTER TABLE gw_messages ADD COLUMN reply_to TEXT"));
         return MessageLog.of(makeLog(sql));
       }),
     );
@@ -302,7 +308,7 @@ function makeLog(sql: Sql): MessageLog["Service"] {
     messagesBefore: (place, at, limit) =>
       db(async () => {
         const rows = await sql.all<LoggedMessage>(
-          `SELECT m.address, m.place, m.thread, m.person, p.name AS person_name, m.from_me, m.text, m.at, m.edited_at, m.deleted_at
+          `SELECT m.address, m.place, m.thread, m.person, p.name AS person_name, m.from_me, m.text, m.at, m.edited_at, m.deleted_at, m.reply_to
            FROM gw_messages m LEFT JOIN gw_people p ON p.address = m.person
            WHERE m.place = ? AND m.at < ? ORDER BY m.at DESC LIMIT ?`,
           place,
@@ -315,7 +321,7 @@ function makeLog(sql: Sql): MessageLog["Service"] {
     message: (address) =>
       db(() =>
         sql.get<LoggedMessage>(
-          `SELECT m.address, m.place, m.thread, m.person, p.name AS person_name, m.from_me, m.text, m.at, m.edited_at, m.deleted_at
+          `SELECT m.address, m.place, m.thread, m.person, p.name AS person_name, m.from_me, m.text, m.at, m.edited_at, m.deleted_at, m.reply_to
            FROM gw_messages m LEFT JOIN gw_people p ON p.address = m.person WHERE m.address = ?`,
           address,
         ),
@@ -326,7 +332,7 @@ function makeLog(sql: Sql): MessageLog["Service"] {
         ? Effect.succeed([])
         : db(() =>
             sql.all<LoggedMessage>(
-              `SELECT m.address, m.place, m.thread, m.person, p.name AS person_name, m.from_me, m.text, m.at, m.edited_at, m.deleted_at
+              `SELECT m.address, m.place, m.thread, m.person, p.name AS person_name, m.from_me, m.text, m.at, m.edited_at, m.deleted_at, m.reply_to
                FROM gw_messages m LEFT JOIN gw_people p ON p.address = m.person WHERE m.address IN (SELECT value FROM json_each(?))`,
               JSON.stringify(addresses),
             ),
@@ -371,10 +377,11 @@ async function applyOne(tx: SqlExecutor, channel: string, eventId: string, h: Ha
     if (known) {
       // The same message again. Fill in what the first copy did not have.
       await tx.run(
-        "UPDATE gw_messages SET thread = coalesce(thread, ?), send_id = coalesce(send_id, ?), person = coalesce(person, ?) WHERE address = ?",
+        "UPDATE gw_messages SET thread = coalesce(thread, ?), send_id = coalesce(send_id, ?), person = coalesce(person, ?), reply_to = coalesce(reply_to, ?) WHERE address = ?",
         thread,
         h.sendId ?? null,
         h.person?.address ?? null,
+        h.replyTo ?? null,
         h.message,
       );
       return undefined;
@@ -444,8 +451,8 @@ function insertMessage(
   row: { thread: string | null; raw: string | null; editedAt: number | null; sendId: string | null },
 ): Promise<void> {
   return tx.run(
-    `INSERT INTO gw_messages (address, channel, place, thread, person, from_me, mentions_me, text, mentions, files, at, edited_at, send_id, raw)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO gw_messages (address, channel, place, thread, person, from_me, mentions_me, text, mentions, files, at, edited_at, send_id, raw, reply_to)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     address,
     channel,
     h.place?.address ?? null,
@@ -460,6 +467,7 @@ function insertMessage(
     row.editedAt,
     row.sendId,
     row.raw,
+    h.replyTo ?? null,
   );
 }
 

@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { agentRequests, coworker, type FakeModel, judgeRequests, startFakeModel, wakeLine, wakes } from "./support/fake-model.ts";
 import { CHANNEL, ME, pause, TestGateway, waitFor } from "./support/gateway.ts";
+import { formatTime } from "../src/core/time.ts";
 
 // The gateway seen from outside, with a real `pots start` process: people write on the test platform, the bot is
 // woken through a fake model, and what it sends appears on the platform. Only external behavior is checked, so these
@@ -463,6 +464,8 @@ describe("when the model cannot be used", { timeout: 60_000 }, () => {
     expect(gateway.sent()[3]!.text).toMatch(/^I could not work on this: /);
     await waitFor(() => failedRuns() === 4, { what: "the fourth failed run in the output" });
     expect(gateway.pots("status")).toMatch(/last failed run .*the login expired/);
+    // A login that expired needs a person: Pots does not wake the bot again by itself.
+    expect(gateway.query("SELECT id FROM bot_timers WHERE source = 'pots'")).toEqual([]);
 
     // These failures were the test's own.
     gateway.output.splice(0, gateway.output.length, ...gateway.output.filter((line) => line.message !== "agent run failed"));
@@ -481,6 +484,88 @@ describe("when the model cannot be used", { timeout: 60_000 }, () => {
     expect(gateway.sent().map((record) => record.place).sort()).toEqual(["dm-alice", "general"]);
     // The output can come after the notice it led to, as on Windows.
     await waitFor(() => gateway.output.filter((line) => line.message === "agent run failed").length === 2, { what: "both failed runs in the output" });
+
+    gateway.output.splice(0, gateway.output.length, ...gateway.output.filter((line) => line.message !== "agent run failed"));
+  });
+
+  // A minute is 1.2 seconds, and pi's retries come after 40 ms, 80 ms, 160 ms and 320 ms.
+  const SCALE = 0.02;
+  const MINUTE = 60_000 * SCALE;
+  const modelBack = () =>
+    gateway.query<{ id: number; due_at: number; created_at: number; state: string }>("SELECT id, due_at, created_at, state FROM bot_timers WHERE source = 'pots' ORDER BY id");
+
+  it("wakes the bot again by itself once the model works again, at growing gaps, also after a restart", async () => {
+    let down = true;
+    model = await startFakeModel((request) => (down ? { fail: { status: 503, message: "The service is temporarily unavailable" } } : coworker(request)));
+    gateway = new TestGateway({ model, env: { POTS_TEST_TIME_SCALE: String(SCALE) } });
+    await gateway.start();
+
+    gateway.say("dm-alice", "alice", "are you there?");
+    await waitFor(() => gateway.sent().length === 1, { what: "the notice" });
+    expect(gateway.sent()[0]!.text).toBe("I could not work on this: my model did not answer. The reason is in pots status on the computer I run on.");
+    // Pots' own wake a minute later fails too, and the next one comes two minutes after it.
+    await waitFor(() => modelBack().length === 2, { what: "the second wake of Pots" });
+    const [first, second] = modelBack();
+    expect(first!.state).toBe("fired");
+    expect(first!.due_at - first!.created_at).toBeGreaterThanOrEqual(MINUTE - 50);
+    expect(first!.due_at - first!.created_at).toBeLessThan(2 * MINUTE);
+    expect(second!.due_at - second!.created_at).toBeGreaterThanOrEqual(2 * MINUTE - 50);
+    expect(second!.due_at - second!.created_at).toBeLessThan(3 * MINUTE);
+    // Its run had no place, so nobody is told again.
+    expect(gateway.sent()).toHaveLength(1);
+
+    // The wake is kept across a restart, and the model works again meanwhile.
+    await gateway.stop();
+    down = false;
+    await gateway.start();
+    await waitFor(() => gateway.sent().length === 2, { what: "the answer after the model came back" });
+    const wake = wakes(model).at(-1)!;
+    expect(wakeLine(wake)).toMatch(/^\[wake\] your model could not be reached from .* until now$/);
+    expect(wake).toContain("These wakes came in that time and got no answer; their texts are earlier in this conversation:\n- ");
+    expect(wake).toMatch(/: DM, in test:#dm-alice\nLast error: .*temporarily unavailable/);
+    // Pots' own wakes are not listed.
+    expect(wake.match(/^- /gm)).toHaveLength(1);
+    expect(gateway.sent()[1]).toMatchObject({ place: "dm-alice", text: expect.stringMatching(/^ack: \[wake\] your model could not be reached/) });
+    // A run that worked ends it: no wake of Pots' own is left.
+    await pause(3 * MINUTE);
+    expect(modelBack().filter((timer) => timer.state === "pending")).toEqual([]);
+    expect(gateway.query("SELECT value FROM bot_state WHERE key = 'model_down'")).toEqual([]);
+
+    gateway.output.splice(0, gateway.output.length, ...gateway.output.filter((line) => line.message !== "agent run failed"));
+  });
+
+  it("after a usage limit whose end the model's last answer gave, wakes the bot a minute after that end, and says when", async () => {
+    let down = false;
+    // The 5-hour window is almost used up, and starts again in a few seconds (the header has whole seconds).
+    const reset = Math.ceil((Date.now() + 6_000) / 1000);
+    const headers = { "anthropic-ratelimit-unified-5h-utilization": "0.99", "anthropic-ratelimit-unified-5h-reset": String(reset), "anthropic-ratelimit-unified-7d-utilization": "0.4", "anthropic-ratelimit-unified-7d-reset": String(reset + 86_400) };
+    model = await startFakeModel((request) => {
+      if (down) return { fail: { status: 429, message: "This request would exceed your account's rate limit. Please try again later." } };
+      const reply = coworker(request);
+      return "fail" in reply ? reply : { ...reply, headers };
+    });
+    gateway = new TestGateway({ model, env: { POTS_TEST_TIME_SCALE: String(SCALE) } });
+    await gateway.start();
+
+    const idle = () => gateway.output.filter((line) => line.message === "agent idle").length;
+    const before = idle();
+    gateway.say("dm-alice", "alice", "hello");
+    await waitFor(() => gateway.sent().length === 1 && idle() > before, { what: "the first answer, and the end of its run" });
+    down = true;
+    gateway.say("dm-alice", "alice", "and now?");
+    await waitFor(() => gateway.sent().length === 2, { what: "the notice" });
+    expect(gateway.sent()[1]!.text).toBe(
+      `I could not work on this: my model did not answer. It reached a usage limit, which ends at ${formatTime(reset * 1000)}. The reason is in pots status on the computer I run on.`,
+    );
+    await waitFor(() => modelBack().length === 1, { what: "the wake of Pots" });
+    expect(modelBack()[0]!.due_at).toBe(reset * 1000 + MINUTE);
+
+    await waitFor(() => Date.now() > reset * 1000, { what: "the end of the limit", timeout: 10_000 });
+    down = false;
+    await waitFor(() => gateway.sent().length === 3, { what: "the answer after the limit", timeout: 15_000 });
+    expect(wakeLine(wakes(model).at(-1)!)).toMatch(/^\[wake\] your model could not be reached/);
+    expect(wakes(model).at(-1)).toMatch(/Last error: .*rate limit/);
+    expect(modelBack()).toHaveLength(1);
 
     gateway.output.splice(0, gateway.output.length, ...gateway.output.filter((line) => line.message !== "agent run failed"));
   });

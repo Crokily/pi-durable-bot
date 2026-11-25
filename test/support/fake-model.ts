@@ -26,9 +26,10 @@ export interface FakeRequest {
 }
 
 export type FakeReply =
-  | { readonly text: string }
+  /** headers: more response headers, such as a provider's usage limits. */
+  | { readonly text: string; readonly headers?: Record<string, string> }
   /** finish: how the stream ends instead of tool_calls, such as content_filter for a provider that cut the answer off. */
-  | { readonly call: { readonly name: string; readonly arguments: Record<string, unknown> }; readonly finish?: string }
+  | { readonly call: { readonly name: string; readonly arguments: Record<string, unknown> }; readonly finish?: string; readonly headers?: Record<string, string> }
   /** An HTTP error, such as 401 for a login that expired. */
   | { readonly fail: { readonly status: number; readonly message: string } };
 
@@ -90,7 +91,7 @@ export async function startFakeModel(
       }
       const chunk = (choices: unknown[], extra: Record<string, unknown> = {}) =>
         `data: ${JSON.stringify({ id, object: "chat.completion.chunk", created: 0, model: "fake", choices, ...extra })}\n\n`;
-      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.writeHead(200, { "content-type": "text/event-stream", ...reply.headers });
       res.write(chunk([{ index: 0, delta, finish_reason: null }]));
       res.write(chunk([{ index: 0, delta: {}, finish_reason: finish }]));
       res.write(chunk([], { usage }));

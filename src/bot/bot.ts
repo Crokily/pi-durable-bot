@@ -24,7 +24,7 @@ import { MEMORY_DIR, POTS_HOME, SECRETS_DIR } from "../core/home.ts";
 import { KnownSecrets } from "../core/secrets.ts";
 import { VERSION } from "../core/version.ts";
 import type { Judge } from "../core/judge.ts";
-import { formatTime } from "../core/time.ts";
+import { formatTime, TIME_SCALE } from "../core/time.ts";
 import type { Delivered, PlaceWake, WakeTarget } from "../core/wake.ts";
 import type { Print, RunCommand } from "../gateway/config.ts";
 import { renderForms } from "../gateway/forms.ts";
@@ -49,6 +49,7 @@ import {
   logSection,
   memorySection,
   type PromptFacts,
+  type UnansweredWake,
   renderCacheUse,
   renderChildFailure,
   renderContext,
@@ -57,6 +58,7 @@ import {
   renderHandoff,
   renderLeftScopes,
   renderMemoryNote,
+  renderModelBack,
   renderPlaceWake,
   renderTimerWake,
   workSection,
@@ -95,8 +97,28 @@ const MACHINE = describeMachine();
 /** In place of pi's sections when there is nothing to list, so that the sections after them stay where they are. */
 const NO_PROJECT_CONTEXT = "Project-specific instructions and guidelines: none found.";
 const NO_SKILLS = "Skills: none found.";
-/** What the bot says where it was woken when its model fails. */
-const FAILURE_NOTICE = "I could not work on this: my model did not answer. The reason is in pots status on the computer I run on.";
+/** What the bot says where it was woken when its model fails; reset: when the usage limit it reached ends, when known. */
+const failureNotice = (reset?: number) =>
+  `I could not work on this: my model did not answer.${reset === undefined ? "" : ` It reached a usage limit, which ends at ${formatTime(reset)}.`} The reason is in pots status on the computer I run on.`;
+/** The source of Pots' own wake after runs whose model could not be reached, and its reason in bot_wakes. */
+const MODEL_BACK = "pots";
+const MINUTE = 60_000 * TIME_SCALE;
+/** The gaps between Pots' wakes while the model cannot be reached, in minutes; the last one repeats. */
+const MODEL_BACK_GAPS = [1, 2, 4, 8, 15, 30];
+/** Pots stops trying this long after the first wake that got no answer, unless the model's usage limit says when it ends. */
+const MODEL_BACK_FOR = 6 * 60 * MINUTE;
+
+/** Runs whose model could not be reached, since the last run that worked; in bot_state, so a restart keeps it. */
+interface ModelDown {
+  since: number;
+  /** How many wakes Pots set. */
+  attempt: number;
+  /** The bot_wakes IDs of the wakes those runs got no answer to. */
+  wakes: string[];
+  error: string;
+  /** The pending wake. */
+  timer?: number;
+}
 
 /**
  * One bot: a person with a name, an AGENTS.md, responsibilities, memory, timed wakes, a workspace and one long
@@ -133,6 +155,8 @@ export class Bot implements WakeTarget {
    * sent is sent again, with the same send ID, after the next failed run there.
    */
   readonly #failureNotices = new Map<Address, { sendId: string; state: "sending" | "sent" | "unsent" }>();
+  /** The ends of runs, one at a time: what they change follows each other. */
+  #runEnds: Promise<void> = Promise.resolve();
   /** Places the agent sent or reacted to in its current busy period. */
   readonly #touched = new Set<Address>();
 
@@ -176,14 +200,20 @@ export class Bot implements WakeTarget {
       const ran = working.length > 0 && inputs?.[0] !== working[0] ? working : undefined;
       working = inputs ?? [];
       if (!ran) return;
-      void this.#agent.runError(ran).then((error) => {
+      this.#runEnds = this.#runEnds.then(async () => {
+        const error = await this.#agent.runError(ran).catch(() => undefined);
         if (!error) {
           this.#failureNotices.clear();
+          await this.#modelBack().catch((cause: unknown) => this.#print("could not end the wakes after the model came back", { error: String(cause) }));
           return;
         }
         this.#lastError = { at: Date.now(), error };
         this.#print("agent run failed", { error });
-        this.#tellFailure(ran);
+        const reset = await this.#modelDown(ran, error).catch((cause: unknown) => {
+          this.#print("could not set a wake for when the model works again", { error: String(cause) });
+          return undefined;
+        });
+        this.#tellFailure(ran, reset);
       });
     });
   }
@@ -592,6 +622,12 @@ export class Bot implements WakeTarget {
 
   async #deliverTimer(timer: DueTimer, caller?: TelemetrySpan): Promise<Delivered> {
     const children = await this.#agent.childrenNow(this.#workingChildren());
+    const down = timer.source === MODEL_BACK ? await this.#readModelDown() : undefined;
+    if (down && down.timer === timer.id) {
+      const wakes = await this.#sql.all<UnansweredWake>(`SELECT at, text, place FROM bot_wakes WHERE id IN (${down.wakes.map(() => "?").join(", ")}) ORDER BY at`, ...down.wakes);
+      const text = renderModelBack(down.since, wakes, down.error, await this.#agent.contextStatus(), children);
+      return this.#submit(`timer:${timer.id}`, MODEL_BACK, undefined, text, false, caller);
+    }
     // A wake a child set from its own commands, which have its ID in POTS_CHILD.
     const child = timer.set_by === "agent" && timer.child !== null ? this.#agent.children.find((each) => each.id === timer.child) : undefined;
     const text = renderTimerWake(timer, await this.#agent.contextStatus(), children, child);
@@ -655,7 +691,7 @@ export class Bot implements WakeTarget {
    * reason can name the model's configuration, such as the command that gives its key, and the place can be shared.
    * pots status and pots chat show it on this computer.
    */
-  #tellFailure(inputs: readonly string[]): void {
+  #tellFailure(inputs: readonly string[], reset?: number): void {
     const places = new Set(inputs.map((submission) => this.#submissionPlaces.get(submission)).filter((place) => place !== undefined));
     for (const place of places) {
       if ((this.#failureNotices.get(place)?.state ?? "unsent") !== "unsent") continue;
@@ -664,7 +700,7 @@ export class Bot implements WakeTarget {
       const settle = (state: "sent" | "unsent") => {
         if (this.#failureNotices.get(place)?.sendId === notice.sendId) this.#failureNotices.set(place, { ...notice, state });
       };
-      this.#gateway.send(notice.sendId, place, FAILURE_NOTICE, inputs).then(
+      this.#gateway.send(notice.sendId, place, failureNotice(reset), inputs).then(
         () => settle("sent"),
         (cause: unknown) => {
           settle("unsent");
@@ -672,6 +708,59 @@ export class Bot implements WakeTarget {
         },
       );
     }
+  }
+
+  async #readModelDown(): Promise<ModelDown | undefined> {
+    const row = await this.#sql.get<{ value: string }>("SELECT value FROM bot_state WHERE key = 'model_down'");
+    return row ? (JSON.parse(row.value) as ModelDown) : undefined;
+  }
+
+  async #writeModelDown(down: ModelDown | undefined): Promise<void> {
+    if (down) await this.#sql.run("INSERT INTO bot_state (key, value) VALUES ('model_down', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", JSON.stringify(down));
+    else await this.#sql.run("DELETE FROM bot_state WHERE key = 'model_down'");
+  }
+
+  /**
+   * A run failed. When its error goes away by itself, such as a network outage or a usage limit, nothing else would wake
+   * the agent when the model works again: Pots sets one wake of its own, at growing gaps, or for a usage limit whose end
+   * the model's provider said, a minute after it. That wake lists the wakes that got no answer. Gives that end.
+   */
+  async #modelDown(inputs: readonly string[], error: string): Promise<number | undefined> {
+    const retryable = this.#agent.retryable(error);
+    if (!retryable) {
+      await this.#modelBack();
+      return undefined;
+    }
+    const now = Date.now();
+    const wakes = await this.#sql.all<{ id: string; at: number }>(
+      `SELECT id, at FROM bot_wakes WHERE reason != ? AND submission IN (${inputs.map(() => "?").join(", ")})`,
+      MODEL_BACK,
+      ...inputs,
+    );
+    const down = (await this.#readModelDown()) ?? { since: Math.min(now, ...wakes.map((wake) => wake.at)), attempt: 0, wakes: [], error };
+    down.wakes = [...new Set([...down.wakes, ...wakes.map((wake) => wake.id)])];
+    down.error = error;
+    const pending = down.timer !== undefined && (await this.#timers.pending()).some((timer) => timer.id === down.timer);
+    if (!pending) {
+      const at = retryable.reset !== undefined ? retryable.reset + MINUTE : now + MODEL_BACK_GAPS[Math.min(down.attempt, MODEL_BACK_GAPS.length - 1)]! * MINUTE;
+      if (retryable.reset === undefined && at - down.since > MODEL_BACK_FOR) {
+        this.#print("the model still cannot be reached; Pots wakes the agent no more", { since: down.since });
+        await this.#writeModelDown(undefined);
+        return undefined;
+      }
+      down.timer = (await this.#timers.add(at, "Your model could not be reached: Pots wakes you when it may work again.", { source: MODEL_BACK })).id;
+      down.attempt++;
+    }
+    await this.#writeModelDown(down);
+    return retryable.reset;
+  }
+
+  /** A run worked, or failed in a way that needs a person: no more wakes of Pots' own for the model. */
+  async #modelBack(): Promise<void> {
+    const down = await this.#readModelDown();
+    if (!down) return;
+    if (down.timer !== undefined) await this.#timers.cancel(down.timer);
+    await this.#writeModelDown(undefined);
   }
 
   // ---- Actions, for the agent's tools and the command line ----

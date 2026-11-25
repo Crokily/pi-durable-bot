@@ -16,3 +16,9 @@ export function formatTime(ms: number): string {
   const parts = Object.fromEntries(TIME_FORMAT.formatToParts(new Date(ms)).map((part) => [part.type, part.value]));
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} ${parts.weekday} (${parts.timeZoneName})`;
 }
+
+/**
+ * Pots' own waits after a model failed, and pi's between retries, are this much of their length: 1, but less in tests
+ * (POTS_TEST_TIME_SCALE=0.01 makes a minute 0.6 seconds).
+ */
+export const TIME_SCALE = Number(process.env.POTS_TEST_TIME_SCALE) || 1;

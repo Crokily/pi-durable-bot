@@ -347,7 +347,7 @@ class TelegramChannel implements ChannelAdapter {
     const parsed = this.#sdk!.translate(m);
     const thread = this.#threadOf(m);
     // The message it answers. In a forum topic, Telegram gives a message that answers nothing the topic's first message.
-    const answered = m.reply_to_message && !(m.is_topic_message && m.reply_to_message.message_id === m.message_thread_id) ? m.reply_to_message.message_id : undefined;
+    const answered = m.reply_to_message && !(m.is_topic_message && m.reply_to_message.message_id === m.message_thread_id) ? m.reply_to_message : undefined;
     // A message on behalf of a chat (a channel post, an anonymous admin) has that chat as its sender.
     const author = m.sender_chat ? this.#chatAsPerson(m.sender_chat) : m.from ? this.#person(m.from) : undefined;
     return {
@@ -356,7 +356,7 @@ class TelegramChannel implements ChannelAdapter {
       place: this.#place(m.chat),
       message: this.message(chat, m.message_id),
       ...(thread ? { thread, threadRoot: thread } : {}),
-      ...(answered ? { replyTo: this.message(chat, answered) } : {}),
+      ...(answered ? { replyTo: this.message(chat, answered.message_id), replied: this.#replied(answered) } : {}),
       ...(author ? { person: author } : {}),
       fromMe: sendId !== undefined || m.from?.id === this.#bot!.id,
       mentionsMe: parsed.isMention === true,
@@ -475,6 +475,17 @@ class TelegramChannel implements ChannelAdapter {
       fromMe: false,
       text: `clicked ${button}`,
       raw: query,
+    };
+  }
+
+  /** The message a reply answers, as Telegram gives it with the reply. */
+  #replied(m: TgMessage): NonNullable<Happening["replied"]> {
+    const author = m.sender_chat ? this.#chatAsPerson(m.sender_chat) : m.from ? this.#person(m.from) : undefined;
+    return {
+      at: m.date * 1000,
+      ...(author ? { person: author } : {}),
+      fromMe: m.from?.id === this.#bot!.id && !m.sender_chat,
+      text: m.forum_topic_created?.name ?? this.#sdk!.translate(m).text ?? "",
     };
   }
 

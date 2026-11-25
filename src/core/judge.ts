@@ -7,10 +7,10 @@ export interface JudgeItem {
   readonly author: string;
   readonly time: string;
   readonly text?: string;
-  /** Who started the thread the event is in; none when it is not in a thread. */
-  readonly threadStartedBy?: string;
-  /** The author of the message it answers. */
-  readonly replyingTo?: string;
+  /** Who started the thread the event is in; none when it is not in a thread; null when the log does not have its start. */
+  readonly threadStartedBy?: string | null;
+  /** The author of the message it answers; null when the log does not have that message. */
+  readonly replyingTo?: string | null;
 }
 
 /** A message of the place, or a new event, in its thread. */
@@ -20,16 +20,16 @@ export interface JudgeMessage {
   /** What it is, when it is not a plain message: a deleted message, an edit, a reaction. */
   readonly what?: string;
   readonly author: string;
-  /** The author of the message it answers. */
-  readonly replyingTo?: string;
+  /** The author of the message it answers; null when the log does not have that message. */
+  readonly replyingTo?: string | null;
   readonly time: string;
   readonly text?: string;
 }
 
 /** A thread, or a message that is not in a thread, with its messages in time order. */
 export interface JudgeThread {
-  /** Who started the thread; none for a message that is not in a thread. */
-  readonly startedBy?: string;
+  /** Who started the thread; none for a message that is not in a thread; null when the log does not have its start. */
+  readonly startedBy?: string | null;
   /** New events are in it. */
   readonly hasNew: boolean;
   readonly messages: readonly JudgeMessage[];

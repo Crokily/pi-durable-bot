@@ -59,13 +59,13 @@ function judgeState(input: JudgeInput): JsonObject {
     what_this_team_member_is_responsible_for: input.responsibilities,
     place: input.place,
     conversation: input.conversation.map((thread) => ({
-      thread: thread.startedBy !== undefined ? `started by ${thread.startedBy}` : "none: a message in the channel",
+      thread: threadLabel(thread.startedBy, "none: a message in the channel"),
       ...(thread.hasNew ? { the_new_message_is_in_this_thread: true } : {}),
       messages: thread.messages.map((m) => ({
         ...(m.new ? { new: true } : {}),
         ...(m.what !== undefined ? { what: m.what } : {}),
         author: m.author,
-        ...(m.replyingTo !== undefined ? { replying_to: m.replyingTo } : {}),
+        ...(m.replyingTo !== undefined ? { replying_to: m.replyingTo ?? UNKNOWN_REPLY } : {}),
         time: m.time,
         ...(m.text !== undefined ? { text: m.text } : {}),
       })),
@@ -75,11 +75,16 @@ function judgeState(input: JudgeInput): JsonObject {
       author: item.author,
       time: item.time,
       ...(item.text !== undefined ? { text: item.text } : {}),
-      thread: item.threadStartedBy !== undefined ? `started by ${item.threadStartedBy}` : "none",
-      ...(item.replyingTo !== undefined ? { replying_to: item.replyingTo } : {}),
+      thread: threadLabel(item.threadStartedBy, "none"),
+      ...(item.replyingTo !== undefined ? { replying_to: item.replyingTo ?? UNKNOWN_REPLY } : {}),
     })),
   };
 }
+
+/** What the judge is told when the message a reply answers, or the start of a thread, is not there to see. */
+const UNKNOWN_REPLY = "unknown: the message it answers is not available";
+const threadLabel = (startedBy: string | null | undefined, none: string) =>
+  startedBy === undefined ? none : startedBy === null ? "started by someone unknown: its first message is not available" : `started by ${startedBy}`;
 
 function judgeQuestions(name: string): Record<keyof JudgeAnswer, ClassifierQuestion> {
   return {

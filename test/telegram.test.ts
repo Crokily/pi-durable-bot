@@ -160,7 +160,15 @@ describe("translate", () => {
     ]);
     // A reply to the bot addresses it, and its thread is the message it answers.
     expect(await translate(updates.replyToBot)).toEqual([
-      expect.objectContaining({ mentionsMe: true, thread: "telegram:#-100200/22", threadRoot: "telegram:#-100200/22", replyTo: "telegram:#-100200/22", text: "yes please" }),
+      expect.objectContaining({
+        mentionsMe: true,
+        thread: "telegram:#-100200/22",
+        threadRoot: "telegram:#-100200/22",
+        replyTo: "telegram:#-100200/22",
+        // The message it answers, as Telegram gives it with the reply: the log keeps it when it does not have it.
+        replied: { at: 1793080262_000, person: expect.objectContaining({ address: "telegram:@999" }), fromMe: true, text: "Shall I deploy?" },
+        text: "yes please",
+      }),
     ]);
 
     // A forum topic is a thread; its first message is the service message that created it, with the topic's name.
@@ -173,7 +181,12 @@ describe("translate", () => {
     expect(inTopic).not.toHaveProperty("replyTo");
     // A reply inside the topic stays in the topic's thread, and answers its message.
     expect(await translate(updates.topicReply)).toEqual([
-      expect.objectContaining({ message: "telegram:#-100300/9", thread: "telegram:#-100300/7", replyTo: "telegram:#-100300/8" }),
+      expect.objectContaining({
+        message: "telegram:#-100300/9",
+        thread: "telegram:#-100300/7",
+        replyTo: "telegram:#-100300/8",
+        replied: { at: 1793080265_000, person: expect.objectContaining({ address: "telegram:@111", name: "alice" }), fromMe: false, text: "deploy failed on step 3" },
+      }),
     ]);
 
     expect(await translate(updates.edit)).toEqual([

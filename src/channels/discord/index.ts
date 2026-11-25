@@ -93,6 +93,8 @@ interface ApiMessage {
   embeds?: { type?: string; title?: string; description?: string; fields?: { name: string; value: string }[] }[];
   /** On a pin's system message: the message that was pinned. On a reply: the message it answers. */
   message_reference?: { message_id?: string };
+  /** On a reply: the message it answers, when Discord still has it. */
+  referenced_message?: ApiMessage | null;
   message_snapshots?: { message: { content?: string; attachments?: ApiAttachment[] } }[];
 }
 
@@ -579,7 +581,9 @@ export class DiscordChannel implements ChannelAdapter {
         message: this.#messageAt(where, message.id),
         ...(thread ? { thread, ...(kind === "message" ? { threadRoot: thread } : {}) } : {}),
         // A reply answers a message in the same channel or thread.
-        ...(message.type === MessageType.Reply && message.message_reference?.message_id ? { replyTo: this.#messageAt(where, message.message_reference.message_id) } : {}),
+        ...(message.type === MessageType.Reply && message.message_reference?.message_id
+          ? { replyTo: this.#messageAt(where, message.message_reference.message_id), ...(await this.#replied(message.referenced_message, guild)) }
+          : {}),
         ...(author ? { person: await this.#personInfo(author) } : {}),
         fromMe: author !== undefined && author.id === this.#botUserId,
         mentionsMe,
@@ -781,6 +785,20 @@ export class DiscordChannel implements ChannelAdapter {
    * A message's text as Discord Markdown, with mentions as names: <@id> becomes @name, <@&id> @role and <#id> #channel.
    * The text of a forwarded message and of embeds that bots and webhooks post is added after it.
    */
+  /** The message a reply answers, as Discord gives it with the reply. */
+  async #replied(message: ApiMessage | null | undefined, guild: GuildInfo | undefined): Promise<Pick<Happening, "replied">> {
+    const time = Date.parse(message?.timestamp ?? "");
+    if (!message || !Number.isFinite(time)) return {};
+    return {
+      replied: {
+        at: time,
+        ...(message.author ? { person: await this.#personInfo(message.author) } : {}),
+        fromMe: message.author?.id === this.#botUserId,
+        text: await this.#text(message, guild),
+      },
+    };
+  }
+
   async #text(message: ApiMessage, guild: GuildInfo | undefined): Promise<string> {
     const parts = [
       message.content ?? "",

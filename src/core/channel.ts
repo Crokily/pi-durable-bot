@@ -57,6 +57,18 @@ export const Happening = Schema.Struct({
   message: Schema.optional(Schema.String),
   /** The message this one answers, where the platform says so (a reply). */
   replyTo: Schema.optional(Schema.String),
+  /**
+   * The message it answers, as the platform gives it with a reply. The log keeps it when it does not have that message
+   * (one from before the bot was there), so who wrote it is known.
+   */
+  replied: Schema.optional(
+    Schema.Struct({
+      at: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 8.64e15 })),
+      person: Schema.optional(PersonInfo),
+      fromMe: Schema.Boolean,
+      text: Schema.String,
+    }),
+  ),
   /** Who did it. */
   person: Schema.optional(PersonInfo),
   /** Done by this channel account itself. */

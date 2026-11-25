@@ -531,6 +531,64 @@ describe("the judge", () => {
     );
   });
 
+  it.effect("sees the message a reply in an old thread follows, also when 20 newer messages in the place hide it", () => {
+    const judge = flaky(0);
+    return withCore({ judge: judge.judge }, (recorder) =>
+      Effect.gen(function* () {
+        const waker = yield* Waker;
+        waker.setTarget(recorder.target());
+        const root = message("general", "@bloom a draft", { fromMe: true, at: 1_000 });
+        const thread = { thread: root.message!, threadRoot: root.message! };
+        yield* logHappening(root);
+        yield* logHappening({ ...message("general", "the last answer", { person: "bloom", at: 2_000 }), ...thread });
+        for (let i = 0; i < 20; i++) yield* logHappening(message("general", `busy ${i}`, { person: "erin", at: 3_000 + i }));
+        const event = yield* logHappening({ ...message("general", "and the second part?", { person: "colin", at: 10_000 }), ...thread });
+        yield* waker.add(event);
+        yield* advance(3_000);
+        const input = judge.asked[0]!.input;
+        // Its thread: the start, the message it follows by someone else, and it; not the start as whom it answers.
+        assert.deepStrictEqual(
+          input.conversation.at(-1)!.messages.map((m) => [m.author, m.replyingTo, m.text]),
+          [
+            ["Coworker (me)", undefined, "@bloom a draft"],
+            ["bloom", "Coworker (me)", "the last answer"],
+            ["colin", "bloom", "and the second part?"],
+          ],
+        );
+        assert.strictEqual(input.latest[0]!.replyingTo, "bloom");
+      }),
+    );
+  });
+
+  it.effect("sees a thread's start and its first reply in one batch as one thread", () => {
+    const judge = flaky(0);
+    return withCore({ judge: judge.judge }, (recorder) =>
+      Effect.gen(function* () {
+        const waker = yield* Waker;
+        waker.setTarget(recorder.target());
+        const root = message("general", "who owns pricing?", { person: "carol", at: 1_000 });
+        const first = yield* logHappening(root);
+        const second = yield* logHappening({ ...message("general", "Dave does", { person: "erin", at: 2_000 }), thread: root.message!, threadRoot: root.message! });
+        yield* waker.add(first);
+        yield* waker.add(second);
+        yield* advance(3_000);
+        const input = judge.asked[0]!.input;
+        assert.deepStrictEqual(
+          input.conversation.map((each) => [each.startedBy, each.messages.map((m) => [m.author, m.replyingTo, m.text])]),
+          [
+            [
+              "carol",
+              [
+                ["carol", undefined, "who owns pricing?"],
+                ["erin", "carol", "Dave does"],
+              ],
+            ],
+          ],
+        );
+      }),
+    );
+  });
+
   it.effect("sees the place's messages by thread, the new message's thread last, with whom each reply answers", () => {
     const judge = flaky(0);
     return withCore({ judge: judge.judge }, (recorder) =>

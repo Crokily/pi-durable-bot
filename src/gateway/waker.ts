@@ -6,7 +6,7 @@ import { Channels } from "./channels.ts";
 import { GatewayConfig } from "./config.ts";
 import { DeliverError, failureText, JudgeError, type LogError, message, NoWakeTarget } from "./errors.ts";
 import { Attachments } from "./files.ts";
-import { judgeInput, judgeInputNeeds, type NewEvent } from "./judge-input.ts";
+import { judgeInput, judgeInputFollows, judgeInputNeeds, type NewEvent } from "./judge-input.ts";
 import { type LoggedMessage, MessageLog, type UndecidedEvent } from "./log.ts";
 import { LINK, Telemetry } from "./telemetry.ts";
 import { WakeSpans } from "./tracing.ts";
@@ -178,7 +178,10 @@ export class Waker extends Context.Service<
           const earlier = yield* log.messagesBefore(place.address, events[0]!.at, settings.judgeContextMessages);
           const latest: NewEvent[] = [];
           for (const event of events) latest.push(yield* describe(event, bot.name));
-          const known = yield* log.messages(judgeInputNeeds(earlier, latest));
+          // The message each new one follows in its thread, the start of each thread, the messages answered, and what those answer.
+          const follows = yield* Effect.forEach(judgeInputFollows(latest), (follow) => log.lastInThread(follow.thread, follow.at, follow.person));
+          const first = [...follows.filter((m) => m !== undefined), ...(yield* log.messages(judgeInputNeeds(earlier, latest)))];
+          const known = [...first, ...(yield* log.messages(judgeInputNeeds(earlier, latest, first)))];
           const responsibilities = yield* Effect.promise(() => bot.responsibilities());
           const input = judgeInput(
             { name: bot.name, responsibilities, place: `${place.name ?? place.address} (${place.kind})` },
@@ -223,7 +226,9 @@ export class Waker extends Context.Service<
           const time = new Date(event.at).toISOString();
           const logged = event.message ? yield* log.message(event.message) : undefined;
           const state = logged?.deleted_at ? " (since deleted)" : "";
-          const where = { kind: event.kind, person: event.person, thread: event.thread, at: event.at, ...(logged ? { message: logged } : {}) };
+          // A root and its first reply in one batch: the reply made the root a thread root after the root's event was logged.
+          const thread = event.thread ?? logged?.thread ?? null;
+          const where = { kind: event.kind, person: event.person, thread, at: event.at, ...(logged ? { message: logged } : {}) };
           switch (event.kind) {
             case "message":
               return { ...where, item: { what: `new message${state}`, author, time, text: logged?.text ?? event.text ?? "" } };

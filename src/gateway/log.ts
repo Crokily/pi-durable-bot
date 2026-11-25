@@ -107,7 +107,7 @@ export const LOG_SCHEMA = `Times are Unix ms. Columns that hold an address (plac
   text: the message text for message and edit, the emoji for reactions, what happened for system, interaction, form and form_opened. from_me = 1: done by you (for update: a change to your own message). raw: the platform's data (JSON), for details and for call.
   wake: how the gateway handled the event: self (yours, no notice), log (only logged), mention, dm, relevant (the judge saw a need), judge_no (the judge saw none), heard (no judge set), interaction (your button, menu, command or form was used), steer. NULL: not decided yet.
 - gw_messages(address, channel, place, thread, person, from_me, mentions_me, text, mentions, files, at, edited_at, deleted_at, send_id, raw, reply_to)
-  One row per message with its current text. thread: the thread the message is in; a message that starts a thread has its own address there. reply_to: the message it answers, where the platform says so (a reply on Telegram or Discord).
+  One row per message with its current text. thread: the thread the message is in; a message that starts a thread has its own address there. reply_to: the message it answers, where the platform says so (a reply on Telegram or Discord); when the log did not have that message, it has it as the reply gave it (no raw, no event).
   deleted_at is set for deleted messages; the text stays. mentions and files are JSON.
 - gw_places(address, channel, name, kind): kind is channel, dm (one-to-one) or group.
 - gw_people(address, channel, name, real_name)
@@ -202,6 +202,8 @@ export class MessageLog extends Context.Service<
     /** Messages in a place before an event, oldest first. */
     messagesBefore(place: Address, at: number, limit: number): Effect.Effect<LoggedMessage[], LogError>;
     message(address: Address): Effect.Effect<LoggedMessage | undefined, LogError>;
+    /** The last message in a thread before a time, by someone other than a person (null: anyone). */
+    lastInThread(thread: Address, at: number, notBy: Address | null): Effect.Effect<LoggedMessage | undefined, LogError>;
     /** The messages with these addresses that the log has. */
     messages(addresses: readonly Address[]): Effect.Effect<LoggedMessage[], LogError>;
     // Outbox
@@ -219,9 +221,13 @@ export class MessageLog extends Context.Service<
       MessageLog,
       Effect.gen(function* () {
         yield* db(() => sql.exec(SCHEMA));
-        // Logs from before a column was added get it.
-        const columns = new Set((yield* db(() => sql.all<{ name: string }>("PRAGMA table_info(gw_messages)"))).map((column) => column.name));
-        if (!columns.has("reply_to")) yield* db(() => sql.exec("ALTER TABLE gw_messages ADD COLUMN reply_to TEXT"));
+        // Logs from before a column was added get it. In a transaction: it holds the write lock from the check on.
+        yield* db(() =>
+          sql.transaction(async (tx) => {
+            const columns = new Set((await tx.all<{ name: string }>("PRAGMA table_info(gw_messages)")).map((column) => column.name));
+            if (!columns.has("reply_to")) await tx.exec("ALTER TABLE gw_messages ADD COLUMN reply_to TEXT");
+          }),
+        );
         return MessageLog.of(makeLog(sql));
       }),
     );
@@ -327,6 +333,19 @@ function makeLog(sql: Sql): MessageLog["Service"] {
         ),
       ),
 
+    lastInThread: (thread, at, notBy) =>
+      db(() =>
+        sql.get<LoggedMessage>(
+          `SELECT m.address, m.place, m.thread, m.person, p.name AS person_name, m.from_me, m.text, m.at, m.edited_at, m.deleted_at, m.reply_to
+           FROM gw_messages m LEFT JOIN gw_people p ON p.address = m.person
+           WHERE m.thread = ? AND m.at < ? AND (? IS NULL OR m.person IS NOT ? OR m.from_me = 1) ORDER BY m.at DESC LIMIT 1`,
+          thread,
+          at,
+          notBy,
+          notBy,
+        ),
+      ),
+
     messages: (addresses) =>
       addresses.length === 0
         ? Effect.succeed([])
@@ -385,6 +404,13 @@ async function applyOne(tx: SqlExecutor, channel: string, eventId: string, h: Ha
         h.message,
       );
       return undefined;
+    }
+    // The message it answers, as the platform gave it with the reply, when the log does not have it.
+    if (h.replyTo && h.replied && !(await tx.get("SELECT 1 AS known FROM gw_messages WHERE address = ?", h.replyTo))) {
+      if (h.replied.person) await putPerson(tx, channel, h.replied.person, now);
+      const replied: Happening = { kind: "message", ...h.replied, ...(h.place ? { place: h.place } : {}) };
+      // In the reply's thread, unless the reply's thread is the message it answers: then that becomes a thread root below.
+      await insertMessage(tx, channel, h.replyTo, replied, { thread: thread === h.replyTo ? null : thread, raw: null, editedAt: null, sendId: null });
     }
     await insertMessage(tx, channel, h.message, h, { thread, raw, editedAt: null, sendId: h.sendId ?? null });
     // A reply makes its root a thread root.

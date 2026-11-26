@@ -357,6 +357,12 @@ describe("children that start children", { timeout: 90_000 }, () => {
     const as = { env: { POTS_BOT: "coworker", POTS_CHILD: "c4" } };
     expect((await gateway.run(["children", "--stop", "c2"], as)).stdout).toMatch(/No child c2 of yours/);
     expect((await gateway.run(["children", "--stop-all"], as)).stdout).toMatch(/^Stopped c5 \("one"\)\. .*\nStopped c6 \("two"\)\./);
+    // Another bot's child stops none of them, its ID being no child of this bot.
+    const other = { env: { POTS_BOT: "elsewhere", POTS_CHILD: "c1" } };
+    for (const stop of [["--stop", "c2"], ["--stop-all"]]) {
+      const result = await gateway.run(["children", "--bot", "coworker", ...stop], other);
+      expect([result.status, result.stderr]).toEqual([1, expect.stringContaining("a child stops only children it started, in its own bot (elsewhere)")]);
+    }
     const children = gateway.pots("children");
     expect(children).toMatch(/^c2 "one": working/m);
     expect(children).toMatch(/^c3 "two": working/m);

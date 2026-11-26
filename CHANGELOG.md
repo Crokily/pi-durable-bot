@@ -2,23 +2,25 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
-## Unreleased
+## 0.8.11 (2026-11-26)
+
+A child that someone waits for wakes the bot when its work is done, so people no longer wait after it has finished. pi 1.6.1 gives GPT-6 with the ChatGPT login the chosen thinking level and tries more failures again. A child's wake for another bot now comes from its own bot. A program that embeds Pots' agent can check every tool call before it runs.
 
 ### Added
 - **A host's tool policy.** `Agent.open` takes `toolPolicy`, pi-durable's `beforeTool` hook, for a program that embeds Pots' agent. It is asked before every tool call of the main agent and its children, also of a `codemode` script's calls. It lets a call run, changes its arguments, refuses it before it runs (`{ block: reason }`, which the agent gets as the result), or parks it until a signal or a time (`{ sleep }`), such as a person's approval. Without it, every call runs, as before; `pots` itself sets none.
 
 ### Changed
+- **A child that someone waits for wakes the bot when it is done.** The brief the bot writes says to wake it with `pots wake` when the work is done, and a child's own prompt says to wake the main agent with `pots wake` when someone waits for its work, and to end quietly when no one does. Before, the bot's prompt only said the child must tell it when it is done, and some briefs asked for the final message, which wakes no one, so people waited after the work was done.
 - **pi 1.6.1** (was 1.6.0). What the bot gains:
   - **Thinking level with the ChatGPT login.** GPT-6 requests through `openai-codex` always began at `medium` thinking, whatever level the bot or a child had; they now begin at the chosen level.
   - **More failures are tried again.** Besides the ones before: Cloudflare HTTP 525, a gateway's "provider is temporarily unavailable" and partial-response errors, Anthropic `api_error` events during an answer, OpenRouter empty answers and stops without output, answers that end with `finish_reason: "error"`, and "request rate increased too quickly". An error whose code only contains `request_too_large`, such as `plugin_request_too_large`, no longer compacts the conversation as if it were too long.
   - **Models.** Gemini 4 Hydrogen and Neon at thinking level `xhigh` on `google` and `google-vertex` no longer fail with `Unsupported Google thinking level mapping`. GPT-6.2 with the ChatGPT login no longer drops its earlier reasoning after the connection expires. Thinking `off` on Claude Opus 5.5 and Sonnet 5.5 through GitHub Copilot, Cloudflare AI Gateway and Vercel AI Gateway no longer fails with HTTP 400; it uses the lowest level. Amazon Bedrock with an AWS SSO profile no longer hangs behind `HTTPS_PROXY`. Models that providers shut down are gone from the list. After a sign-in to Mistral, `pots login` suggests `mistral-medium-latest`, as pi does (was `devstral-medium-latest`, which Mistral retired).
   - pi's setting `showCacheMissNotices` is now four settings under `notices` in `~/.pi/agent/settings.json`; pi moves an existing value itself. Pots never read it, so nothing changes for the bot.
+- **The package's homepage** on npm is now https://pots.sh (was the README on GitHub).
+- **At the upgrade**, the prompts of the main agent and of children change, so each bot's prompt cache is written once more after the upgrade.
 
 ### Fixed
 - **`pots wake --bot` from another bot's child.** A child's `pots wake` sent its ID ($POTS_CHILD) also to another bot, which then took the wake as one from a child of its own. The ID now goes only to the child's own bot ($POTS_BOT). A wake for another bot comes from the bot that sets it, as in "timed wake from coly", unless `--from` or $POTS_FROM names its source. A child's `pots children --stop` and `--stop-all` for another bot now fail: a child stops only children it started, in its own bot.
-
-### Changed
-- **A child that someone waits for wakes the bot when it is done.** The brief the bot writes says to wake it with `pots wake` when the work is done, and a child's own prompt says to wake the main agent with `pots wake` when someone waits for its work, and to end quietly when no one does. Before, the bot's prompt only said the child must tell it when it is done, and some briefs asked for the final message, which wakes no one, so people waited after the work was done.
 
 ## 0.8.10 (2026-11-24)
 

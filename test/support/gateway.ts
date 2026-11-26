@@ -26,6 +26,8 @@ export interface BotOptions {
   readonly settings?: Record<string, unknown>;
   /** More models for children: fake/helper and fake/other, and locked/model, whose provider has no key. */
   readonly moreModels?: boolean;
+  /** Another provider, spare, with the model spare/backup, at the same fake model. */
+  readonly spareProvider?: boolean;
   /** Also a terminal channel, for `pots chat`. */
   readonly terminal?: boolean;
   /**
@@ -123,6 +125,7 @@ export class TestGateway {
           models: ["coworker", ...(options.moreModels ? ["helper", "other"] : [])].map((id) => ({ id, contextWindow: 128_000, input: ["text", "image"], ...cache })),
         },
         // No key: pi knows its model, but it is not signed in.
+        ...(options.spareProvider ? { spare: { baseUrl: options.model.url, api: "openai-completions", apiKey: "fake", models: [{ id: "backup", contextWindow: 128_000 }] } } : {}),
         ...(options.moreModels ? { locked: { baseUrl: options.model.url, api: "openai-completions", models: [{ id: "model", contextWindow: 128_000 }] } } : {}),
       },
     };
@@ -215,7 +218,8 @@ export class TestGateway {
         // no user manager, or nothing ran
       }
     }
-    rmSync(this.home, { recursive: true, force: true });
+    // On Windows a process that just ended, such as an MCP server, can hold a file there for a moment.
+    rmSync(this.home, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
 
   /** Run a pots command against this home, and return what it printed. */
@@ -250,6 +254,11 @@ export class TestGateway {
   /** Make the gateway die right before the next memory pass forks the main conversation. */
   crashBeforeNextMemoryPass(): void {
     writeFileSync(join(this.botDir, "crash-before-memory-pass"), "");
+  }
+
+  /** Make the gateway die right after the next run of the main agent ends, before the bot sees its end. */
+  crashBeforeNextRunEnd(): void {
+    writeFileSync(join(this.botDir, "crash-before-run-end"), "");
   }
 
   /** Make the gateway die right after the next stop marks a child stopped, before the child's work ends. */

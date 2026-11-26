@@ -173,14 +173,16 @@ export class Timers extends Context.Service<
           Effect.gen(function* () {
             const due = yield* withRoutine(timer);
             const span = Option.getOrUndefined(yield* Effect.option(Effect.currentSpan));
-            const { submission, run } = yield* Effect.tryPromise({
+            const delivered = yield* Effect.tryPromise({
               try: () => config.fireTimer(due, span && telemetry.view(span)),
               catch: (cause) => new DeliverError({ message: message(cause), cause }),
             });
             const now = yield* Clock.currentTimeMillis;
             yield* db(() => sql.run("UPDATE bot_timers SET state = 'fired', fired_at = ? WHERE id = ?", now, timer.id));
-            if (span) wakeSpans.remember(submission, span, telemetry.spanOfCarrier(run));
-            yield* Effect.annotateCurrentSpan({ submission });
+            if (delivered) {
+              if (span) wakeSpans.remember(delivered.submission, span, telemetry.spanOfCarrier(delivered.run));
+              yield* Effect.annotateCurrentSpan({ submission: delivered.submission });
+            }
             config.print("timer fired", { id: timer.id, setBy: timer.set_by, ...(timer.source ? { source: timer.source } : {}) });
           }).pipe(Effect.withSpan("wake", { root: true, attributes: { reason: timer.set_by === "agent" ? "timer" : timer.set_by, timer: timer.id } }));
 

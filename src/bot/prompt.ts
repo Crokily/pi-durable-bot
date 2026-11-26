@@ -570,6 +570,31 @@ export function renderChildFailure(failure: ChildFailure, status: ContextStatus,
   return lines.join("\n");
 }
 
+/** A wake that the main agent got no answer to, for renderModelBack. */
+export interface UnansweredWake {
+  at: number;
+  /** The wake's text, whose first line says why it came. */
+  text: string;
+  place: string | null;
+}
+
+/**
+ * Pots' own wake after runs whose model could not be reached: since when, and the wakes those runs got no answer to.
+ * Their texts are in the conversation already.
+ */
+export function renderModelBack(since: number, wakes: readonly UnansweredWake[], error: string, status: ContextStatus, children: readonly ChildInfo[] = [], now = Date.now()): string {
+  const why = (wake: UnansweredWake) => {
+    const line = wake.text.split("\n")[0]!.replace(/^\[(?:wake|new events)\] /, "");
+    return `${line.length > 200 ? `${line.slice(0, 200)}…` : line}${wake.place ? `, in ${wake.place}` : ""}`;
+  };
+  const lines = [`[wake] your model could not be reached from ${formatTime(since)} until now`, `Now: ${formatTime(now)}`];
+  if (wakes.length > 0) lines.push("These wakes came in that time and got no answer; their texts are earlier in this conversation:", ...wakes.map((wake) => `- ${formatTime(wake.at)}: ${why(wake)}`));
+  lines.push(block("Last error", error.length > 300 ? `${error.slice(0, 300)}…` : error).trimStart());
+  lines.push(...renderChildren(children, "Your children working now"));
+  lines.push(renderContext(status));
+  return lines.join("\n");
+}
+
 export function renderHandoff(note: string, notes: string, notesPath: string, children: readonly ChildInfo[] = []): string {
   const working = renderChildren(children, "Your children working now");
   return `[turned the page] A new context starts here. You ended the previous context yourself.

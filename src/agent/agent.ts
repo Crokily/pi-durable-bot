@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { JsonValue } from "@earendil-works/chord/json";
 import { BACKGROUND_CONTEXT, type Context, withAbortSignal, withTelemetry } from "@earendil-works/chord/context";
-import type { ImageContent, Message, Models, TextContent } from "@earendil-works/pi-ai";
+import { type AssistantMessage, type ImageContent, isRetryableAssistantError, type Message, type Models, type TextContent } from "@earendil-works/pi-ai";
 import { calculateContextTokens, estimateMessageTokens } from "@earendil-works/pi-ai/utils/estimate";
 import {
   configure,
@@ -64,6 +64,7 @@ import {
   lastStep,
 } from "./children.ts";
 import type { KnownSecrets } from "../core/secrets.ts";
+import { TIME_SCALE } from "../core/time.ts";
 import type { Codemode } from "./codemode.ts";
 import type { Mcp } from "./mcp.ts";
 import { deleteLeftForks, lastAnswer, type MemoryHost, MemoryPasses, readPaths, withAgeNote } from "./memory.ts";
@@ -72,6 +73,7 @@ import type { CommandScopes } from "./scopes.ts";
 import { NO_SCREEN, renderBusy, type Screen, ScreenLeases } from "./screen.ts";
 import { CacheRetentions } from "./retention.ts";
 import { CacheWarming, type CacheWarmingMode } from "./warming.ts";
+import { UsageLimits } from "./usage-limits.ts";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -249,6 +251,8 @@ export interface CacheUse {
 
 /** Call results longer than this go to a file in the workspace. */
 const CALL_OUTPUT_CHARS = 30_000;
+/** A provider's usage or rate limit, in the words and status pi-ai keeps of it. */
+const RATE_LIMIT = /rate.?limit|too many requests|(?<![a-z0-9])429(?![a-z0-9])/i;
 /** How long an interrupt waits for a child's tool calls to end. */
 const INTERRUPT_WAIT_MS = 10_000;
 /** The window assumed for a model whose catalog entry gives none. */
@@ -281,6 +285,7 @@ export class Agent {
   #disposeChildren?: () => void;
   #memory: MemoryPasses | undefined;
   #warming: CacheWarming | undefined;
+  #limits = new UsageLimits();
   #childExtensions: { add: readonly Extension[]; remove: readonly Extension[] } = { add: [], remove: [] };
   /** The task extension's start, for children that routines start. */
   #startChild?: ChildrenTools["start"];
@@ -541,6 +546,7 @@ export class Agent {
     // The long prompt cache entry for the main conversation only, where pi's model data has one: it is woken minutes to an
     // hour apart, children rarely pause.
     const retentions = new CacheRetentions((conversation) => conversation === String(ROOT_CONVERSATION_ID));
+    const limits = new UsageLimits();
     // pi-durable hands a hook the task's runtime, whose abort signal is the request's: so the request is known as the
     // conversation's when it goes out.
     const requestHooks = hook(GenerationTask, {
@@ -671,7 +677,7 @@ export class Agent {
       storage,
       {
         // The retention first, so a warm repeats the request with it, and pi times the warm by that entry's lifetime.
-        models: retentions.wrap(warming ? warming.wrap(models) : models),
+        models: retentions.wrap(limits.wrap(warming ? warming.wrap(models) : models)),
         // pi-durable names pi to providers unless told otherwise.
         identity: POTS_IDENTITY,
         registry,
@@ -684,7 +690,8 @@ export class Agent {
           steeringMode: "all",
           followUpMode: "all",
           afterFailedRun: "continue",
-          retry: { maxRetries: 4 },
+          // Whole milliseconds: pi-durable keeps the time of the next try as one.
+          retry: { maxRetries: 4, baseDelayMs: Math.ceil(2_000 * TIME_SCALE) },
           // The fallback when the agent does not turn the page itself.
           get compaction() {
             const main = agent ? agent.#model : modelRef(options.model);
@@ -708,6 +715,7 @@ export class Agent {
     await root.configure({ model, thinkingLevel: options.thinking, cwd: options.workspace }, context);
     agent = new Agent(options, harness, root, outputs);
     agent.#warming = warming;
+    agent.#limits = limits;
     agent.#childExtensions = childExtensions;
     agent.#startChild = childrenTools.start;
     if (memory) {
@@ -1110,6 +1118,28 @@ export class Agent {
       if (record?.status === "unanswered" && record.reason === "model_error") return String(record.detail ?? "the model request failed");
     }
     return undefined;
+  }
+
+  /** Those of these submissions whose run ended: answered, or not and no longer can be. In the same order. */
+  async ended(inputs: readonly string[]): Promise<string[]> {
+    const ended: string[] = [];
+    for (const id of inputs) {
+      const submission = await this.#harness.submission(Number(id) as SubmissionId, context);
+      const { status } = (submission ? await submission.status(context) : { status: undefined }) as { status?: string };
+      if (status === "done" || status === "unanswered") ended.push(id);
+    }
+    return ended;
+  }
+
+  /**
+   * Whether a failed run's error goes away by itself, as pi-ai sees it: a network outage, an overloaded provider, a usage
+   * limit. provider: the main model's. reset: for a usage limit, when the main model may work again (UsageLimits.reset).
+   */
+  retryable(error: string): { provider: string; reset?: { at: number; known: boolean } } | undefined {
+    if (!isRetryableAssistantError({ stopReason: "error", errorMessage: error } as AssistantMessage)) return undefined;
+    const provider = this.#model.provider;
+    const reset = RATE_LIMIT.test(error) ? this.#limits.reset(provider) : undefined;
+    return reset === undefined ? { provider } : { provider, reset };
   }
 
   /** The submissions the current run works on, or undefined while idle. */

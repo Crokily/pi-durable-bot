@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { Effect, Option } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
-import { control, printResult, resolveBot, userError } from "./control.ts";
+import { nameProblem } from "../gateway/routines.ts";
+import { commandChild, control, otherCaller, printResult, resolveBot, userError } from "./control.ts";
 
 // The channel actions and the bot's own controls, for the agent's shell, its scripts and scheduled jobs, and people.
 
@@ -68,7 +69,9 @@ const wake = Command.make(
     note: Flag.String("note").pipe(Flag.withDefault(""), Flag.withDescription("What the wake is for.")),
     from: Flag.String("from").pipe(
       Flag.optional,
-      Flag.withDescription("Where the wake comes from: a short name of the script or command that sets it. Default: $POTS_FROM."),
+      Flag.withDescription(
+        'Where the wake comes from: a short name of the script or command that sets it (letters, digits, "-" and "_"). Default: $POTS_FROM; to another bot, the ID of the bot that sets it.',
+      ),
     ),
     id: Flag.String("id").pipe(Flag.optional, Flag.withDescription("A wake ID. A second wake with the same ID gives back the first and sets none.")),
     list: Flag.Boolean("list").pipe(Flag.withDefault(false), Flag.withDescription("List the pending wakes.")),
@@ -81,9 +84,13 @@ const wake = Command.make(
       if (input.list) return yield* printResult(yield* control(id, "GET", "/wakes"));
       if (Option.isSome(input.cancel)) return yield* printResult(yield* control(id, "POST", "/wakes/cancel", { id: input.cancel.value }));
       const at = Option.isSome(input.in) ? Date.now() + (yield* duration(input.in.value)) : Option.isSome(input.at) ? yield* time(input.at.value) : Date.now();
-      const from = Option.getOrUndefined(input.from) ?? process.env.POTS_FROM;
-      // In a child's commands, Pots sets POTS_CHILD to its ID: the wake comes from that child.
-      const child = process.env.POTS_CHILD;
+      // To another bot, the wake comes from the calling bot, unless --from or $POTS_FROM names its source; its ID goes
+      // only when the gateway takes it as a source.
+      const caller = otherCaller(id);
+      const callerSource = caller && caller !== "pages" && !nameProblem(caller, "--from") ? caller : undefined;
+      const from = Option.getOrUndefined(input.from) ?? (process.env.POTS_FROM || callerSource);
+      // In a child's commands, the wake comes from that child; to another bot, from no child of its own.
+      const child = commandChild(id);
       const body = { at, note: input.note, ...(from ? { from } : {}), ...(child ? { child } : {}), ...(Option.isSome(input.id) ? { id: input.id.value } : {}) };
       yield* printResult(yield* control(id, "POST", "/wake", body));
     }),
@@ -113,8 +120,12 @@ const children = Command.make(
   (input) =>
     Effect.gen(function* () {
       const id = yield* resolveBot(input.bot);
-      // In a child's commands, Pots sets POTS_CHILD to its ID: it stops only the children it started.
-      const by = process.env.POTS_CHILD ? { by: process.env.POTS_CHILD } : {};
+      // In a child's commands, it stops only the children it started, and so none in another bot.
+      const stopping = input.all || Option.isSome(input.stop);
+      if (stopping && process.env.POTS_CHILD && otherCaller(id))
+        return yield* Effect.fail(userError(`a child stops only children it started, in its own bot (${process.env.POTS_BOT}); not in ${id}`));
+      const child = commandChild(id);
+      const by = child ? { by: child } : {};
       if (input.all) return yield* printResult(yield* control(id, "POST", "/children/stop", { all: true, ...by }));
       if (Option.isSome(input.stop)) return yield* printResult(yield* control(id, "POST", "/children/stop", { id: input.stop.value, ...by }));
       const result = (yield* control(id, "GET", "/children")) as { text: string };

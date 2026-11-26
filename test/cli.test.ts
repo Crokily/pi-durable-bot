@@ -142,6 +142,33 @@ describe("pots", { timeout: 120_000 }, () => {
     // Only the page server's wakes may say that an answer came from a page.
     expect(await fails("wake", "--from", "pages")).toContain("--from pages is kept for the answers that come from your pages");
     for (const item of list) await pots("wake", "--cancel", String(item.id));
+
+    // $POTS_CHILD, as a child's commands have it, goes only to that child's own bot ($POTS_BOT): another bot's child
+    // that hands this bot something is not one of this bot's children. To another bot, the wake comes from the calling
+    // bot, unless --from or $POTS_FROM says otherwise, and from no bot whose ID the gateway does not take as a source.
+    const fromChild = async (bot: string, ...args: string[]) => {
+      const result = await gateway.run(["wake", "--bot", "coworker", "--in", "30m", "--note", "handed over", ...args], { env: { POTS_BOT: bot, POTS_CHILD: "c7" } });
+      expect(result.stderr).toBe("");
+      return JSON.parse(result.stdout) as { id: number; child: string | null; source: string | null };
+    };
+    const own = await fromChild("coworker");
+    const other = await fromChild("coly");
+    const named = await fromChild("coly", "--from", "inbox-watch");
+    const reserved = await fromChild("pages");
+    expect([own, other, named, reserved].map((item) => [item.child, item.source])).toEqual([
+      ["c7", null],
+      [null, "coly"],
+      [null, "inbox-watch"],
+      [null, null],
+    ]);
+    for (const item of [own, other, named, reserved]) await pots("wake", "--cancel", String(item.id));
+
+    // A child stops only children it started, in its own bot.
+    for (const stop of [["--stop", "c1"], ["--stop-all"]]) {
+      const result = await gateway.run(["children", "--bot", "coworker", ...stop], { env: { POTS_BOT: "coly", POTS_CHILD: "c7" } });
+      expect(result.status).toBe(1);
+      expect(result.stderr.trim()).toBe("ERROR\n  a child stops only children it started, in its own bot (coly); not in coworker");
+    }
   });
 
   it("adds, lists, replaces and removes routines", async () => {

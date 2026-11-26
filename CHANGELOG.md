@@ -7,6 +7,9 @@ What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm inst
 ### Added
 - **A host's tool policy.** `Agent.open` takes `toolPolicy`, pi-durable's `beforeTool` hook, for a program that embeds Pots' agent. It is asked before every tool call of the main agent and its children, also of a `codemode` script's calls. It lets a call run, changes its arguments, refuses it before it runs (`{ block: reason }`, which the agent gets as the result), or parks it until a signal or a time (`{ sleep }`), such as a person's approval. Without it, every call runs, as before; `pots` itself sets none.
 
+### Fixed
+- **`pots wake --bot` from another bot's child.** A child's `pots wake` sent its ID ($POTS_CHILD) also to another bot, which then took the wake as one from a child of its own. The ID now goes only to the child's own bot ($POTS_BOT). A wake for another bot comes from the bot that sets it, as in "timed wake from coly", unless `--from` or $POTS_FROM names its source. A child's `pots children --stop` and `--stop-all` for another bot now fail: a child stops only children it started, in its own bot.
+
 ## 0.8.10 (2026-11-24)
 
 The bot looks around on its own. A few times a day a child looks for what its people would want to know or have done, and wakes the bot only when it finds something. This look replaces the fallback check-in. Children can start children of their own and wait for them, and a child that fails wakes the bot once. The bot hands people fewer steps that it can do itself. Known secrets in tool output become `[secret]` before the model and the log get them.

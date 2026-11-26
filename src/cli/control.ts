@@ -30,6 +30,21 @@ export const resolveBot = (flag: Option.Option<string>) =>
     return Effect.fail(userError(bots.length === 0 ? "there are no bots yet; run pots init" : `say which bot with --bot <id> (bots: ${bots.join(", ")})`));
   });
 
+/**
+ * The bot whose shell runs this command ($POTS_BOT, which Pots sets in a bot's commands), when the command is for
+ * another bot; undefined in the bot's own shell and for people.
+ */
+export const otherCaller = (bot: string) => {
+  const caller = process.env.POTS_BOT;
+  return caller && caller !== bot ? caller : undefined;
+};
+
+/**
+ * The child whose commands run this command: $POTS_CHILD, which Pots sets only in a child's commands. Only for the
+ * child's own bot ($POTS_BOT): to another bot, or with no $POTS_BOT, the ID is not one of its children.
+ */
+export const commandChild = (bot: string) => (process.env.POTS_BOT === bot ? process.env.POTS_CHILD || undefined : undefined);
+
 /** Call a running bot's control endpoint. */
 export const control = (bot: string, method: "GET" | "POST", path: string, body?: unknown) =>
   Effect.tryPromise({

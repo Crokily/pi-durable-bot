@@ -14,7 +14,7 @@ import { folderSection, type PromptFacts, workSection } from "../src/bot/prompt.
 // Also the skill for pi users (pi-package/skills), which pi loads through the package's pi manifest.
 
 const repo = fileURLToPath(new URL("..", import.meta.url));
-const SKILLS = ["desktop-page", "discord-channel", "pages", "slack-channel", "teams-channel", "telegram-channel"];
+const SKILLS = ["desktop-page", "discord-channel", "information-sources", "pages", "slack-channel", "teams-channel", "telegram-channel"];
 const PI_SKILLS = ["pots-setup"];
 const work = realpathSync(mkdtempSync(join(tmpdir(), "pots-skills-")));
 
@@ -173,6 +173,7 @@ describe("the skills that come with Pots", () => {
       for (const name of SKILLS) expect(existsSync(join(installed, "skills", name, "SKILL.md")), name).toBe(true);
       expect(existsSync(join(installed, "skills", "slack-channel", "slack-app-manifest.yaml"))).toBe(true);
       expect(existsSync(join(installed, "skills", "pages", "shot.mjs"))).toBe(true);
+      expect(existsSync(join(installed, "skills", "information-sources", "classify.mjs"))).toBe(true);
       expect(readFileSync(join(installed, "kit", "pots.js"), "utf8")).toBe(readFileSync(join(repo, "kit", "pots.js"), "utf8"));
       expect(readFileSync(join(installed, "kit", "pots.css"), "utf8")).toBe(readFileSync(join(repo, "kit", "pots.css"), "utf8"));
       expect(readFileSync(join(installed, "kit", "pots-ui.js"), "utf8")).toBe(readFileSync(join(repo, "kit", "pots-ui.js"), "utf8"));

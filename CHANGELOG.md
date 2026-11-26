@@ -10,6 +10,9 @@ What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm inst
 ### Fixed
 - **`pots wake --bot` from another bot's child.** A child's `pots wake` sent its ID ($POTS_CHILD) also to another bot, which then took the wake as one from a child of its own. The ID now goes only to the child's own bot ($POTS_BOT). A wake for another bot comes from the bot that sets it, as in "timed wake from coly", unless `--from` or $POTS_FROM names its source. A child's `pots children --stop` and `--stop-all` for another bot now fail: a child stops only children it started, in its own bot.
 
+### Changed
+- **A child that someone waits for wakes the bot when it is done.** The brief the bot writes says to wake it with `pots wake` when the work is done, and a child's own prompt says to wake the main agent with `pots wake` when someone waits for its work, and to end quietly when no one does. Before, the bot's prompt only said the child must tell it when it is done, and some briefs asked for the final message, which wakes no one, so people waited after the work was done.
+
 ## 0.8.10 (2026-11-24)
 
 The bot looks around on its own. A few times a day a child looks for what its people would want to know or have done, and wakes the bot only when it finds something. This look replaces the fallback check-in. Children can start children of their own and wait for them, and a child that fails wakes the bot once. The bot hands people fewer steps that it can do itself. Known secrets in tool output become `[secret]` before the model and the log get them.

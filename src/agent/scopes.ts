@@ -86,9 +86,11 @@ async function detect(home: string): Promise<ScopeSupport | undefined> {
   return { systemdRun, bash, key, slice, ...(service ? { service } : {}) };
 }
 
-function onPath(program: string): string | undefined {
+/** Where a program is on the PATH; on Windows also with .exe. */
+export function onPath(program: string): string | undefined {
+  const names = process.platform === "win32" ? [program, `${program}.exe`] : [program];
   for (const dir of (process.env.PATH ?? "").split(delimiter)) {
-    if (dir && existsSync(join(dir, program))) return join(dir, program);
+    for (const name of names) if (dir && existsSync(join(dir, name))) return join(dir, name);
   }
   return undefined;
 }

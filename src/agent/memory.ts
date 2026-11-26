@@ -25,8 +25,8 @@ import {
 } from "@earendil-works/pi-durable";
 import type { Sql } from "../core/sql.ts";
 
-// The background memory passes, as Claude Code's automatic memory. After each run of the main conversation, one at a
-// time, an extraction pass: a fork of the main conversation at the run's answer, with the main conversation's provider
+// The background memory passes, as Claude Code's automatic memory, only with settings.memoryPasses (off by default).
+// After each run of the main conversation, one at a time, an extraction pass: a fork of the main conversation at the run's answer, with the main conversation's provider
 // session, so its request starts as the main agent's last one did and the provider's prompt cache serves it. It keeps
 // every tool of the main agent, and code refuses each call but reading, writing the memory folders' .md files and
 // read-only shell commands; it refuses also a change to a memory file that is not as it was when the pass began, unless
@@ -71,6 +71,8 @@ export interface MemorySettle {
 export interface MemoryHost {
   /** settings.autoMemory; false: no pass, no dream and no age note. */
   enabled(): boolean;
+  /** settings.memoryPasses; false: no pass and no dream, and the rest of the memory as before. */
+  passes(): boolean;
   folders: MemoryFolders;
   /** The extraction pass's message. messages: how many messages of the main conversation it looks at. */
   extraction(messages: number): Promise<string>;
@@ -480,7 +482,7 @@ export class MemoryPasses {
 
   /** A run of the main conversation answered with entry `at`: a pass for it, now or after the one that runs. */
   queue(at: number): void {
-    if (this.#closing || !this.#host.enabled()) return;
+    if (this.#closing || !this.#on()) return;
     if (this.#running) {
       this.#trailing = Math.max(this.#trailing ?? 0, at);
       return;
@@ -496,6 +498,11 @@ export class MemoryPasses {
     })().finally(() => (this.#running = undefined));
   }
 
+  /** Whether the passes run: the memory and its passes are both on. */
+  #on(): boolean {
+    return this.#host.enabled() && this.#host.passes();
+  }
+
   #takeTrailing(): number | undefined {
     const next = this.#trailing;
     this.#trailing = undefined;
@@ -509,7 +516,7 @@ export class MemoryPasses {
   }
 
   async #pass(at: number): Promise<void> {
-    if (!this.#host.enabled()) return;
+    if (!this.#on()) return;
     const progress = await this.#host.progress();
     if (progress.cursor !== undefined && at <= progress.cursor) return;
     const messages = since(await this.#root!.context(this.#context, { at: at as EntryId }), progress.cursor);
@@ -536,7 +543,7 @@ export class MemoryPasses {
       if (!ended.answered) return this.#log("memory pass got no answer", { source: "extract", reason: ended.reason });
       this.#log("memory pass", { messages: messages.length, written: ended.written.length, deleted: ended.deleted.length });
     }
-    if (!this.#closing && this.#host.enabled() && dreamDue(next)) await this.#dream(at, next);
+    if (!this.#closing && this.#on() && dreamDue(next)) await this.#dream(at, next);
   }
 
   async #dream(at: number, progress: MemoryProgress): Promise<void> {

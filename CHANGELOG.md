@@ -2,6 +2,16 @@
 
 What changed in each version of pi-durable-bot (Pots). To upgrade, run `npm install -g pi-durable-bot@latest`, then `pots service restart`.
 
+## Unreleased
+
+### Changed
+- **The background memory passes are off by default.** The pass after each run of the main conversation and the daily dream now run only with `"settings": {"memoryPasses": true}` in `bot.json`; a `bot.json` without the key has them off. Everything else of the memory stays: the memory section of the prompt, the bot writing its memory itself, and the note on an old memory file. `settings.autoMemory` keeps its meaning: false turns the whole memory off. In one week on 5 bots the passes made 1,118 runs and 25 dreams, about 23% of all model spend, and they wrote standing rules that nobody had said, some credited to the wrong person.
+- **What memory is for.** The memory section of the main agent's prompt and of a child's now says it in facts: memory keeps facts and pointers that must outlast a page (how to reach a machine, where something is, people's details, key dates, decisions with who, when and where they are recorded); a lasting rule or preference that a person states goes into `AGENTS.md`, in their own words with the date, and words the bot made up are shown to the person first; `notes.md` is replaced at each page turn, `memory/` stays, and the message log keeps everything said. A memory file has `name`, `description`, `source` (who, where, when) and, for a fact that stops being true, `expires` (YYYY-MM-DD); the types (user, feedback, project, reference) and the "Why:" line are gone. Each line of `MEMORY.md` states the fact in one sentence. The extraction pass and the dream say the same, so a bot that turns the passes on gets the same kind of memory. Existing memory files stay as they are.
+- **Expired memories leave the index.** A line of `MEMORY.md` that links to a memory whose `expires` date has passed is not shown in the prompt; the file stays on disk.
+- **The memory section names what does not match.** Links in `MEMORY.md` to files that are not there, and memory files with no line in it, are named under the index in the main agent's memory section, so the bot can fix them.
+- **The passes say when they cannot read the log.** They read the message log only with `sqlite3`, the one program that reads it which their shell may run. On a computer without `sqlite3`, their message no longer offers it and says that the log cannot be queried in that run.
+- **At the upgrade**, the prompts of the main agent and of children change, so each bot's prompt cache is written once more after the upgrade.
+
 ## 0.8.11 (2026-11-26)
 
 A child that someone waits for wakes the bot when its work is done, so people no longer wait after it has finished. pi 1.6.1 gives GPT-6 with the ChatGPT login the chosen thinking level and tries more failures again. A child's wake for another bot now comes from its own bot. A program that embeds Pots' agent can check every tool call before it runs.

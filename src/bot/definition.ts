@@ -51,6 +51,8 @@ export interface BotSettings {
   maxChildren: number;
   /** The memory, as Claude Code's autoMemoryEnabled: false, no memory section, no memory passes, no dream and no age note. */
   autoMemory: boolean;
+  /** The background memory passes: the extraction after each main run, and the dream. Off: neither runs, and nothing else of the memory changes. */
+  memoryPasses: boolean;
 }
 
 const DEFAULT_SETTINGS: BotSettings = {
@@ -61,6 +63,7 @@ const DEFAULT_SETTINGS: BotSettings = {
   compaction: {},
   maxChildren: 50,
   autoMemory: true,
+  memoryPasses: false,
 };
 
 export const DEFAULT_MODEL = "openai/gpt-6.2-sol";
@@ -147,6 +150,7 @@ const Definition = Schema.Struct({
     }).pipe(Schema.withDecodingDefaultKey(Effect.succeed({}))),
     maxChildren: Schema.Finite.pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_SETTINGS.maxChildren))),
     autoMemory: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_SETTINGS.autoMemory))),
+    memoryPasses: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_SETTINGS.memoryPasses))),
   }).pipe(Schema.withDecodingDefaultKey(Effect.succeed({}))),
 });
 

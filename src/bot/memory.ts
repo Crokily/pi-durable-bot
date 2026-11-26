@@ -1,12 +1,12 @@
 import { open, readdir, readFile, stat } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 import type { MemoryFolders, MemoryProgress, MemorySettle, MemorySource } from "../agent/memory.ts";
 import type { Sql } from "../core/sql.ts";
 
-// The bot's memory, as Claude Code's auto memory: files. Each bot has its own folder, <bot folder>/memory/, and the
-// bots of one POTS_HOME share one more, POTS_HOME/memory/, for facts about the user. A memory is one markdown file with
-// frontmatter (name, description, metadata.type); MEMORY.md in each folder is its index, one line per memory. To
-// forget a memory is to delete its file and its line. What the bot keeps about the memory passes is in bot_state.
+// The bot's memory: files. Each bot has its own folder, <bot folder>/memory/, and the bots of one POTS_HOME share one
+// more, POTS_HOME/memory/, for facts about the user. A memory is one markdown file with frontmatter (name, description,
+// source, and expires for a fact that stops being true); MEMORY.md in each folder is its index, one line per memory.
+// To forget a memory is to delete its file and its line. What the bot keeps about the memory passes is in bot_state.
 
 export const INDEX = "MEMORY.md";
 /** MEMORY.md is loaded up to this many lines and characters, as in Claude Code; the rest is cut with a warning. */
@@ -17,7 +17,6 @@ const LIST_FILES = 200;
 /** The head of a memory file that the list reads for its frontmatter, as in Claude Code. */
 const HEAD_LINES = 30;
 const HEAD_BYTES = 65_536;
-const TYPES = ["user", "feedback", "project", "reference"] as const;
 
 /** A size as Claude Code writes it: "512 bytes", "24.4KB". */
 function size(chars: number): string {
@@ -65,10 +64,14 @@ export function cutIndex(text: string): string {
   return `${kept}\n\n> WARNING: ${INDEX} is ${what}. Only part of it was loaded: ${cutOff}. Keep index entries to one line under ~200 chars; move detail into topic files.`;
 }
 
-/** A folder's MEMORY.md as it is loaded; "" when there is none or it is empty. */
-export async function readIndex(folder: string): Promise<string> {
-  const text = await readFile(join(folder, INDEX), "utf8").catch(() => "");
-  return text.trim() ? cutIndex(text) : "";
+/** A memory folder's MEMORY.md as the prompt shows it, and what does not match between it and the folder's files. */
+export interface LoadedIndex {
+  /** MEMORY.md as it is loaded, without the lines of memories whose expires date has passed; "" when there is none or it is empty. */
+  text: string;
+  /** Links of MEMORY.md to .md files that do not exist, as they are written. */
+  missing: string[];
+  /** Memory files that no line of MEMORY.md links to, relative to the folder; not those whose expires date has passed. */
+  unlisted: string[];
 }
 
 export interface MemoryFile {
@@ -76,7 +79,64 @@ export interface MemoryFile {
   path: string;
   mtimeMs: number;
   description?: string;
-  type?: (typeof TYPES)[number];
+  /** The frontmatter's expires, YYYY-MM-DD: after that day the memory is no longer true. */
+  expires?: string;
+}
+
+/** Today's date here, YYYY-MM-DD. */
+export function today(now = new Date()): string {
+  const two = (n: number) => String(n).padStart(2, "0");
+  return `${now.getFullYear()}-${two(now.getMonth() + 1)}-${two(now.getDate())}`;
+}
+
+/** Whether a memory's expires date has passed: it is before `day`. A value that is not a date never expires. */
+function expired(file: MemoryFile | undefined, day: string): boolean {
+  const date = /^\d{4}-\d{2}-\d{2}/.exec(file?.expires ?? "")?.[0];
+  return date !== undefined && date < day;
+}
+
+/** The .md files a line of MEMORY.md links to, as written, without an anchor: [Title](file.md). */
+function links(line: string): string[] {
+  const targets: string[] = [];
+  for (const match of line.matchAll(/\]\(<?([^)\s>]+)>?\)/g)) {
+    const target = match[1]!.replace(/#.*$/, "");
+    if (target.endsWith(".md") && !/^[a-z][a-z0-9+.-]*:/i.test(target)) targets.push(target);
+  }
+  return targets;
+}
+
+/**
+ * A folder's MEMORY.md as it is loaded, and the facts the agent needs to fix it: links to files that are not there,
+ * and memory files with no line. A line that links to a memory whose expires date has passed is left out; the file stays.
+ */
+export async function loadIndex(folder: string, day = today()): Promise<LoadedIndex> {
+  const raw = await readFile(join(folder, INDEX), "utf8").catch(() => "");
+  const files = new Map((await memoryFiles(folder)).map((file) => [file.path, file]));
+  const linked = new Set<string>();
+  const missing: string[] = [];
+  const kept: string[] = [];
+  for (const line of raw.split("\n")) {
+    const targets = links(line);
+    const paths = targets.map((target) => resolve(folder, safeDecode(target)));
+    for (const path of paths) linked.add(path);
+    if (paths.some((path) => expired(files.get(path), day))) continue;
+    kept.push(line);
+    for (const [index, path] of paths.entries()) {
+      if (!files.has(path) && !(await stat(path).then((info) => info.isFile()).catch(() => false))) missing.push(targets[index]!);
+    }
+  }
+  const unlisted = [...files.values()].filter((file) => !linked.has(file.path) && !expired(file, day)).map((file) => relative(folder, file.path));
+  const text = kept.join("\n");
+  return { text: text.trim() ? cutIndex(text) : "", missing: [...new Set(missing)], unlisted: unlisted.sort() };
+}
+
+/** A link's path as a file name: %20 as a space. */
+function safeDecode(target: string): string {
+  try {
+    return decodeURIComponent(target);
+  } catch {
+    return target;
+  }
 }
 
 /** The memory files of a folder and its subfolders, without MEMORY.md, newest first. */
@@ -111,8 +171,8 @@ async function head(path: string): Promise<string> {
   }
 }
 
-/** description and metadata.type from a memory file's frontmatter. A type at the top level counts too, as in Claude Code. */
-export function frontmatter(text: string): Pick<MemoryFile, "description" | "type"> {
+/** description and expires from a memory file's frontmatter, at its top level. */
+export function frontmatter(text: string): Pick<MemoryFile, "description" | "expires"> {
   const match = /^\uFEFF?---\s*\n([\s\S]*?)---\s*(?:\n|$)/.exec(text);
   if (!match) return {};
   const value = (raw: string) => {
@@ -120,24 +180,14 @@ export function frontmatter(text: string): Pick<MemoryFile, "description" | "typ
     const quoted = /^(["'])(.*)\1$/.exec(trimmed);
     return quoted ? quoted[2]!.replace(/\\"/g, '"').replace(/''/g, "'") : trimmed;
   };
-  let description: string | undefined;
-  let top: string | undefined;
-  let nested: string | undefined;
-  let inMetadata = false;
+  const found: Pick<MemoryFile, "description" | "expires"> = {};
   for (const line of match[1]!.split("\n")) {
-    const pair = /^(\s*)([A-Za-z_][\w-]*):(.*)$/.exec(line.replace(/\r$/, ""));
-    if (!pair) continue;
-    const [, indent, key, rest] = pair;
-    if (!indent) {
-      inMetadata = key === "metadata";
-      if (key === "description" && rest!.trim()) description = value(rest!);
-      if (key === "type") top = value(rest!);
-    } else if (inMetadata && key === "type") {
-      nested = value(rest!);
-    }
+    const pair = /^([A-Za-z_][\w-]*):(.*)$/.exec(line.replace(/\r$/, ""));
+    if (!pair || !pair[2]!.trim()) continue;
+    if (pair[1] === "description") found.description = value(pair[2]!);
+    if (pair[1] === "expires") found.expires = value(pair[2]!);
   }
-  const type = TYPES.find((each) => each === (nested ?? top));
-  return { ...(description ? { description } : {}), ...(type ? { type } : {}) };
+  return found;
 }
 
 /**
@@ -149,7 +199,7 @@ export async function listMemoryFiles(folders: MemoryFolders): Promise<string> {
   return files
     .map((file) => {
       const name = file.path.startsWith(folders.own) ? file.path.slice(folders.own.length + 1) : file.path;
-      const line = `- ${file.type ? `[${file.type}] ` : ""}${name} (${new Date(file.mtimeMs).toISOString()})`;
+      const line = `- ${name} (${new Date(file.mtimeMs).toISOString()})${file.expires ? ` expires ${file.expires}` : ""}`;
       return file.description ? `${line}: ${file.description}` : line;
     })
     .join("\n");

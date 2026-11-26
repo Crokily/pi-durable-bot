@@ -1,9 +1,11 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { dreamDue, forkRefusal, type MemoryFolders, withAgeNote } from "../src/agent/memory.ts";
-import { cutIndex, listMemoryFiles } from "../src/bot/memory.ts";
+import { cutIndex, listMemoryFiles, loadIndex } from "../src/bot/memory.ts";
+import { type PromptFacts, renderDream, renderExtraction } from "../src/bot/prompt.ts";
 import { agentRequests, coworker, type FakeModel, type FakeReply, type FakeRequest, isDream, isMemoryPass, lastUser, startFakeModel, wakes } from "./support/fake-model.ts";
 import { ME, pause, TestGateway, waitFor } from "./support/gateway.ts";
 
@@ -25,7 +27,8 @@ afterEach(async () => {
 async function setUp(memory?: (request: FakeRequest) => FakeReply | Promise<FakeReply>, script = coworker, settings?: Record<string, unknown>): Promise<void> {
   model = await startFakeModel(script, memory ? { memory } : {});
   // The fake model has pi's long prompt cache entry, and pi is told to use it everywhere: still only the main agent asks.
-  gateway = new TestGateway({ model, longPromptCache: true, env: { PI_CACHE_RETENTION: "long" }, ...(settings ? { settings } : {}) });
+  // The passes are off by default; these tests turn them on but where they say otherwise.
+  gateway = new TestGateway({ model, longPromptCache: true, env: { PI_CACHE_RETENTION: "long" }, settings: { memoryPasses: true, ...settings } });
   await gateway.start();
 }
 
@@ -49,7 +52,7 @@ describe("memory", { timeout: 90_000 }, () => {
         case 1:
           return { call: { name: "send", arguments: { to: "test:#general", text: "from the pass" } } };
         case 2:
-          return write(join(own(), "alice-tea.md"), "---\nname: alice-tea\ndescription: Alice likes tea\nmetadata:\n  type: user\n---\n\nAlice likes tea.\n");
+          return write(join(own(), "alice-tea.md"), "---\nname: alice-tea\ndescription: Alice likes tea\nsource: Alice, test:#general, 2026-11-26\n---\n\nAlice likes tea.\n");
         case 3:
           return write(join(own(), "MEMORY.md"), "- [Alice likes tea](alice-tea.md) — what she drinks\n");
         default:
@@ -93,9 +96,9 @@ describe("memory", { timeout: 90_000 }, () => {
     expect(next).toMatch(/\n\nBackground memory extraction updated your memory: saved 1 memory\nFiles changed: \S+[\\/]alice-tea\.md, \S+[\\/]MEMORY\.md\nYour loaded copy of \S+[\\/]memory[\\/]MEMORY\.md is now stale relative to disk — read it again if you need current contents\.\nThis is ambient context — do not narrate it to people unless they ask or it is directly relevant to their request\.$/);
     const later = agentRequests(model).at(-1)!;
     expect(later.messages.some((message) => message.content.includes("memory extraction subagent"))).toBe(false);
-    expect(later.system).toContain("Your MEMORY.md is currently empty.");
+    expect(later.system).toContain("Your MEMORY.md is empty.");
     // The second pass looks only at the second run, and lists the memory files.
-    expect(lastUser(model.requests.filter(isMemoryPass).at(-1)!)).toMatch(/most recent ~4 messages[\s\S]*## Existing memory files\n\n- \[user\] alice-tea\.md \(\S+\): Alice likes tea\n\nCheck this list/);
+    expect(lastUser(model.requests.filter(isMemoryPass).at(-1)!)).toMatch(/most recent ~4 messages[\s\S]*## Existing memory files\n\n- alice-tea\.md \(\S+\): Alice likes tea\n\nCheck this list/);
 
     gateway.say("general", "alice", `@${ME} and now?`);
     await waitFor(() => passes().length === 3, { what: "the third pass" });
@@ -103,7 +106,7 @@ describe("memory", { timeout: 90_000 }, () => {
     expect((await gateway.run(["turn-page", "--note", "a new page"])).status).toBe(0);
     gateway.say("general", "alice", `@${ME} new page`);
     await waitFor(() => gateway.sent().length === 4, { what: "the reply on the new page" });
-    expect(agentRequests(model).at(-1)!.system).toContain(`(your auto-memory, as it was when this page began):\n\n- [Alice likes tea](alice-tea.md) — what she drinks`);
+    expect(agentRequests(model).at(-1)!.system).toContain(`(your memory, as it was when this page began):\n\n- [Alice likes tea](alice-tea.md) — what she drinks`);
   });
 
   it("shows both MEMORY.md at the end of the prompt as they were when the page began", async () => {
@@ -113,14 +116,16 @@ describe("memory", { timeout: 90_000 }, () => {
     const shared = join(gateway.home, "memory");
     for (const folder of [own, shared]) mkdirSync(folder, { recursive: true });
     writeFileSync(join(own, "MEMORY.md"), "- [Alice likes tea](alice-tea.md) — what she drinks\n");
+    writeFileSync(join(own, "alice-tea.md"), "Alice likes tea.\n");
     await gateway.start();
     gateway.say("general", "alice", `@${ME} hello`);
     await waitFor(() => gateway.sent().length === 1, { what: "the reply" });
     const first = agentRequests(model).at(-1)!.system;
-    expect(first).toMatch(/\(your auto-memory, as it was when this page began\):\n\n- \[Alice likes tea\]\(alice-tea\.md\) — what she drinks\n\n/);
-    expect(first).toMatch(/\(the auto-memory every bot of this computer shares, as it was when this page began\):\n\nThis MEMORY\.md is currently empty\.$/);
+    expect(first).toMatch(/\(your memory, as it was when this page began\):\n\n- \[Alice likes tea\]\(alice-tea\.md\) — what she drinks\n\n/);
+    expect(first).toMatch(/\(the memory every bot of this computer shares, as it was when this page began\):\n\nThis MEMORY\.md is empty\.$/);
 
     writeFileSync(join(shared, "MEMORY.md"), "- [Time zone](tz.md) — Australia/Sydney\n");
+    writeFileSync(join(shared, "tz.md"), "Australia/Sydney.\n");
     gateway.say("general", "alice", `@${ME} again`);
     await waitFor(() => gateway.sent().length === 2, { what: "the second reply" });
     expect(agentRequests(model).at(-1)!.system).toBe(first);
@@ -159,7 +164,7 @@ describe("memory", { timeout: 90_000 }, () => {
   it("is skipped when the main agent wrote memory itself, not when its write failed or it only read, and a memory file read 2 days after it changed says how old it is", async () => {
     const script = (request: FakeRequest): FakeReply => {
       const last = request.messages.at(-1)!;
-      const memory = /You have a persistent file-based memory at `(\S+)\/`/.exec(request.system)![1]!;
+      const memory = /Your memory is at `(\S+)\/`/.exec(request.system)![1]!;
       if (last.role === "user" && last.content.includes("try to note")) {
         return { call: { name: "edit", arguments: { path: join(memory, "old.md"), edits: [{ oldText: "not there", newText: "x" }] } } };
       }
@@ -320,6 +325,56 @@ describe("memory", { timeout: 90_000 }, () => {
     expect(model.requests.filter(isMemoryPass)).toHaveLength(1);
     expect(agentRequests(model).at(-1)!.system).not.toContain("# Memory");
   });
+
+  it("has no pass and no dream by default, with the memory section as before; settings.memoryPasses turns them on while running", async () => {
+    model = await startFakeModel(coworker, { memory: (request) => (isDream(request) ? { text: "Nothing to merge." } : { text: "Nothing to save." }) });
+    gateway = new TestGateway({ model });
+    await gateway.start();
+    gateway.say("general", "alice", `@${ME} hello`);
+    await waitFor(() => gateway.sent().length === 1, { what: "the reply" });
+    // A dream is due by the count, yet without the setting it does not come, nor a pass.
+    const db = new DatabaseSync(join(gateway.botDir, "bot.sqlite"), { timeout: 5_000 });
+    db.prepare("INSERT INTO bot_state (key, value) VALUES ('memory_changes', '5') ON CONFLICT (key) DO UPDATE SET value = excluded.value").run();
+    db.close();
+    gateway.say("general", "alice", `@${ME} hello again`);
+    await waitFor(() => gateway.sent().length === 2, { what: "the second reply" });
+    await pause(1_500);
+    expect(model.requests.filter((request) => isMemoryPass(request) || isDream(request))).toEqual([]);
+    const system = agentRequests(model).at(-1)!.system;
+    expect(system).toContain("# Memory\n\nYour memory is at");
+    // Facts with their source, no types and no "Why:" line.
+    expect(system).toContain("source: <who said or showed it, where, when>");
+    expect(system).not.toMatch(/feedback|\*\*Why:\*\*|type: user/);
+
+    const file = join(gateway.botDir, "bot.json");
+    const definition = JSON.parse(readFileSync(file, "utf8")) as { settings: Record<string, unknown> };
+    writeFileSync(file, JSON.stringify({ ...definition, settings: { ...definition.settings, memoryPasses: true } }));
+    await waitFor(() => gateway.output.some((line) => line.message === "definition applied"), { what: "the new definition" });
+    gateway.say("general", "alice", `@${ME} and now?`);
+    await waitFor(() => passes().length === 1, { what: "the pass" });
+    await waitFor(() => gateway.output.some((line) => line.message === "memory dream"), { what: "the dream" });
+  });
+
+  it("shows MEMORY.md without the lines of expired memories, and names its links to missing files and the files it has no line for", async () => {
+    model = await startFakeModel();
+    gateway = new TestGateway({ model });
+    const own = join(gateway.botDir, "memory");
+    mkdirSync(own, { recursive: true });
+    const yesterday = new Date(Date.now() - DAY).toISOString().slice(0, 10);
+    writeFileSync(join(own, "MEMORY.md"), "- [Omen](omen.md) — reach Omen with ssh omen\n- [Trip](trip.md) — Alice is away until yesterday\n- [Gone](gone.md) — a file that is not there\n");
+    writeFileSync(join(own, "omen.md"), "---\nname: omen\ndescription: how to reach Omen\nsource: Alice, test:#general, 2026-11-20\n---\n\nssh omen\n");
+    writeFileSync(join(own, "trip.md"), `---\nname: trip\ndescription: Alice's trip\nexpires: ${yesterday}\n---\n\nAway.\n`);
+    writeFileSync(join(own, "tz.md"), "---\nname: tz\ndescription: time zone\n---\n\nSydney.\n");
+    await gateway.start();
+    gateway.say("general", "alice", `@${ME} hello`);
+    await waitFor(() => gateway.sent().length === 1, { what: "the reply" });
+    const system = agentRequests(model).at(-1)!.system;
+    expect(system).toMatch(
+      /\(your memory, as it was when this page began\):\n\n- \[Omen\]\(omen\.md\) — reach Omen with ssh omen\n- \[Gone\]\(gone\.md\) — a file that is not there\n\nIn \S+[\\/]memory\/: MEMORY\.md links to files that do not exist: gone\.md\. These memory files have no line in MEMORY\.md: tz\.md\.\n\n/,
+    );
+    expect(system).not.toContain("Trip");
+    expect(existsSync(join(own, "trip.md"))).toBe(true);
+  });
 });
 
 describe("memory parts", () => {
@@ -451,18 +506,74 @@ describe("memory parts", () => {
     expect(cutIndex("x".repeat(30_000))).toMatch(/^x{25000}\n\n> WARNING: MEMORY\.md is 29\.3KB \(limit: 24\.4KB\) — index entries are too long\. Only part of it was loaded: everything after the first 25000 characters of line 1 was cut off\./);
 
     writeFileSync(join(folders.own, "MEMORY.md"), "- index");
-    writeFileSync(join(folders.own, "alice.md"), '---\nname: alice\ndescription: "Alice: likes tea"\nmetadata:\n  type: user\n---\n\nAlice likes tea.\n');
-    writeFileSync(join(folders.shared, "tz.md"), "---\nname: tz\ndescription: The user's time zone\ntype: reference\n---\n");
+    writeFileSync(join(folders.own, "alice.md"), '---\nname: alice\ndescription: "Alice: likes tea"\nsource: Alice, 2026-01-02\nexpires: 2027-01-01\n---\n\nAlice likes tea.\n');
+    writeFileSync(join(folders.shared, "tz.md"), "---\nname: tz\ndescription: The user's time zone\n---\n");
     writeFileSync(join(folders.shared, "plain.md"), "No frontmatter.\n");
     utimesSync(join(folders.own, "alice.md"), new Date(2026, 0, 2), new Date(2026, 0, 2));
     utimesSync(join(folders.shared, "tz.md"), new Date(2026, 0, 3), new Date(2026, 0, 3));
     utimesSync(join(folders.shared, "plain.md"), new Date(2026, 0, 1), new Date(2026, 0, 1));
     expect(await listMemoryFiles(folders)).toBe(
       [
-        `- [reference] ${join(folders.shared, "tz.md")} (${new Date(2026, 0, 3).toISOString()}): The user's time zone`,
-        `- [user] alice.md (${new Date(2026, 0, 2).toISOString()}): Alice: likes tea`,
+        `- ${join(folders.shared, "tz.md")} (${new Date(2026, 0, 3).toISOString()}): The user's time zone`,
+        `- alice.md (${new Date(2026, 0, 2).toISOString()}) expires 2027-01-01: Alice: likes tea`,
         `- ${join(folders.shared, "plain.md")} (${new Date(2026, 0, 1).toISOString()})`,
       ].join("\n"),
     );
+  });
+
+  it("leaves out the index lines of memories whose expires date has passed, and finds links to missing files and files with no line", async () => {
+    make();
+    const memory = (name: string, expires?: string) =>
+      writeFileSync(join(folders.own, name), `---\nname: ${name}\ndescription: d\n${expires ? `expires: ${expires}\n` : ""}---\n\nx\n`);
+    mkdirSync(join(folders.own, "people"));
+    for (const name of ["a.md", "people/f.md", "d.md"]) memory(name);
+    memory("today.md", "2026-11-26");
+    memory("old.md", "2026-11-25");
+    memory("old-unlisted.md", "2026-01-01");
+    memory("odd.md", "soon");
+    writeFileSync(
+      join(folders.own, "MEMORY.md"),
+      [
+        "# People",
+        "- [A](a.md) — a",
+        "- [F](people/f.md#x) — f",
+        "- [Today](today.md) — true until today ends",
+        "- [Old](old.md) — no longer true",
+        "- [Odd](odd.md) — an expires that is not a date",
+        "- [Missing](missing.md) — no file; [again](missing.md)",
+        "- [Web](https://example.com/page.md) — not a memory file",
+      ].join("\n"),
+    );
+    expect(await loadIndex(folders.own, "2026-11-26")).toEqual({
+      text: [
+        "# People",
+        "- [A](a.md) — a",
+        "- [F](people/f.md#x) — f",
+        "- [Today](today.md) — true until today ends",
+        "- [Odd](odd.md) — an expires that is not a date",
+        "- [Missing](missing.md) — no file; [again](missing.md)",
+        "- [Web](https://example.com/page.md) — not a memory file",
+      ].join("\n"),
+      missing: ["missing.md"],
+      unlisted: ["d.md"],
+    });
+    // No MEMORY.md: every memory file that is still true has no line.
+    expect(await loadIndex(folders.shared, "2026-11-26")).toEqual({ text: "", missing: [], unlisted: [] });
+    rmSync(join(folders.own, "MEMORY.md"));
+    expect((await loadIndex(folders.own, "2026-11-26")).unlisted).toEqual(["a.md", "d.md", "odd.md", join("people", "f.md"), "today.md"]);
+  });
+
+  it("offers the passes sqlite3 only where it is, and says otherwise that the log cannot be queried", () => {
+    make();
+    const facts = { paths: { memory: folders.own, db: join(dir, "bot.sqlite") }, sharedMemory: folders.shared } as unknown as PromptFacts;
+    expect(renderExtraction(4, "", folders, true)).toContain("read-only bash (ls, find, grep, cat, stat, wc, head, tail and sqlite3 -readonly -safe, also joined by pipes)");
+    expect(renderExtraction(4, "", folders, false)).toContain("read-only bash (ls, find, grep, cat, stat, wc, head and tail, also joined by pipes)");
+    expect(renderExtraction(4, "", folders, false)).not.toContain("sqlite3");
+    expect(renderDream(facts, { changes: 5 }, true)).toContain(`sqlite3 -readonly -safe ${facts.paths.db} "SELECT`);
+    const without = renderDream(facts, { changes: 5 }, false);
+    expect(without).toContain("sqlite3 is not installed on this computer, so this run cannot query the message log.");
+    expect(without).not.toContain("sqlite3 -readonly");
+    // The passes keep to facts as the memory section says them: no types, no "Why:".
+    for (const text of [renderExtraction(4, "", folders, true), without]) expect(text).not.toMatch(/feedback|Why:|type fits/);
   });
 });

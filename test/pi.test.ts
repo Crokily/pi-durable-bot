@@ -132,7 +132,7 @@ describe("pi's prompt cache warming", { timeout: 90_000 }, () => {
 
   it("sends the main agent's last request again before its cache entry expires, not a memory pass's, until pi's setting turns it off", async () => {
     model = await startFakeModel();
-    gateway = new TestGateway({ model, promptCacheSeconds: 12 });
+    gateway = new TestGateway({ model, promptCacheSeconds: 12, settings: { memoryPasses: true } });
     await gateway.start();
     gateway.say("general", "alice", `@${ME} hello`);
     await waitFor(() => gateway.sent().length === 1, { what: "the reply" });
@@ -160,7 +160,7 @@ describe("pi's prompt cache warming", { timeout: 90_000 }, () => {
   it("stops warming after a request fails, as pi does, and does not send the failed request again", async () => {
     let down = false;
     model = await startFakeModel((request) => (down ? { fail: { status: 401, message: "the login expired" } } : coworker(request)));
-    gateway = new TestGateway({ model, promptCacheSeconds: 12 });
+    gateway = new TestGateway({ model, promptCacheSeconds: 12, settings: { memoryPasses: true } });
     await gateway.start();
     const failedRuns = () => gateway.output.filter((line) => line.message === "agent run failed").length;
     gateway.say("general", "alice", `@${ME} hello`);
@@ -181,7 +181,7 @@ describe("pi's prompt cache warming", { timeout: 90_000 }, () => {
 
   it("warms nothing when pi's setting is off", async () => {
     model = await startFakeModel();
-    gateway = new TestGateway({ model, promptCacheSeconds: 12 });
+    gateway = new TestGateway({ model, promptCacheSeconds: 12, settings: { memoryPasses: true } });
     writeFileSync(join(gateway.home, "pi", "settings.json"), JSON.stringify({ cacheWarming: "off" }));
     await gateway.start();
     gateway.say("general", "alice", `@${ME} hello`);
@@ -194,7 +194,7 @@ describe("pi's prompt cache warming", { timeout: 90_000 }, () => {
 describe("pi's request identity", { timeout: 90_000 }, () => {
   it("names Pots, not pi, to OpenRouter", async () => {
     model = await startFakeModel();
-    gateway = new TestGateway({ model });
+    gateway = new TestGateway({ model, settings: { memoryPasses: true } });
     // pi's openrouter provider, pointed at the fake model.
     const modelsFile = join(gateway.home, "pi", "models.json");
     const models = JSON.parse(readFileSync(modelsFile, "utf8")) as { providers: Record<string, unknown> };

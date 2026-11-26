@@ -850,7 +850,7 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
         const over = left.length === 0 ? "all" : args.any === true && done.length > 0 ? "any" : api.wake?.reason === "expired" || api.wake?.reason === "time" ? "time" : undefined;
         if (over === undefined) {
           const waiting: Waiting = { ...(until === undefined ? {} : { until }), ended };
-          return { sleep: { checkpoint: waiting, signals: left.map((id) => ChildEnded.key(id)), ...(until === undefined ? {} : { until }) } };
+          return { kind: "sleep", checkpoint: waiting, signals: left.map((id) => ChildEnded.key(id)), ...(until === undefined ? {} : { until }) };
         }
         const results = await api.commit(async (tx) => {
           const state = await tx.doc(Children, ROOT_CONVERSATION_ID);

@@ -54,11 +54,11 @@
     "prepare": "npm run build"
   },
   "dependencies": {
-    "@chat-adapter/discord": "4.44.0",
-    "@chat-adapter/slack": "4.44.0",
-    "@chat-adapter/state-memory": "4.44.0",
-    "@chat-adapter/teams": "4.44.0",
-    "@chat-adapter/telegram": "4.44.0",
+    "@chat-adapter/discord": "4.45.0",
+    "@chat-adapter/slack": "4.45.0",
+    "@chat-adapter/state-memory": "4.45.0",
+    "@chat-adapter/teams": "4.45.0",
+    "@chat-adapter/telegram": "4.45.0",
     "@earendil-works/chord": "1.6.1",
     "@earendil-works/pi-ai": "1.6.1",
     "@earendil-works/pi-codemode": "1.6.1",
@@ -71,7 +71,7 @@
     "@effect/platform-node-shared": "4.1.4",
     "@microsoft/teams.api": "2.2.1",
     "@microsoft/teams.apps": "2.2.1",
-    "chat": "4.44.0",
+    "chat": "4.45.0",
     "discord.js": "14.28.1",
     "effect": "4.1.4",
     "ws": "8.23.0"

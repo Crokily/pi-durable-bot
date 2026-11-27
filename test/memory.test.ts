@@ -302,7 +302,7 @@ describe("memory", { timeout: 90_000 }, () => {
   it("tidies after 5 memory changes, once a day, and the next wake says what it changed and its summary", async () => {
     let n = 0;
     await setUp((request) => {
-      if (isTidy(request)) return turn(request) === 0 ? { call: { name: "bash", arguments: { command: `rm ${join(own(), "note-1.md")}` } } } : { text: "Deleted note-1.md: note-2.md says the same." };
+      if (isTidy(request)) return turn(request) === 0 ? { call: { name: "bash", arguments: { command: `rm '${join(own(), "note-1.md")}'` } } } : { text: "Deleted note-1.md: note-2.md says the same." };
       return turn(request) === 0 ? write(join(own(), `note-${++n}.md`), "A note.\n") : { text: "Saved." };
     });
     for (let i = 1; i <= 5; i++) {

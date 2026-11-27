@@ -38,7 +38,7 @@ import { decodeVncPasswordFile } from "../pages/rfb.ts";
 import { ControlServer } from "./control.ts";
 import { type BotDefinition, type BotPaths, botPaths } from "./definition.ts";
 import { describeMachine } from "./machine.ts";
-import { listMemoryFiles, memoryProgress, readIndex, recordMemoryChange, settleMemory } from "./memory.ts";
+import { countMemoryChange, listMemoryFiles, loadIndex, memoryProgress, recordMemoryChange, settleMemory } from "./memory.ts";
 import {
   childMemorySection,
   childSection,
@@ -52,7 +52,7 @@ import {
   renderCacheUse,
   renderChildFailure,
   renderContext,
-  renderDream,
+  renderTidy,
   renderExtraction,
   renderHandoff,
   renderLeftScopes,
@@ -338,10 +338,11 @@ export class Bot implements WakeTarget {
         return mcp.section();
       },
     };
-    // The memory, as Claude Code's auto memory: files in the bot's memory folder and in the one all bots share.
+    // The memory: files in the bot's memory folder and in the one all bots share. Extraction with
+    // settings.memoryExtraction, the tidy with settings.memoryTidy.
     const folders = { own: paths.memory, shared: MEMORY_DIR };
     const memoryOn = () => settings().autoMemory;
-    const indexes = async () => ({ own: await readIndex(folders.own), shared: await readIndex(folders.shared) });
+    const indexes = async () => ({ own: await loadIndex(folders.own), shared: await loadIndex(folders.shared) });
     /** The notes of what the memory passes changed, for the next wake: in the process, as in Claude Code. */
     const notes: MemoryNote[] = [];
     const agent = await Agent.open({
@@ -401,11 +402,14 @@ export class Bot implements WakeTarget {
           }),
       memory: {
         enabled: memoryOn,
+        extracts: () => settings().memoryExtraction,
+        tidies: () => settings().memoryTidy,
         folders,
         extraction: async (messages) => renderExtraction(messages, await listMemoryFiles(folders), folders),
-        dream: async (progress) => renderDream(facts(), progress),
+        tidy: async (progress) => renderTidy(facts(), progress, await indexes()),
         progress: () => memoryProgress(sql),
         changed: (source) => recordMemoryChange(sql, source),
+        counted: () => countMemoryChange(sql),
         settle: (update) => settleMemory(sql, update),
         noted: (note) => notes.push(note),
       },

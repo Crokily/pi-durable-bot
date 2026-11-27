@@ -51,7 +51,7 @@ function script(request: FakeRequest): FakeReply {
     if (last.content.includes("wait for go")) return { call: { name: "bash", arguments: { command: "until [ -e go ]; do sleep 0.2; done" } } };
     if (last.content.includes("nap first")) return { call: { name: "bash", arguments: { command: "sleep 8" } } };
     if (last.content.includes("save a memory")) {
-      const index = /Contents of (\S+\/MEMORY\.md) \(the auto-memory of/.exec(request.system)![1]!;
+      const index = /Contents of (\S+\/MEMORY\.md) \(the memory of/.exec(request.system)![1]!;
       // In quotes: bash takes the backslashes of a Windows path away.
       return { call: { name: "bash", arguments: { command: `echo '- [Bob](bob.md) — likes coffee' >> '${index}'` } } };
     }
@@ -366,10 +366,12 @@ describe("children", { timeout: 90_000 }, () => {
     gateway.say("general", "alice", `@${ME} please note`);
     await waitFor(() => ended("c1"), { what: "the child's end" });
     expect(readFileSync(index, "utf8")).toBe("- [Alice](alice.md) — likes tea\n- [Bob](bob.md) — likes coffee\n");
-    // The line the child added itself does not change the start of its own requests; the child has no memory instructions.
+    // The line the child added itself does not change the start of its own requests; the child has what memory is for,
+    // without the file format, and the main agent's facts about the index (alice.md is not there) are not in it.
     const [first, second] = model.requests.filter(isChild);
-    expect(first!.system).toMatch(/# Memory\n\nContents of \S+[\\/]memory\/MEMORY\.md \(the auto-memory of Coworker, as it was when you started\):\n\n- \[Alice\]\(alice\.md\) — likes tea\n\n/);
-    expect(first!.system).not.toContain("Each memory is one file holding one fact");
+    expect(first!.system).toMatch(/# Memory\n\nMemory keeps facts and pointers that must outlast a page: [^\n]+ The message log keeps everything that was said\. [^\n]+\n\nContents of \S+[\\/]memory\/MEMORY\.md \(the memory of Coworker, as it was when you started\):\n\n- \[Alice\]\(alice\.md\) — likes tea\n\n/);
+    expect(first!.system).not.toContain("A memory file:");
+    expect(first!.system).not.toContain("links to files that do not exist");
     expect(second!.system).toBe(first!.system);
     expect(gateway.pots("children")).toMatch(/^c1 "note": .*, thinking max$/m);
   });

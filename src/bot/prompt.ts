@@ -12,7 +12,7 @@ import { describeSchedule, describeWork, formatDuration } from "../gateway/routi
 import type { DueTimer } from "../gateway/timers.ts";
 import type { BotPaths } from "./definition.ts";
 import type { Machine } from "./machine.ts";
-import type { LoadedIndex } from "./memory.ts";
+import { type LoadedIndex, today } from "./memory.ts";
 
 // Everything the agent is told. Facts and mechanisms only; the judgment is the agent's. The sections are the start of
 // every request, so they hold only facts that stay the same; what changes is in the wake.
@@ -158,7 +158,7 @@ export function folderSection(facts: PromptFacts, child = false): string {
     ? ""
     : ` When the person has to give you secrets, such as tokens they copied, ask in the terminal channel with call <its channel id> ask-secret {"text": "…", "file": "<app>-${facts.id}.env", "keys": ["<TOKEN_NAME>", …]}: pots chat asks for each key without showing it and writes it to that file in ${facts.secretsDir}, and you get a message that names the keys it wrote. You never see the values, so they stay out of your log. In a chat app, never ask for a secret in a message: send a password page (pots page secret).`;
   return `# Your folder: ${paths.dir}
-- bot.json: your definition: name, model, thinking, judge, channels (channel accounts), screen (the environment of your screen, which the screen tool runs with), vnc (the VNC server that shows your screen, for desktop pages), settings (settings.maxChildren: how many children may work at once; settings.autoMemory: false turns your memory off; settings.memoryPasses: true turns on the background memory passes, a pass after each of your runs that updates the memory and a daily one that consolidates it; off by default). model is "provider/modelId". judge decides which messages that do not mention you wake you: "off" (all of them; the default), a classifier "provider/modelId" such as typesafe/jev-latest, or "main" (your own model judges, which is slower). Models and logins are pi's: ~/.pi/agent/auth.json, and ~/.pi/agent/models.json for OpenAI-compatible and local endpoints. Changes take effect within a few seconds. If it has an error, the error goes into bot.json.error and the old definition stays in use.
+- bot.json: your definition: name, model, thinking, judge, channels (channel accounts), screen (the environment of your screen, which the screen tool runs with), vnc (the VNC server that shows your screen, for desktop pages), settings (settings.maxChildren: how many children may work at once; settings.autoMemory: false turns your memory off; settings.memoryExtraction: true turns on a pass after each of your runs that saves to memory what the run showed, off by default; settings.memoryTidy: false turns off the tidy, which at most once a day, after 5 memory changes, deletes expired and duplicate memories, shortens long index lines and corrects contradictions, on by default). model is "provider/modelId". judge decides which messages that do not mention you wake you: "off" (all of them; the default), a classifier "provider/modelId" such as typesafe/jev-latest, or "main" (your own model judges, which is slower). Models and logins are pi's: ~/.pi/agent/auth.json, and ~/.pi/agent/models.json for OpenAI-compatible and local endpoints. Changes take effect within a few seconds. If it has an error, the error goes into bot.json.error and the old definition stays in use.
 - AGENTS.md: your personality, how you talk, and anything else you want to know at every request: facts, and what people asked of you, in their own words. Context files are found as pi finds them: AGENTS.md (or AGENTS.override.md, CLAUDE.md) in ~/.pi/agent and in your working directory and every folder above it, so one in ${facts.botsDir} is for every bot there. They are read before each request, so changes take effect at once.
 - Skills, as in pi: a skill is a folder with a SKILL.md. They are found in ~/.pi/agent/skills, ~/.agents/skills, .pi/skills in your working directory, .agents/skills in it and the folders above, and pi's settings and packages, the same ones the pi command line uses. The ones found are listed below with where they are. You can write or install your own; new ones show at the next request.
 - A CLI on this computer is managed when it has a skill. When you find a CLI that has no skill, suggest to the person that you bring it under management: collect its docs and write one skill for it in ~/.agents/skills/<name>/SKILL.md, which says when to use the CLI, how to use it, and how to check its sign-in. pi finds skills in that folder, so every bot and every pi terminal sees them. When a CLI is removed, remove its skill too.
@@ -205,9 +205,9 @@ export interface MemoryIndexes {
   shared: LoadedIndex;
 }
 
-/** A memory folder's MEMORY.md in a section: "Contents of <path> (...):", then the text. */
-function indexBlock(folder: string, about: string, index: LoadedIndex, empty: string): string {
-  return `Contents of ${folder}/MEMORY.md (${about}):\n\n${index.text || empty}`;
+/** A memory folder's MEMORY.md in a section: "Contents of <path> (...):", then its status line when asked, then the text. */
+function indexBlock(folder: string, about: string, index: LoadedIndex, empty: string, status = false): string {
+  return `Contents of ${folder}/MEMORY.md (${about}):\n\n${status && index.status ? `${index.status}\n\n` : ""}${index.text || empty}`;
 }
 
 /** What does not match between a folder's MEMORY.md and its memory files, as facts; "" when all match. */
@@ -228,7 +228,7 @@ const LIFETIMES = "notes.md is replaced each time the page turns. memory/ stays 
 
 /**
  * The main agent's memory section: what memory is for, how long each record lasts, the file format, then both indexes
- * and what does not match between each index and its files. Facts, no procedure: with rules and a type for
+ * with a status line each, and what does not match between each index and its files. Facts, no procedure: with rules and a type for
  * "feedback", bots wrote one remark down as a standing rule of their own, often credited to the wrong person (Colin,
  * 2026-11-26). Pinned: the indexes are as the page began.
  */
@@ -260,9 +260,9 @@ expires: <YYYY-MM-DD, only for a fact that stops being true>
 
 MEMORY.md has one line per memory. The line states the fact in one sentence and links to the file: \`- [Title](file.md) — the fact\`. Rules and slogans are not in it. A memory whose expires date has passed is not shown below; its file stays. To forget a memory, delete its file and its line. Secrets such as passwords and tokens go in ${facts.secretsDir}, not in memory. A memory was true when it was written; things may have changed since.
 
-${indexBlock(own, "your memory, as it was when this page began", indexes.own, "Your MEMORY.md is empty.")}${indexCheck(own, indexes.own)}
+${indexBlock(own, "your memory, as it was when this page began", indexes.own, "Your MEMORY.md is empty.", true)}${indexCheck(own, indexes.own)}
 
-${indexBlock(shared, "the memory every bot of this computer shares, as it was when this page began", indexes.shared, "This MEMORY.md is empty.")}${indexCheck(shared, indexes.shared)}`;
+${indexBlock(shared, "the memory every bot of this computer shares, as it was when this page began", indexes.shared, "This MEMORY.md is empty.", true)}${indexCheck(shared, indexes.shared)}`;
 }
 
 /** A child's memory section: what memory is for, and both indexes as they were when the child started. */
@@ -276,22 +276,16 @@ ${indexBlock(facts.paths.memory, `the memory of ${facts.name}, as it was when yo
 ${indexBlock(facts.sharedMemory, "the memory every bot of this computer shares, as it was when you started", indexes.shared, "This MEMORY.md is empty.")}`;
 }
 
-/** The read-only commands a memory fork may run, as its message says them; sqlite3 only when this computer has it. */
-function readOnlyCommands(sqlite: boolean): string {
-  return sqlite ? "ls, find, grep, cat, stat, wc, head, tail and sqlite3 -readonly -safe, also joined by pipes" : "ls, find, grep, cat, stat, wc, head and tail, also joined by pipes";
-}
-
 /**
  * The extraction pass's message: Claude Code's, with what to save as the main agent's memory section says it.
- * messages: how many messages since the last pass; files: the "## Existing memory files" list; sqlite: whether
- * sqlite3 is on this computer.
+ * messages: how many messages since the last pass; files: the "## Existing memory files" list.
  */
-export function renderExtraction(messages: number, files: string, folders: MemoryFolders, sqlite: boolean): string {
+export function renderExtraction(messages: number, files: string, folders: MemoryFolders): string {
   const list = files ? `\n\n## Existing memory files\n\n${files}\n\nCheck this list before writing — update an existing file rather than creating a duplicate.` : "";
   return [
     `You are now acting as the memory extraction subagent. Analyze the most recent ~${messages} messages above and use them to update the memory.`,
     "",
-    `Available tools: read, read-only bash (${readOnlyCommands(sqlite)}), and write/edit for paths inside the memory directories only (${folders.own}/ and ${folders.shared}/), and bash rm of .md files inside the memory directories only (rm takes no flags except -f). All other tools — screen, send, react, call, task, write-capable bash, etc — will be denied.`,
+    `Available tools: read, read-only bash (ls, find, grep, cat, stat, wc, head and tail, also joined by pipes), and write/edit for paths inside the memory directories only (${folders.own}/ and ${folders.shared}/), and bash rm of .md files inside the memory directories only (rm takes no flags except -f). All other tools — screen, send, react, call, task, write-capable bash, etc — will be denied.`,
     "",
     "You have a limited turn budget. edit needs the current text of the file, so the efficient strategy is: turn 1 — issue all read calls in parallel for every file you might update; turn 2 — issue all write/edit calls in parallel. Do not interleave reads and writes across multiple turns.",
     "",
@@ -304,110 +298,54 @@ export function renderExtraction(messages: number, files: string, folders: Memor
 }
 
 /**
- * The dream's message: Claude Code's "# Dream: Memory Consolidation", for both memory folders and the bot's log, with
- * what memory is for as the main agent's memory section says it. sqlite: whether sqlite3 is on this computer; without
- * it, the fork cannot query the log, and the message says so.
+ * The tidy's message. It only takes away and corrects: with more, the dream added rules nobody said and merged
+ * memories into summaries (Colin, 2026-11-27). Facts and the task; the status lines and the expired files are as now.
  */
-export function renderDream(facts: PromptFacts, progress: MemoryProgress, sqlite: boolean): string {
-  const own = `${facts.paths.memory}/`;
-  const shared = `${facts.sharedMemory}/`;
-  const db = facts.paths.db;
-  const last = progress.dreamAt === undefined ? "none before" : new Date(progress.dreamAt).toISOString();
-  const log = sqlite
-    ? `Message log and conversation: \`${db}\` (a large SQLite file — query it narrowly with sqlite3 -readonly -safe, don't read whole tables)`
-    : `Message log and conversation: \`${db}\`. sqlite3 is not installed on this computer, so this run cannot query the message log.`;
-  const search = sqlite
-    ? `2. **Log search** — if you need specific context (e.g., "what did Alice say about the deadline yesterday?"), query the message log for narrow terms:
-   \`sqlite3 -readonly -safe ${db} "SELECT at, person, text FROM gw_messages WHERE text LIKE '%<narrow term>%' ORDER BY at DESC LIMIT 50"\`
+export function renderTidy(facts: PromptFacts, progress: MemoryProgress, indexes: MemoryIndexes): string {
+  const own = facts.paths.memory;
+  const shared = facts.sharedMemory;
+  const last = progress.tidiedAt === undefined ? "none before" : new Date(progress.tidiedAt).toISOString();
+  const expired = (folder: string, index: LoadedIndex) =>
+    index.expired.length > 0 ? `Memories in ${folder}/ whose expires date has passed: ${index.expired.join(", ")}.` : `No memory in ${folder}/ has expired.`;
+  return `# Memory tidy
 
-Don't exhaustively read the log. Look only for things you already suspect matter.`
-    : "2. **Your folder** — files a memory points to, to see whether it is still true. The message log cannot be queried in this run.";
-  return `# Dream: Memory Consolidation
+This is the memory tidy. It runs at most once a day, after the memory changed at least 5 times. Memory changes since the last tidy (${last}): ${progress.changes}.
 
-You are performing a dream — a reflective pass over your memory files. Make them accurate and easy to find, so that future pages can orient quickly. What memory is for, the file format and the index line are in the Memory section of your system prompt.
+Your memory is at \`${own}/\`. The shared memory of the bots of this computer is at \`${shared}/\`. What memory is for, the file format and the index line are in the Memory section of your system prompt. Your AGENTS.md is in your system prompt too.
 
-Memory directories: \`${own}\` (yours) and \`${shared}\` (shared by every bot of this computer)
-Both directories already exist — write to them directly with the write tool (do not run mkdir or check for their existence).
+Today is ${today()}. The memory now:
 
-${log}
+- Yours: ${indexes.own.status || "MEMORY.md is empty."} ${expired(own, indexes.own)}
+- Shared: ${indexes.shared.status || "MEMORY.md is empty."} ${expired(shared, indexes.shared)}
 
-## Shared memory (\`${shared}\`)
+The task: make the memory correct and small. You only delete and correct:
 
-The shared directory holds memories every bot of this computer uses. Other bots write here too — treat it differently from your own files:
+- A memory whose expires date has passed: delete its file and its line in MEMORY.md.
+- Two memories that say the same thing: delete one, its file and its line. Keep the text of the other as it is. When one of your memories says the same as a shared memory, delete yours.
+- An index line that is too long: shorten it to the fact in one sentence. Move the detail into the memory's file.
+- Two memories that contradict: correct the wrong one. Where a memory contradicts AGENTS.md, AGENTS.md is correct. Where two memories contradict, the newer one that states its source is correct. When you cannot tell, change neither and name both in your answer.
 
-- **Phase 1:** \`ls\` the shared directory and skim it alongside your own files. Another bot may have already captured something you'd otherwise duplicate.
-- **Phase 3:** Merge near-duplicates *within* the shared directory the same way you would your own memories. If one of your memories restates a shared memory, delete yours.
-- **Phase 4 — be conservative pruning the shared directory:**
-  - DO delete or fix a shared memory that is clearly contradicted by what you see now, that a newer shared memory marks as superseded, or whose expires date has passed.
-  - DO NOT delete a shared memory just because you don't recognize it or it isn't relevant to *your* recent work — another bot may rely on it.
-  - When unsure, leave it. A stale shared memory costs little; deleting another bot's load-bearing note costs a lot.
+Do not add facts. Do not merge memories into a new summary. Do not search the message log.
 
-Do not move your own memories into the shared directory during a dream — that's a deliberate choice made when the fact comes up, not something to do reflexively.
+A memory that reads as a rule or a preference: do not change it. Name it in your answer. The main agent decides, because you cannot write AGENTS.md.
 
----
+The shared memory: other bots write there too, and may rely on a memory you do not know. Delete or correct a shared memory only when it has expired, says the same as another shared memory, or a newer shared memory or AGENTS.md clearly contradicts it. Do not delete a shared memory because you do not recognize it or it is not about your work. When you are not sure, keep it: a stale shared memory costs little; deleting another bot's load-bearing note costs a lot. Do not move your own memories into the shared folder.
 
-## Phase 1 — Orient
+Tools: read; bash with only ls, find, grep, cat, stat, wc, head and tail, also joined by pipes; rm of .md files in the memory folders, with no flag but -f; write and edit of .md files in the memory folders. Other calls are refused.
 
-- \`ls\` the memory directories to see what already exists
-- Read each \`MEMORY.md\` to understand the current index
-- Skim existing topic files so you improve them rather than creating duplicates
-
-## Phase 2 — Gather recent signal
-
-Look for new information worth persisting. Sources in rough priority order:
-
-1. **Existing memories that drifted** — facts that contradict something you see in your folder${sqlite ? " or the message log" : ""} now
-${search}
-
-## Phase 3 — Consolidate
-
-For each thing worth remembering, write or update a memory file at the top level of the memory directory it belongs in, in the file format of your system prompt's Memory section.
-
-Focus on:
-- Merging new signal into existing topic files rather than creating near-duplicates
-- Converting relative dates ("yesterday", "last week") to absolute dates so they remain interpretable after time passes
-- Deleting contradicted facts — if today's investigation disproves an old memory, fix it at the source
-- Memories whose expires date has passed — delete the file and its line
-- Rules, methods and preferences in memory — memory holds facts. Where no person stated one, rewrite it as the fact behind it (what happened, what was said, by whom, when) or delete it. Where a person stated it, it belongs in AGENTS.md in their own words with the date; a dream cannot write AGENTS.md, so list it in your summary
-
-## Phase 4 — Prune and index
-
-Update each \`MEMORY.md\` so it stays under 200 lines AND under ~25KB. It's an **index**, not a dump — each entry is one line that states the fact in one sentence and links to its file: \`- [Title](file.md) — the fact\`. No rules or slogans in it.
-
-- Remove pointers to memories that are now stale, wrong, or superseded
-- Demote verbose entries: if an index line is over ~200 chars, it's carrying content that belongs in the topic file — shorten the line, move the detail
-- Add pointers to newly important memories
-- Resolve contradictions — if two files disagree, fix the wrong one
-
-### Reconcile memories against AGENTS.md
-
-Your AGENTS.md and the other context files are loaded in your system prompt. For each memory on the same topic as an AGENTS.md instruction:
-
-- **Memory is stale** — AGENTS.md and the memory say different things about the same topic: AGENTS.md is the maintained source. Delete the memory, or rewrite it to agree if it carries facts worth keeping.
-- **AGENTS.md may be stale** — the memory is clearly dated after AGENTS.md and explicitly corrects it: do NOT edit AGENTS.md during a dream. Annotate the memory with "contradicts AGENTS.md — verify which is current" and list it in your summary.
-- **Not a conflict** — the memory adds facts AGENTS.md doesn't cover. Leave it.
-
----
-
-Return a brief summary of what you consolidated, updated, or pruned. If nothing changed (memories are already tight), say so.
-
-## Additional context
-
-**Tool constraints for this run:** Shell access is restricted to read-only commands (\`ls\`, \`find\`, \`grep\`, \`cat\`, \`stat\`, \`wc\`, \`head\`, \`tail\`${sqlite ? " and `sqlite3 -readonly -safe`" : ""}, also joined by pipes) plus deleting \`.md\` files inside the memory directories (\`rm\` takes no flags except \`-f\`). Anything else that writes, redirects to a file, or modifies state will be denied. Plan your exploration with this in mind.
-
-Memory changes since the last consolidation (${last}): ${progress.changes}`;
+Answer with a short summary: what you deleted and corrected, and the memories that read as rules or preferences. If nothing changed, say so.`;
 }
 
 /**
- * Claude Code's note after a memory pass or a dream changed files, in the main agent's next wake. inContext: the
- * changed files whose copy the main agent has, MEMORY.md in its memory section and files it read.
+ * Claude Code's note after a memory pass or a tidy changed files, in the main agent's next wake, with the tidy's
+ * summary. inContext: the changed files whose copy the main agent has, MEMORY.md in its memory section and files it read.
  */
 export function renderMemoryNote(note: MemoryNote, inContext: readonly string[]): string {
   const changed = [...note.written, ...note.deleted];
   const memories = (paths: readonly string[]) => paths.filter((path) => basename(path) !== "MEMORY.md").length;
   const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
   let summary: string;
-  if (note.source === "dream") summary = `consolidated ${count(changed.length, "memory file", "memory files")}`;
+  if (note.source === "tidy") summary = `changed ${count(changed.length, "memory file", "memory files")}`;
   else {
     const parts = [
       ...(memories(note.written) > 0 ? [`saved ${count(memories(note.written), "memory", "memories")}`] : []),
@@ -415,8 +353,11 @@ export function renderMemoryNote(note: MemoryNote, inContext: readonly string[])
     ];
     summary = parts.length > 0 ? parts.join(", ") : "updated the memory index";
   }
-  const lines = [`${note.source === "dream" ? "Background memory consolidation" : "Background memory extraction"} updated your memory: ${summary}`];
+  const lines = [
+    note.source === "tidy" && changed.length === 0 ? "The background memory tidy changed no file." : `${note.source === "tidy" ? "The background memory tidy" : "Background memory extraction"} updated your memory: ${summary}`,
+  ];
   if (changed.length > 0) lines.push(`Files changed: ${changed.join(", ")}`);
+  if (note.summary) lines.push(`The tidy's summary:\n${note.summary}`);
   if (inContext.length > 0) lines.push(`Your loaded copy of ${inContext.join(", ")} is now stale relative to disk — read it again if you need current contents.`);
   lines.push("This is ambient context — do not narrate it to people unless they ask or it is directly relevant to their request.");
   return lines.join("\n");

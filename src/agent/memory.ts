@@ -25,15 +25,18 @@ import {
 } from "@earendil-works/pi-durable";
 import type { Sql } from "../core/sql.ts";
 
-// The background memory passes, as Claude Code's automatic memory, only with settings.memoryPasses (off by default).
-// After each run of the main conversation, one at a time, an extraction pass: a fork of the main conversation at the run's answer, with the main conversation's provider
+// The background memory upkeep. With settings.memoryExtraction (off by default), after each run of the main
+// conversation, one at a time, an extraction pass: a fork of the main conversation at the run's answer, with the main conversation's provider
 // session, so its request starts as the main agent's last one did and the provider's prompt cache serves it. It keeps
 // every tool of the main agent, and code refuses each call but reading, writing the memory folders' .md files and
 // read-only shell commands; it refuses also a change to a memory file that is not as it was when the pass began, unless
-// the fork changed it itself. It is skipped when the main agent wrote memory itself since the last pass. Once a day,
-// after enough memory changes, a dream consolidates the memory the same way. A fork is deleted once it ended: nothing
-// of it stays in the main conversation or the bot's database but how far the passes got and the memory changes since
-// the last dream. What it changed goes to the main agent's next wake from this process, as in Claude Code: a restart
+// the fork changed it itself. It is skipped when the main agent wrote memory itself since the last pass. With
+// settings.memoryTidy (on by default), after a run of the main conversation, at most once a day and after enough memory
+// changes, a tidy forks the same way: it deletes expired and duplicate memories, shortens long index lines and corrects
+// contradictions. A memory change is an agent of the bot (the main agent, a child or an extraction pass) that changed
+// a memory folder between two ends of a main run. A fork is deleted once it ended: nothing of it stays in the main
+// conversation or the bot's database but how far extraction got and the memory changes since the last tidy. What it
+// changed, and the tidy's summary, go to the main agent's next wake from this process, as in Claude Code: a restart
 // before that wake loses it.
 
 /** The bot's own memory folder and the one all bots of the POTS_HOME share. Both exist. */
@@ -42,71 +45,78 @@ export interface MemoryFolders {
   shared: string;
 }
 
-/** How far extraction got (an entry of the main conversation), the memory changes since the last dream, and when it was. */
+/** How far extraction got (an entry of the main conversation), the memory changes since the last tidy, and when it was. */
 export interface MemoryProgress {
   cursor?: number;
   changes: number;
-  dreamAt?: number;
+  tidiedAt?: number;
 }
 
-/** A pass or a dream changed files: the main agent's next wake from this process says so, once. Paths are absolute. */
+/**
+ * A pass or a tidy changed files, or a tidy answered: the main agent's next wake from this process says so, once.
+ * Paths are absolute.
+ */
 export interface MemoryNote {
   source: MemorySource;
   written: string[];
   deleted: string[];
+  /** The tidy's answer: what it changed, and the memories that read as rules or preferences. */
+  summary?: string;
 }
 
-export type MemorySource = "extract" | "dream";
+export type MemorySource = "extract" | "tidy";
 
-/** How a pass or a dream ended: how the progress moves, in one transaction with the change its fork made. */
+/** How a pass or a tidy ended: how the progress moves, in one transaction with the change its fork made. */
 export interface MemorySettle {
   /** Extraction got this far. */
   cursor?: number;
-  /** One more memory change than what the fork changed: the main agent wrote memory itself. */
-  change?: boolean;
-  /** A dream ended at this time: the memory changes start again from 0. */
-  dreamt?: number;
+  /** A tidy ended at this time: the memory changes start again from 0. */
+  tidied?: number;
 }
 
 export interface MemoryHost {
-  /** settings.autoMemory; false: no pass, no dream and no age note. */
+  /** settings.autoMemory; false: no pass, no tidy and no age note. */
   enabled(): boolean;
-  /** settings.memoryPasses; false: no pass and no dream, and the rest of the memory as before. */
-  passes(): boolean;
+  /** settings.memoryExtraction (off by default): the extraction pass after each run of the main conversation. */
+  extracts(): boolean;
+  /** settings.memoryTidy (on by default): the tidy, at most once a day after enough memory changes. */
+  tidies(): boolean;
   folders: MemoryFolders;
   /** The extraction pass's message. messages: how many messages of the main conversation it looks at. */
   extraction(messages: number): Promise<string>;
-  /** The dream's message. */
-  dream(progress: MemoryProgress): Promise<string>;
+  /** The tidy's message. */
+  tidy(progress: MemoryProgress): Promise<string>;
   progress(): Promise<MemoryProgress>;
   /**
-   * A fork changed a file for the first time: kept at once, so the change counts for the dream also when the fork fails
+   * A fork changed a file for the first time: kept at once, so the change counts for the tidy also when the fork fails
    * or the process dies.
    */
   changed(source: MemorySource): Promise<void>;
+  /** The main agent or a child changed a memory folder: one more memory change, kept at once. */
+  counted(): Promise<void>;
   /**
-   * In one transaction: a change the forks made since the last settle counts, for extraction, as a memory change; and
-   * the progress moves as `update` says. Returns the new progress.
+   * In one transaction: a change an extraction pass made since the last settle counts as a memory change; and the
+   * progress moves as `update` says. Returns the new progress.
    */
   settle(update: MemorySettle): Promise<MemoryProgress>;
   /** The note for the main agent's next wake from this process. */
   noted(note: MemoryNote): void;
 }
 
-/** An extraction pass has at most this many turns, as in Claude Code; a dream has no cap, as there. */
+/** An extraction pass has at most this many turns, as in Claude Code; a tidy has no cap, as Claude Code's dream. */
 const EXTRACTION_TURNS = 5;
 /** Claude Code's auto dream: 24 hours since the last one, and 5 sessions (here: memory changes) since then. */
-const DREAM_HOURS = 24;
-const DREAM_CHANGES = 5;
+const TIDY_HOURS = 24;
+const TIDY_CHANGES = 5;
 const DAY = 86_400_000;
 /** A fork's shell command without a timeout of its own ends after this long, as Claude Code's Bash does by default. */
 const SHELL_TIMEOUT_SECONDS = 120;
 /** The codes of the error results pi-durable writes itself for a call that did not run, or did not run to its end. */
 const NOT_RUN = new Set(["tool_unavailable", "invalid_arguments", "blocked", "interrupted", "restart_limit", "aborted", "abandoned"]);
 
-/** Whether a dream is due after a pass. */
-export function dreamDue(progress: MemoryProgress, now = Date.now()): boolean {
-  return progress.changes >= DREAM_CHANGES && (progress.dreamAt === undefined || now - progress.dreamAt >= DREAM_HOURS * 3_600_000);
+/** Whether a tidy is due. */
+export function tidyDue(progress: MemoryProgress, now = Date.now()): boolean {
+  return progress.changes >= TIDY_CHANGES && (progress.tidiedAt === undefined || now - progress.tidiedAt >= TIDY_HOURS * 3_600_000);
 }
 
 // ---- Paths ----
@@ -165,14 +175,11 @@ async function memoryFile(path: string, folders: MemoryFolders): Promise<boolean
 // allowlisted where an option could write or run something.
 
 /** The commands a memory fork may run, also joined by pipes; rm only alone, of .md files in the memory folders. */
-const READ_ONLY = new Set(["ls", "find", "grep", "cat", "stat", "wc", "head", "tail", "sqlite3"]);
+const READ_ONLY = new Set(["ls", "find", "grep", "cat", "stat", "wc", "head", "tail"]);
 /** find's tests and actions that only read and print, and the operators. */
 const FIND_PRIMARIES = new Set(["-print", "-print0", "-ls", "-empty", "!", "-not", "-a", "-and", "-o", "-or", "(", ")"]);
 /** find's tests and options that take one argument. */
 const FIND_WITH_ARGUMENT = new Set(["-name", "-iname", "-path", "-ipath", "-type", "-maxdepth", "-mindepth", "-mtime", "-mmin", "-newer", "-size"]);
-/** sqlite3's output-format flags, after -readonly -safe. */
-const SQLITE_FORMATS = new Set(["-ascii", "-box", "-column", "-csv", "-html", "-json", "-line", "-list", "-markdown", "-quote", "-table", "-tabs", "-header", "-noheader"]);
-const SQLITE_FORMATS_WITH_ARGUMENT = new Set(["-separator", "-newline", "-nullvalue"]);
 /** A redirect that writes nothing, alone as a word: errors to /dev/null, or one output into another. */
 const REDIRECT = /^(?:2>\/dev\/null|\d>&\d)(?=[ \t|]|$)/;
 
@@ -220,7 +227,7 @@ export function parseShell(command: string): string[][] | string {
 }
 
 /** Why a command of a pipeline is not one of the read-only ones, or undefined when it is. */
-function notReadOnly(words: readonly string[], first: boolean): string | undefined {
+function notReadOnly(words: readonly string[]): string | undefined {
   const [program, ...args] = words;
   if (!program || !READ_ONLY.has(program)) return `${program ?? "it"} is not one of the commands that are permitted`;
   if (program === "find") {
@@ -230,17 +237,6 @@ function notReadOnly(words: readonly string[], first: boolean): string | undefin
       if (FIND_WITH_ARGUMENT.has(args[i]!) && i + 1 < args.length) i++;
       else if (!FIND_PRIMARIES.has(args[i]!)) return `find takes only ${[...FIND_WITH_ARGUMENT, ...FIND_PRIMARIES].join(" ")} here, not ${args[i]}`;
     }
-  }
-  if (program === "sqlite3") {
-    if (!first) return "sqlite3 may not read from a pipe";
-    if (args[0] !== "-readonly" || args[1] !== "-safe") return "sqlite3 must start with -readonly -safe";
-    let i = 2;
-    for (; i < args.length && args[i]!.startsWith("-"); i++) {
-      if (SQLITE_FORMATS_WITH_ARGUMENT.has(args[i]!) && i + 1 < args.length) i++;
-      else if (!SQLITE_FORMATS.has(args[i]!)) return `sqlite3 takes only output-format flags after -readonly -safe, not ${args[i]}`;
-    }
-    // The database, then SQL: a word that starts with "-" would be an option, one that starts with "." a dot-command.
-    if (args.slice(i).some((arg) => /^\s*[-.]/.test(arg))) return 'after the database, sqlite3 takes only SQL, no word that starts with "-" or "."';
   }
   return undefined;
 }
@@ -263,7 +259,7 @@ function rmTargets(pipeline: readonly string[][]): string[] | undefined {
 /** The constraints a fork's refused bash command is told, with why it was refused. */
 function shellConstraints(why: string, where: string): string {
   return (
-    `Refused: ${why}. Only read-only shell commands (ls, find, grep, cat, stat, wc, head, tail and sqlite3 -readonly -safe, also joined by pipes) and rm (no flags except -f) of .md files under ${where} are permitted in this context. ` +
+    `Refused: ${why}. Only read-only shell commands (ls, find, grep, cat, stat, wc, head and tail, also joined by pipes) and rm (no flags except -f) of .md files under ${where} are permitted in this context. ` +
     "Anything else that writes, redirects to a file, runs other programs or modifies state is denied."
   );
 }
@@ -284,7 +280,7 @@ export async function forkRefusal(name: string, args: Record<string, unknown>, f
   if (name === "bash") {
     const pipeline = typeof args.command === "string" ? parseShell(args.command) : "there is no command";
     if (typeof pipeline === "string") return shellConstraints(pipeline, where);
-    const why = pipeline.map((words, index) => notReadOnly(words, index === 0)).find((each) => each !== undefined);
+    const why = pipeline.map((words) => notReadOnly(words)).find((each) => each !== undefined);
     if (why === undefined) return undefined;
     if (pipeline[0]![0] !== "rm") return shellConstraints(why, where);
     const files = rmTargets(pipeline);
@@ -308,7 +304,7 @@ function writesMemory(name: string, args: Record<string, unknown>, folders: Memo
   const removed = rmTargets(pipeline);
   if (removed) return removed.some((path) => path.endsWith(".md") && folderOf(path, folders) !== undefined);
   const names = pipeline.some((words) => words.some((word) => folderOf(toolPath(cwd, word), folders) !== undefined));
-  return names && pipeline.some((words, index) => notReadOnly(words, index === 0) !== undefined);
+  return names && pipeline.some((words) => notReadOnly(words) !== undefined);
 }
 
 // ---- The age note ----
@@ -369,6 +365,14 @@ async function snapshotOf(folders: MemoryFolders): Promise<Map<string, number>> 
   return snapshot;
 }
 
+/** Whether two snapshots of the memory folders hold the same files with the same modification times. */
+function same(a: ReadonlyMap<string, number>, b: ReadonlyMap<string, number>): boolean {
+  return a.size === b.size && [...a].every(([path, time]) => b.get(path) === time);
+}
+
+/** The tools that run commands or scripts: what they change in the memory folders is seen on the disk. */
+const SHELLS = new Set(["bash", "screen", "codemode"]);
+
 /** What a file should be for the fork to change it: as the fork left it, or else as it was when the pass began. */
 function expected(state: Fork, path: string): FileState {
   return state.own.has(path) ? state.own.get(path) : state.snapshot.get(path);
@@ -384,12 +388,18 @@ function since(view: ContextView, after: number | undefined): Message[] {
 export class MemoryPasses {
   /** Selected in a fork only: the tool limits, the turn cap and the record of what it changed. */
   readonly extension: Extension;
+  /** For every agent of the bot: counts the memory changes of the main agent and of children. */
+  readonly counter: ReturnType<typeof hook>;
   readonly #host: MemoryHost;
   readonly #sql: Sql;
   readonly #cwd: string;
   readonly #context: Context;
   readonly #log: (message: string, data?: Record<string, unknown>) => void;
   readonly #forks = new Map<number, Fork>();
+  /** The conversations whose memory change counted since the main conversation's last run ended. */
+  readonly #counted = new Set<number>();
+  /** The memory folders' files before a command or a script of the main agent or a child, by its tool task. */
+  readonly #before = new Map<string, Map<string, number>>();
   #harness: Harness | undefined;
   #root: Conversation | undefined;
   #running: Promise<void> | undefined;
@@ -406,6 +416,29 @@ export class MemoryPasses {
     this.#context = options.context;
     this.#log = options.log;
     const fork = (id: ConversationId) => this.#forks.get(Number(id));
+    // A write or edit of a path in a memory folder that worked changes the memory. A command or a script may change it in
+    // any way, so for those the folders' files are compared before and after the call.
+    const counts = (id: number) => !this.#forks.has(id) && !this.#counted.has(id) && this.#host.enabled();
+    this.counter = hook(ToolTask, {
+      beforeTool: async (call, api) => {
+        if (SHELLS.has(call.name) && counts(Number(api.conversationId))) this.#before.set(String(api.taskId), await snapshotOf(this.#host.folders));
+        return undefined;
+      },
+      afterTool: async (call, result, api) => {
+        const id = Number(api.conversationId);
+        const before = this.#before.get(String(api.taskId));
+        this.#before.delete(String(api.taskId));
+        if (!counts(id)) return undefined;
+        const changed =
+          call.name === "write" || call.name === "edit"
+            ? !result.isError && typeof call.arguments.path === "string" && folderOf(toolPath(this.#cwd, call.arguments.path), this.#host.folders) !== undefined
+            : before !== undefined && !same(before, await snapshotOf(this.#host.folders));
+        if (!changed) return undefined;
+        this.#counted.add(id);
+        await this.#host.counted().catch((error: unknown) => this.#log("could not count a memory change", { error: String(error) }));
+        return undefined;
+      },
+    });
     this.extension = defineExtension({
       name: "memory-fork",
       hooks: [
@@ -480,9 +513,11 @@ export class MemoryPasses {
     await this.#host.settle({});
   }
 
-  /** A run of the main conversation answered with entry `at`: a pass for it, now or after the one that runs. */
+  /** A run of the main conversation answered with entry `at`: a pass for it and a tidy when one is due, now or after the one that runs. */
   queue(at: number): void {
-    if (this.#closing || !this.#on()) return;
+    if (this.#closing || !this.#host.enabled()) return;
+    // From here, each agent's next memory change counts again.
+    this.#counted.clear();
     if (this.#running) {
       this.#trailing = Math.max(this.#trailing ?? 0, at);
       return;
@@ -498,9 +533,14 @@ export class MemoryPasses {
     })().finally(() => (this.#running = undefined));
   }
 
-  /** Whether the passes run: the memory and its passes are both on. */
-  #on(): boolean {
-    return this.#host.enabled() && this.#host.passes();
+  /** Whether extraction runs: the memory and its extraction are both on. */
+  #extracts(): boolean {
+    return this.#host.enabled() && this.#host.extracts();
+  }
+
+  /** Whether the tidy runs: the memory and its tidy are both on. */
+  #tidies(): boolean {
+    return this.#host.enabled() && this.#host.tidies();
   }
 
   #takeTrailing(): number | undefined {
@@ -516,9 +556,15 @@ export class MemoryPasses {
   }
 
   async #pass(at: number): Promise<void> {
-    if (!this.#on()) return;
+    if (!this.#host.enabled()) return;
     const progress = await this.#host.progress();
     if (progress.cursor !== undefined && at <= progress.cursor) return;
+    const next = this.#extracts() ? await this.#extract(at, progress) : await this.#host.settle({ cursor: at });
+    if (next && !this.#closing && this.#tidies() && tidyDue(next)) await this.#tidy(at, next);
+  }
+
+  /** The extraction pass for the messages up to `at`; the progress after it, or undefined when the gateway stops. */
+  async #extract(at: number, progress: MemoryProgress): Promise<MemoryProgress | undefined> {
     const messages = since(await this.#root!.context(this.#context, { at: at as EntryId }), progress.cursor);
     const folders = this.#host.folders;
     // Only a call whose result says it worked: an edit whose text did not match saved nothing.
@@ -528,36 +574,39 @@ export class MemoryPasses {
         message.role === "assistant" &&
         message.content.some((part) => part.type === "toolCall" && worked.has(part.id) && writesMemory(part.name, part.arguments, folders, this.#cwd)),
     );
-    let next: MemoryProgress;
     if (wrote) {
-      // The main agent saved what it wanted itself: that counts as a memory change, as Claude Code skips the pass.
+      // The main agent saved what it wanted itself, as Claude Code skips the pass; its change counted already.
       this.#log("memory pass skipped: the main agent wrote memory itself", { messages: messages.length });
-      next = await this.#host.settle({ cursor: at, change: true });
-    } else {
-      this.beforePass?.();
-      const ended = await this.#fork("extract", at, await this.#host.extraction(messages.length), EXTRACTION_TURNS);
-      if (!ended) return;
-      // What it changed counts also when its model failed; then the next pass looks at the same messages again.
-      next = await this.#host.settle(ended.answered ? { cursor: at } : {});
-      this.#tell("extract", ended);
-      if (!ended.answered) return this.#log("memory pass got no answer", { source: "extract", reason: ended.reason });
-      this.#log("memory pass", { messages: messages.length, written: ended.written.length, deleted: ended.deleted.length });
+      return this.#host.settle({ cursor: at });
     }
-    if (!this.#closing && this.#on() && dreamDue(next)) await this.#dream(at, next);
+    this.beforePass?.();
+    const ended = await this.#fork("extract", at, await this.#host.extraction(messages.length), EXTRACTION_TURNS);
+    if (!ended) return undefined;
+    // What it changed counts also when its model failed; then the next pass looks at the same messages again.
+    const next = await this.#host.settle(ended.answered ? { cursor: at } : {});
+    this.#tell("extract", ended);
+    if (!ended.answered) {
+      this.#log("memory pass got no answer", { source: "extract", reason: ended.reason });
+      return undefined;
+    }
+    this.#log("memory pass", { messages: messages.length, written: ended.written.length, deleted: ended.deleted.length });
+    return next;
   }
 
-  async #dream(at: number, progress: MemoryProgress): Promise<void> {
-    const ended = await this.#fork("dream", at, await this.#host.dream(progress));
+  async #tidy(at: number, progress: MemoryProgress): Promise<void> {
+    const ended = await this.#fork("tidy", at, await this.#host.tidy(progress));
     if (!ended) return;
-    await this.#host.settle(ended.answered ? { dreamt: Date.now() } : {});
-    this.#tell("dream", ended);
-    if (ended.answered) this.#log("memory dream", { written: ended.written.length, deleted: ended.deleted.length });
-    else this.#log("memory pass got no answer", { source: "dream", reason: ended.reason });
+    await this.#host.settle(ended.answered ? { tidied: Date.now() } : {});
+    this.#tell("tidy", ended);
+    if (ended.answered) this.#log("memory tidy", { written: ended.written.length, deleted: ended.deleted.length });
+    else this.#log("memory pass got no answer", { source: "tidy", reason: ended.reason });
   }
 
-  /** The note of what a fork changed, for the main agent's next wake. */
-  #tell(source: MemorySource, changed: { written: string[]; deleted: string[] }): void {
-    if (changed.written.length + changed.deleted.length > 0) this.#host.noted({ source, written: changed.written, deleted: changed.deleted });
+  /** The note of what a fork changed, and the tidy's summary, for the main agent's next wake. */
+  #tell(source: MemorySource, ended: { written: string[]; deleted: string[]; summary?: string }): void {
+    if (ended.written.length + ended.deleted.length > 0 || ended.summary !== undefined) {
+      this.#host.noted({ source, written: ended.written, deleted: ended.deleted, ...(ended.summary === undefined ? {} : { summary: ended.summary }) });
+    }
   }
 
   /**
@@ -571,7 +620,7 @@ export class MemoryPasses {
     at: number,
     message: string,
     maxTurns?: number,
-  ): Promise<{ answered: boolean; reason?: string; written: string[]; deleted: string[] } | undefined> {
+  ): Promise<{ answered: boolean; reason?: string; written: string[]; deleted: string[]; summary?: string } | undefined> {
     const root = this.#root!;
     const context = this.#context;
     // Before the fork exists: a file that changes after this, the fork may not change.
@@ -593,11 +642,14 @@ export class MemoryPasses {
       if (this.#closing) return undefined;
       const capped = state.maxTurns !== undefined && state.rounds >= state.maxTurns;
       const answered = settled.status === "done" || capped;
+      // The tidy's answer is for the main agent: it decides about the memories that read as rules or preferences.
+      const summary = source === "tidy" && settled.status === "done" ? await answerOf(fork, context) : undefined;
       return {
         answered,
         ...(answered ? {} : { reason: settled.status === "unanswered" ? settled.reason : "unknown" }),
         written: [...state.written],
         deleted: [...state.deleted],
+        ...(summary ? { summary } : {}),
       };
     } finally {
       this.#forks.delete(Number(id));
@@ -648,6 +700,19 @@ export async function deleteLeftForks(sql: Sql): Promise<number> {
   );
   for (const fork of forks) await deleteConversation(sql, fork.id);
   return forks.length;
+}
+
+/** The text of a conversation's newest answer, or undefined when it has none. */
+async function answerOf(conversation: Conversation, context: Context): Promise<string | undefined> {
+  const page = await conversation.entries({}, 20, undefined, context);
+  for (const entry of page.items) {
+    if (!AssistantEntry.is(entry)) continue;
+    const message = entry.model?.[0] as AssistantMessage | undefined;
+    if (message?.stopReason !== "stop" && message?.stopReason !== "length") continue;
+    const text = message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("").trim();
+    return text || undefined;
+  }
+  return undefined;
 }
 
 /** The newest answer of the main conversation that ended a run, for a pass that the last process did not make. */

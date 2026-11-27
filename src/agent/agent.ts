@@ -190,7 +190,7 @@ export interface AgentOptions {
    * sections are saved in the conversation; until then, after a crash too, the next request does it again.
    */
   refreshPinned?: () => Promise<void>;
-  /** The memory passes after each run of the main conversation, the dream and the age note; without it, there are none. */
+  /** The memory's extraction after each run of the main conversation, its tidy and the age note; without it, there are none. */
   memory?: MemoryHost;
   /**
    * A host's policy, asked before every tool call of the main agent and its children, also of a codemode script's calls:
@@ -570,6 +570,7 @@ export class Agent {
     });
     const { createGrepToolDefinition, createFindToolDefinition } = await import("@earendil-works/pi-coding-agent");
     const memoryFolders = () => (options.memory?.enabled() ? options.memory.folders : undefined);
+    const memory = options.memory ? new MemoryPasses({ host: options.memory, sql: options.database, cwd: options.workspace, context, log: options.log }) : undefined;
     const coding = defineExtension({
       name: "coding-tools",
       tools: [
@@ -582,9 +583,10 @@ export class Agent {
         searchTool(createFindToolDefinition(options.workspace)),
       ],
       // Every agent has these tools, so every tool call and result of every agent, also of a codemode script's calls,
-      // passes here: the host's tool policy before the call, the secrets after it.
+      // passes here: the host's tool policy before the call, the secrets after it, and the count of memory changes.
       hooks: [
         requestHooks,
+        ...(memory ? [memory.counter] : []),
         ...(options.toolPolicy ? [hook(ToolTask, { beforeTool: options.toolPolicy })] : []),
         ...(secrets ? [hook(ToolTask, { afterTool: (_call, result) => secrets.maskResult(result) })] : []),
       ],
@@ -648,7 +650,6 @@ export class Agent {
     const tasks = childrenTools.extension;
     // A child has the main agent's extensions without its channel actions, and with its own prompt.
     const childExtensions = { add: [child], remove: [bot] };
-    const memory = options.memory ? new MemoryPasses({ host: options.memory, sql: options.database, cwd: options.workspace, context, log: options.log }) : undefined;
     const registry = createRegistry();
     registry.install(fitImages);
     registry.install(coding);

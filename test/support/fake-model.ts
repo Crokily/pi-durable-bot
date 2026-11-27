@@ -41,8 +41,8 @@ export interface FakeModel {
 }
 
 /**
- * delayMs: wait this long before each answer, like a slow model. memory: the answers to the memory passes and dreams,
- * which may wait; by default a pass answers "Nothing to save." and a dream "Nothing changed.".
+ * delayMs: wait this long before each answer, like a slow model. memory: the answers to the memory passes and tidies,
+ * which may wait; by default a pass answers "Nothing to save." and a tidy "Nothing changed.".
  */
 export async function startFakeModel(
   script: (request: FakeRequest) => FakeReply = coworker,
@@ -67,7 +67,7 @@ export async function startFakeModel(
       const request = { ...toRequest(body), ...(typeof session === "string" ? { session } : {}), ...app };
       requests.push(request);
       if (options.delayMs) await new Promise((resolve) => setTimeout(resolve, options.delayMs));
-      const reply = isMemoryPass(request) || isDream(request) ? await (options.memory ?? noMemory)(request) : script(request);
+      const reply = isMemoryPass(request) || isTidy(request) ? await (options.memory ?? noMemory)(request) : script(request);
       // A gateway that died while it waited for this answer.
       if (res.destroyed) return;
       if ("fail" in reply) {
@@ -134,9 +134,9 @@ export function judgeRequests(model: FakeModel): FakeRequest[] {
   return model.requests.filter(isJudge);
 }
 
-/** Requests that came from the main agent or a child, not from the judge, a memory pass or a dream. */
+/** Requests that came from the main agent or a child, not from the judge, a memory pass or a tidy. */
 export function agentRequests(model: FakeModel): FakeRequest[] {
-  return model.requests.filter((request) => !isJudge(request) && !isMemoryPass(request) && !isDream(request));
+  return model.requests.filter((request) => !isJudge(request) && !isMemoryPass(request) && !isTidy(request));
 }
 
 /** The last message of a person or the bot's code: in a memory fork, its message, also after its tool calls. */
@@ -149,13 +149,13 @@ export function isMemoryPass(request: FakeRequest): boolean {
   return lastUser(request).startsWith("You are now acting as the memory extraction subagent");
 }
 
-/** A dream: a fork of the main conversation, asked to consolidate the memory. */
-export function isDream(request: FakeRequest): boolean {
-  return lastUser(request).startsWith("# Dream: Memory Consolidation");
+/** A tidy: a fork of the main conversation, asked to tidy the memory. */
+export function isTidy(request: FakeRequest): boolean {
+  return lastUser(request).startsWith("# Memory tidy");
 }
 
 function noMemory(request: FakeRequest): FakeReply {
-  return { text: isDream(request) ? "Nothing changed." : "Nothing to save." };
+  return { text: isTidy(request) ? "Nothing changed." : "Nothing to save." };
 }
 
 /** The wake messages the agent got, in order: the last user message of each agent request that starts a run. */

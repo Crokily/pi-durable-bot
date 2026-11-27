@@ -72,6 +72,10 @@ export interface LoadedIndex {
   missing: string[];
   /** Memory files that no line of MEMORY.md links to, relative to the folder; not those whose expires date has passed. */
   unlisted: string[];
+  /** Memory files whose expires date has passed, relative to the folder. */
+  expired: string[];
+  /** How full MEMORY.md is, and its lines that link to expired memories, in one line: see indexStatus; "" when it is empty. */
+  status: string;
 }
 
 export interface MemoryFile {
@@ -126,8 +130,29 @@ export async function loadIndex(folder: string, day = today()): Promise<LoadedIn
     }
   }
   const unlisted = [...files.values()].filter((file) => !linked.has(file.path) && !expired(file, day)).map((file) => relative(folder, file.path));
+  const gone = [...files.values()].filter((file) => expired(file, day)).map((file) => relative(folder, file.path));
   const text = kept.join("\n");
-  return { text: text.trim() ? cutIndex(text) : "", missing: [...new Set(missing)], unlisted: unlisted.sort() };
+  return {
+    text: text.trim() ? cutIndex(text) : "",
+    missing: [...new Set(missing)],
+    unlisted: unlisted.sort(),
+    expired: gone.sort(),
+    status: indexStatus(raw, raw.split("\n").length - kept.length),
+  };
+}
+
+/**
+ * A plain fact about a MEMORY.md, against the limits it is loaded to: "MEMORY.md: 69/200 lines, 10/25 KB; 4 lines link
+ * to expired memories."; "" when it is empty. KB here is 1,000 characters, as the limit is 25,000 characters.
+ */
+export function indexStatus(raw: string, expiredLines: number): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  const lines = trimmed.split("\n").length;
+  const thousands = trimmed.length / 1000;
+  const kb = thousands < 10 ? thousands.toFixed(1).replace(/\.0$/, "") : String(Math.round(thousands));
+  const expired = expiredLines === 1 ? "1 line links to an expired memory" : `${expiredLines} lines link to expired memories`;
+  return `${INDEX}: ${lines}/${INDEX_LINES} lines, ${kb}/${INDEX_CHARS / 1000} KB; ${expired}.`;
 }
 
 /** A link's path as a file name: %20 as a space. */
@@ -207,9 +232,9 @@ export async function listMemoryFiles(folders: MemoryFolders): Promise<string> {
 
 // ---- What the bot keeps about its memory passes, in bot_state ----
 //
-// memory_cursor, memory_changes and memory_dream_at: how far extraction got, the memory changes since the last dream and
-// when it was. memory_changed: that a fork changed a file since the last settle, and which kind of fork, so the change
-// counts also when the fork fails or the process dies. The notes for the main agent's next wake are not here: they
+// memory_cursor, memory_changes and memory_dream_at: how far extraction got, the memory changes since the last tidy and
+// when it was (the key keeps the tidy's old name, the dream). memory_changed: that a fork changed a file since the last
+// settle, and which kind of fork, so the change counts also when the fork fails or the process dies. The notes for the main agent's next wake are not here: they
 // live in the process, as in Claude Code.
 
 type Executor = Parameters<Parameters<Sql["transaction"]>[0]>[0];
@@ -223,8 +248,8 @@ async function progressOf(tx: Executor): Promise<MemoryProgress> {
   const rows = await tx.all<{ key: string; value: string }>("SELECT key, value FROM bot_state WHERE key IN ('memory_cursor', 'memory_changes', 'memory_dream_at')");
   const value = (key: string) => rows.find((row) => row.key === key)?.value;
   const cursor = value("memory_cursor");
-  const dreamAt = value("memory_dream_at");
-  return { ...(cursor === undefined ? {} : { cursor: Number(cursor) }), changes: Number(value("memory_changes") ?? 0), ...(dreamAt === undefined ? {} : { dreamAt: Number(dreamAt) }) };
+  const tidiedAt = value("memory_dream_at");
+  return { ...(cursor === undefined ? {} : { cursor: Number(cursor) }), changes: Number(value("memory_changes") ?? 0), ...(tidiedAt === undefined ? {} : { tidiedAt: Number(tidiedAt) }) };
 }
 
 export function memoryProgress(sql: Sql): Promise<MemoryProgress> {
@@ -236,24 +261,29 @@ export async function recordMemoryChange(sql: Sql, source: MemorySource): Promis
   await sql.transaction((tx) => write(tx, "memory_changed", source));
 }
 
+/** The main agent or a child changed a memory folder: one more memory change. */
+export async function countMemoryChange(sql: Sql): Promise<void> {
+  await sql.run("INSERT INTO bot_state (key, value) VALUES ('memory_changes', '1') ON CONFLICT (key) DO UPDATE SET value = CAST(value AS INTEGER) + 1");
+}
+
 /**
- * In one transaction: a change a fork made since the last settle counts, for extraction, as a memory change; then the
+ * In one transaction: a change an extraction pass made since the last settle counts as a memory change; then the
  * progress moves as `update` says.
  */
 export async function settleMemory(sql: Sql, update: MemorySettle): Promise<MemoryProgress> {
   return sql.transaction(async (tx) => {
     const progress = await progressOf(tx);
     const changed = (await tx.get<{ value: string }>("SELECT value FROM bot_state WHERE key = 'memory_changed'"))?.value;
-    const changes = progress.changes + (changed === "extract" ? 1 : 0) + (update.change ? 1 : 0);
+    const changes = progress.changes + (changed === "extract" ? 1 : 0);
     const next: MemoryProgress = {
       ...(update.cursor !== undefined ? { cursor: update.cursor } : progress.cursor !== undefined ? { cursor: progress.cursor } : {}),
-      changes: update.dreamt === undefined ? changes : 0,
-      ...(update.dreamt !== undefined ? { dreamAt: update.dreamt } : progress.dreamAt !== undefined ? { dreamAt: progress.dreamAt } : {}),
+      changes: update.tidied === undefined ? changes : 0,
+      ...(update.tidied !== undefined ? { tidiedAt: update.tidied } : progress.tidiedAt !== undefined ? { tidiedAt: progress.tidiedAt } : {}),
     };
     await write(tx, "memory_changed", undefined);
     await write(tx, "memory_cursor", next.cursor === undefined ? undefined : String(next.cursor));
     await write(tx, "memory_changes", String(next.changes));
-    await write(tx, "memory_dream_at", next.dreamAt === undefined ? undefined : String(next.dreamAt));
+    await write(tx, "memory_dream_at", next.tidiedAt === undefined ? undefined : String(next.tidiedAt));
     return next;
   });
 }

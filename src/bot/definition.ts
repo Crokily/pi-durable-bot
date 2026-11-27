@@ -49,10 +49,12 @@ export interface BotSettings {
   compaction: Compaction;
   /** How many children may work at once. At the cap, the task tool says so and lists them. */
   maxChildren: number;
-  /** The memory, as Claude Code's autoMemoryEnabled: false, no memory section, no memory passes, no dream and no age note. */
+  /** The memory, as Claude Code's autoMemoryEnabled: false, no memory section, no extraction, no tidy and no age note. */
   autoMemory: boolean;
-  /** The background memory passes: the extraction after each main run, and the dream. Off: neither runs, and nothing else of the memory changes. */
-  memoryPasses: boolean;
+  /** The extraction pass after each run of the main agent, which saves what the run showed. */
+  memoryExtraction: boolean;
+  /** The tidy: at most once a day, after 5 memory changes, it deletes expired and duplicate memories, shortens long index lines and corrects contradictions. */
+  memoryTidy: boolean;
 }
 
 const DEFAULT_SETTINGS: BotSettings = {
@@ -63,7 +65,8 @@ const DEFAULT_SETTINGS: BotSettings = {
   compaction: {},
   maxChildren: 50,
   autoMemory: true,
-  memoryPasses: false,
+  memoryExtraction: false,
+  memoryTidy: true,
 };
 
 export const DEFAULT_MODEL = "openai/gpt-6.2-sol";
@@ -150,7 +153,8 @@ const Definition = Schema.Struct({
     }).pipe(Schema.withDecodingDefaultKey(Effect.succeed({}))),
     maxChildren: Schema.Finite.pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_SETTINGS.maxChildren))),
     autoMemory: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_SETTINGS.autoMemory))),
-    memoryPasses: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_SETTINGS.memoryPasses))),
+    memoryExtraction: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_SETTINGS.memoryExtraction))),
+    memoryTidy: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_SETTINGS.memoryTidy))),
   }).pipe(Schema.withDecodingDefaultKey(Effect.succeed({}))),
 });
 

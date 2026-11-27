@@ -3,16 +3,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import { dreamDue, forkRefusal, type MemoryFolders, withAgeNote } from "../src/agent/memory.ts";
-import { cutIndex, listMemoryFiles, loadIndex } from "../src/bot/memory.ts";
-import { type PromptFacts, renderDream, renderExtraction } from "../src/bot/prompt.ts";
-import { agentRequests, coworker, type FakeModel, type FakeReply, type FakeRequest, isDream, isMemoryPass, lastUser, startFakeModel, wakes } from "./support/fake-model.ts";
+import { forkRefusal, type MemoryFolders, tidyDue, withAgeNote } from "../src/agent/memory.ts";
+import { cutIndex, indexStatus, listMemoryFiles, loadIndex } from "../src/bot/memory.ts";
+import { type PromptFacts, renderExtraction, renderTidy } from "../src/bot/prompt.ts";
+import { agentRequests, coworker, type FakeModel, type FakeReply, type FakeRequest, isTidy, isMemoryPass, lastUser, startFakeModel, wakes } from "./support/fake-model.ts";
 import { ME, pause, TestGateway, waitFor } from "./support/gateway.ts";
 
 // The memory from outside, and the parts of it that code must hold. Their failures would be silent: a fork whose request
 // does not start as the main agent's did costs the full price, a fork that runs a command it should not, sends, or
 // stays in the database changes what people and the bot see, a pass that runs twice or not at all after a restart
-// only shows as a memory that is wrong, and a dream that never runs only as a memory that grows.
+// only shows as a memory that is wrong, and a tidy that never runs only as a memory that grows.
 
 const DAY = 86_400_000;
 let model: FakeModel;
@@ -27,8 +27,8 @@ afterEach(async () => {
 async function setUp(memory?: (request: FakeRequest) => FakeReply | Promise<FakeReply>, script = coworker, settings?: Record<string, unknown>): Promise<void> {
   model = await startFakeModel(script, memory ? { memory } : {});
   // The fake model has pi's long prompt cache entry, and pi is told to use it everywhere: still only the main agent asks.
-  // The passes are off by default; these tests turn them on but where they say otherwise.
-  gateway = new TestGateway({ model, longPromptCache: true, env: { PI_CACHE_RETENTION: "long" }, settings: { memoryPasses: true, ...settings } });
+  // Extraction is off by default; these tests turn it on but where they say otherwise.
+  gateway = new TestGateway({ model, longPromptCache: true, env: { PI_CACHE_RETENTION: "long" }, settings: { memoryExtraction: true, ...settings } });
   await gateway.start();
 }
 
@@ -39,6 +39,20 @@ const own = () => join(gateway.botDir, "memory");
 const forks = () => gateway.query<{ id: number }>("SELECT id FROM pi_conversations WHERE id != 1");
 const state = (key: string) => gateway.query<{ value: string }>("SELECT value FROM bot_state WHERE key = ?", key)[0]?.value;
 const write = (path: string, content: string): FakeReply => ({ call: { name: "write", arguments: { path, content } } });
+const tidied = () => gateway.output.filter((line) => line.message === "memory tidy");
+/** Set a value of bot_state while the gateway runs. */
+const setState = (key: string, value: string) => {
+  const db = new DatabaseSync(join(gateway.botDir, "bot.sqlite"), { timeout: 5_000 });
+  db.prepare("INSERT INTO bot_state (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value").run(key, value);
+  db.close();
+};
+const setSettings = async (settings: Record<string, unknown>) => {
+  const file = join(gateway.botDir, "bot.json");
+  const definition = JSON.parse(readFileSync(file, "utf8")) as { settings: Record<string, unknown> };
+  const applied = gateway.output.filter((line) => line.message === "definition applied").length;
+  writeFileSync(file, JSON.stringify({ ...definition, settings: { ...definition.settings, ...settings } }));
+  await waitFor(() => gateway.output.filter((line) => line.message === "definition applied").length > applied, { what: "the new definition" });
+};
 
 describe("memory", { timeout: 90_000 }, () => {
   it("forks the main conversation after a run, keeps to its tools, and the next wake says what it changed", async () => {
@@ -80,7 +94,7 @@ describe("memory", { timeout: 90_000 }, () => {
     // Code refused the command that writes outside the memory and the send; the files it wrote are there.
     const last = pass[4]!.messages;
     const results = last.slice(last.findLastIndex((message) => message.role === "user")).filter((message) => message.role === "tool").map((message) => message.content);
-    expect(results[0]).toMatch(/Only read-only shell commands \(ls, find, grep, cat, stat, wc, head, tail and sqlite3 -readonly -safe, also joined by pipes\)/);
+    expect(results[0]).toMatch(/Only read-only shell commands \(ls, find, grep, cat, stat, wc, head and tail, also joined by pipes\)/);
     expect(results[1]).toMatch(/only read, read-only bash, and write\/edit of \.md files within .* are allowed in this context/);
     expect(existsSync(outside)).toBe(false);
     expect(readFileSync(join(own(), "MEMORY.md"), "utf8")).toBe("- [Alice likes tea](alice-tea.md) — what she drinks\n");
@@ -106,7 +120,9 @@ describe("memory", { timeout: 90_000 }, () => {
     expect((await gateway.run(["turn-page", "--note", "a new page"])).status).toBe(0);
     gateway.say("general", "alice", `@${ME} new page`);
     await waitFor(() => gateway.sent().length === 4, { what: "the reply on the new page" });
-    expect(agentRequests(model).at(-1)!.system).toContain(`(your memory, as it was when this page began):\n\n- [Alice likes tea](alice-tea.md) — what she drinks`);
+    expect(agentRequests(model).at(-1)!.system).toContain(
+      `(your memory, as it was when this page began):\n\nMEMORY.md: 1/200 lines, 0.1/25 KB; 0 lines link to expired memories.\n\n- [Alice likes tea](alice-tea.md) — what she drinks`,
+    );
   });
 
   it("shows both MEMORY.md at the end of the prompt as they were when the page began", async () => {
@@ -121,7 +137,7 @@ describe("memory", { timeout: 90_000 }, () => {
     gateway.say("general", "alice", `@${ME} hello`);
     await waitFor(() => gateway.sent().length === 1, { what: "the reply" });
     const first = agentRequests(model).at(-1)!.system;
-    expect(first).toMatch(/\(your memory, as it was when this page began\):\n\n- \[Alice likes tea\]\(alice-tea\.md\) — what she drinks\n\n/);
+    expect(first).toMatch(/\(your memory, as it was when this page began\):\n\nMEMORY\.md: 1\/200 lines, 0\.1\/25 KB; 0 lines link to expired memories\.\n\n- \[Alice likes tea\]\(alice-tea\.md\) — what she drinks\n\n/);
     expect(first).toMatch(/\(the memory every bot of this computer shares, as it was when this page began\):\n\nThis MEMORY\.md is empty\.$/);
 
     writeFileSync(join(shared, "MEMORY.md"), "- [Time zone](tz.md) — Australia/Sydney\n");
@@ -132,7 +148,7 @@ describe("memory", { timeout: 90_000 }, () => {
     expect((await gateway.run(["turn-page", "--note", "a new page"])).status).toBe(0);
     gateway.say("general", "alice", `@${ME} new page`);
     await waitFor(() => gateway.sent().length === 3, { what: "the reply on the new page" });
-    expect(agentRequests(model).at(-1)!.system).toMatch(/shares, as it was when this page began\):\n\n- \[Time zone\]\(tz\.md\) — Australia\/Sydney$/);
+    expect(agentRequests(model).at(-1)!.system).toMatch(/shares, as it was when this page began\):\n\nMEMORY\.md: 1\/200 lines, 0\/25 KB; 0 lines link to expired memories\.\n\n- \[Time zone\]\(tz\.md\) — Australia\/Sydney$/);
   });
 
   it("refuses a fork's codemode call, so a script cannot get around the fork's limits", async () => {
@@ -283,30 +299,34 @@ describe("memory", { timeout: 90_000 }, () => {
     expect(passes()[0]!.messages).toBe(4);
   });
 
-  it("dreams after 5 memory changes, once a day, and the next wake says what it changed", async () => {
+  it("tidies after 5 memory changes, once a day, and the next wake says what it changed and its summary", async () => {
     let n = 0;
     await setUp((request) => {
-      if (isDream(request)) return turn(request) === 0 ? write(join(own(), "merged.md"), "Merged.\n") : { text: "Merged the notes." };
+      if (isTidy(request)) return turn(request) === 0 ? { call: { name: "bash", arguments: { command: `rm ${join(own(), "note-1.md")}` } } } : { text: "Deleted note-1.md: note-2.md says the same." };
       return turn(request) === 0 ? write(join(own(), `note-${++n}.md`), "A note.\n") : { text: "Saved." };
     });
     for (let i = 1; i <= 5; i++) {
       gateway.say("general", "alice", `@${ME} note ${i}`);
       await waitFor(() => passes().length === i, { what: `pass ${i}` });
     }
-    await waitFor(() => gateway.output.some((line) => line.message === "memory dream"), { what: "the dream" });
-    const dream = model.requests.find(isDream)!;
-    expect(lastUser(dream)).toMatch(/^# Dream: Memory Consolidation\n[\s\S]*\*\*Tool constraints for this run:\*\*[\s\S]*Memory changes since the last consolidation \(none before\): 5$/);
+    await waitFor(() => tidied().length === 1, { what: "the tidy" });
+    const tidy = model.requests.find(isTidy)!;
+    expect(lastUser(tidy)).toMatch(/^# Memory tidy\n\nThis is the memory tidy\. [^\n]* Memory changes since the last tidy \(none before\): 5\.\n/);
+    expect(lastUser(tidy)).toMatch(/\n- Yours: MEMORY\.md is empty\. No memory in \S+ has expired\.\n/);
     // A fork of the main conversation, as the passes are.
-    expect(dream.system).toBe(agentRequests(model).at(-1)!.system);
+    expect(tidy.system).toBe(agentRequests(model).at(-1)!.system);
     expect(state("memory_changes")).toBe("0");
     expect(Number(state("memory_dream_at"))).toBeGreaterThan(Date.now() - 60_000);
     expect(forks()).toEqual([]);
+    expect(existsSync(join(own(), "note-1.md"))).toBe(false);
 
     gateway.say("general", "alice", `@${ME} note 6`);
     await waitFor(() => passes().length === 6, { what: "pass 6" });
-    expect(wakes(model).at(-1)!).toMatch(/Background memory consolidation updated your memory: consolidated 1 memory file\nFiles changed: \S+[\\/]merged\.md\n/);
+    expect(wakes(model).at(-1)!).toMatch(
+      /The background memory tidy updated your memory: changed 1 memory file\nFiles changed: \S+[\\/]note-1\.md\nThe tidy's summary:\nDeleted note-1\.md: note-2\.md says the same\.\n/,
+    );
     await pause(1_000);
-    expect(model.requests.filter(isDream)).toHaveLength(2);
+    expect(model.requests.filter(isTidy)).toHaveLength(2);
     expect(state("memory_changes")).toBe("1");
   });
 
@@ -326,33 +346,88 @@ describe("memory", { timeout: 90_000 }, () => {
     expect(agentRequests(model).at(-1)!.system).not.toContain("# Memory");
   });
 
-  it("has no pass and no dream by default, with the memory section as before; settings.memoryPasses turns them on while running", async () => {
-    model = await startFakeModel(coworker, { memory: (request) => (isDream(request) ? { text: "Nothing to merge." } : { text: "Nothing to save." }) });
+  it("has no extraction by default and tidies when it is due, with no pass before; settings.memoryExtraction turns extraction on while running", async () => {
+    model = await startFakeModel(coworker, { memory: (request) => (isTidy(request) ? { text: "Nothing changed." } : { text: "Nothing to save." }) });
     gateway = new TestGateway({ model });
     await gateway.start();
     gateway.say("general", "alice", `@${ME} hello`);
     await waitFor(() => gateway.sent().length === 1, { what: "the reply" });
-    // A dream is due by the count, yet without the setting it does not come, nor a pass.
-    const db = new DatabaseSync(join(gateway.botDir, "bot.sqlite"), { timeout: 5_000 });
-    db.prepare("INSERT INTO bot_state (key, value) VALUES ('memory_changes', '5') ON CONFLICT (key) DO UPDATE SET value = excluded.value").run();
-    db.close();
-    gateway.say("general", "alice", `@${ME} hello again`);
-    await waitFor(() => gateway.sent().length === 2, { what: "the second reply" });
-    await pause(1_500);
-    expect(model.requests.filter((request) => isMemoryPass(request) || isDream(request))).toEqual([]);
+    await pause(1_000);
+    expect(model.requests.filter((request) => isMemoryPass(request) || isTidy(request))).toEqual([]);
+    // The cursor moves on without a pass: extraction, once on, starts from here.
+    expect(Number(state("memory_cursor"))).toBeGreaterThan(0);
     const system = agentRequests(model).at(-1)!.system;
     expect(system).toContain("# Memory\n\nYour memory is at");
     // Facts with their source, no types and no "Why:" line.
     expect(system).toContain("source: <who said or showed it, where, when>");
     expect(system).not.toMatch(/feedback|\*\*Why:\*\*|type: user/);
 
-    const file = join(gateway.botDir, "bot.json");
-    const definition = JSON.parse(readFileSync(file, "utf8")) as { settings: Record<string, unknown> };
-    writeFileSync(file, JSON.stringify({ ...definition, settings: { ...definition.settings, memoryPasses: true } }));
-    await waitFor(() => gateway.output.some((line) => line.message === "definition applied"), { what: "the new definition" });
+    // A tidy is due by the count: it comes after the next run, with no pass before it, and its summary reaches the next wake.
+    setState("memory_changes", "5");
+    gateway.say("general", "alice", `@${ME} hello again`);
+    await waitFor(() => tidied().length === 1, { what: "the tidy" });
+    expect(model.requests.filter(isMemoryPass)).toEqual([]);
+    expect(state("memory_changes")).toBe("0");
+    gateway.say("general", "alice", `@${ME} and the tidy?`);
+    await waitFor(() => gateway.sent().length === 3, { what: "the third reply" });
+    expect(wakes(model).at(-1)!).toMatch(/\n\nThe background memory tidy changed no file\.\nThe tidy's summary:\nNothing changed\.\nThis is ambient context/);
+
+    await setSettings({ memoryExtraction: true });
     gateway.say("general", "alice", `@${ME} and now?`);
     await waitFor(() => passes().length === 1, { what: "the pass" });
-    await waitFor(() => gateway.output.some((line) => line.message === "memory dream"), { what: "the dream" });
+    // Only the run since the setting: the cursor moved on while extraction was off.
+    expect(passes()[0]!.messages).toBe(4);
+  });
+
+  it("has neither extraction nor a tidy with both off, also when a tidy is due", async () => {
+    model = await startFakeModel();
+    gateway = new TestGateway({ model, settings: { memoryTidy: false } });
+    await gateway.start();
+    setState("memory_changes", "7");
+    gateway.say("general", "alice", `@${ME} hello`);
+    await waitFor(() => gateway.sent().length === 1, { what: "the reply" });
+    await pause(1_500);
+    expect(model.requests.filter((request) => isMemoryPass(request) || isTidy(request))).toEqual([]);
+    expect(state("memory_changes")).toBe("7");
+    await setSettings({ memoryTidy: true });
+    gateway.say("general", "alice", `@${ME} hello again`);
+    await waitFor(() => tidied().length === 1, { what: "the tidy" });
+  });
+
+  it("counts a memory change once for each agent that changed a memory folder between two ends of a main run, however it wrote", async () => {
+    const script = (request: FakeRequest): FakeReply => {
+      const last = request.messages.at(-1)!;
+      const child = request.system.includes("You are a child agent of");
+      const memory = child ? /Contents of (\S+)[\\/]MEMORY\.md \(the memory of/.exec(request.system)![1]! : /Your memory is at `(\S+)\/`/.exec(request.system)?.[1];
+      const ran = request.messages.filter((message) => message.role === "tool").length;
+      if (child) return last.role === "user" ? { call: { name: "bash", arguments: { command: `echo '- [Bob](bob.md) — likes coffee' >> '${join(memory!, "MEMORY.md")}'` } } } : { text: "noted" };
+      if (last.role === "user" && last.content.includes("two notes")) return write(join(memory!, "a.md"), "A.\n");
+      if (last.role === "tool" && ran === 1 && request.messages.some((message) => message.content.includes("two notes"))) return write(join(memory!, "b.md"), "B.\n");
+      if (last.role === "user" && last.content.includes("only read")) return { call: { name: "bash", arguments: { command: `cat ${memory}/*.md` } } };
+      if (last.role === "user" && last.content.includes("by script")) {
+        return { call: { name: "codemode", arguments: { code: `return await tools.bash({ command: ${JSON.stringify(`echo C > '${join(memory!, "c.md")}'`)} });` } } };
+      }
+      if (last.role === "user" && last.content.includes("please note")) return { call: { name: "task", arguments: { action: "start", title: "note", brief: "save a memory" } } };
+      if (last.role === "user") return { call: { name: "send", arguments: { to: "test:#general", text: "ok" } } };
+      return { text: "done" };
+    };
+    model = await startFakeModel(script);
+    gateway = new TestGateway({ model });
+    await gateway.start();
+    // Two writes in one run: one change. A read, also one the command checker cannot read: none.
+    gateway.say("general", "alice", `@${ME} two notes`);
+    await waitFor(() => state("memory_changes") === "1", { what: "the first change" });
+    gateway.say("general", "alice", `@${ME} only read`);
+    await waitFor(() => agentRequests(model).some((request) => request.messages.at(-2)?.toolCalls?.[0] === "bash"), { what: "the read" });
+    await pause(1_000);
+    expect(state("memory_changes")).toBe("1");
+    // A script's command, and a child's redirect into MEMORY.md.
+    gateway.say("general", "alice", `@${ME} by script`);
+    await waitFor(() => state("memory_changes") === "2", { what: "the script's change" });
+    gateway.say("general", "alice", `@${ME} please note`);
+    await waitFor(() => state("memory_changes") === "3", { what: "the child's change" });
+    expect(readFileSync(join(own(), "MEMORY.md"), "utf8")).toBe("- [Bob](bob.md) — likes coffee\n");
+    expect(model.requests.filter((request) => isMemoryPass(request) || isTidy(request))).toEqual([]);
   });
 
   it("shows MEMORY.md without the lines of expired memories, and names its links to missing files and the files it has no line for", async () => {
@@ -370,7 +445,7 @@ describe("memory", { timeout: 90_000 }, () => {
     await waitFor(() => gateway.sent().length === 1, { what: "the reply" });
     const system = agentRequests(model).at(-1)!.system;
     expect(system).toMatch(
-      /\(your memory, as it was when this page began\):\n\n- \[Omen\]\(omen\.md\) — reach Omen with ssh omen\n- \[Gone\]\(gone\.md\) — a file that is not there\n\nIn \S+[\\/]memory\/: MEMORY\.md links to files that do not exist: gone\.md\. These memory files have no line in MEMORY\.md: tz\.md\.\n\n/,
+      /\(your memory, as it was when this page began\):\n\nMEMORY\.md: 3\/200 lines, 0\.1\/25 KB; 1 line links to an expired memory\.\n\n- \[Omen\]\(omen\.md\) — reach Omen with ssh omen\n- \[Gone\]\(gone\.md\) — a file that is not there\n\nIn \S+[\\/]memory\/: MEMORY\.md links to files that do not exist: gone\.md\. These memory files have no line in MEMORY\.md: tz\.md\.\n\n/,
     );
     expect(system).not.toContain("Trip");
     expect(existsSync(join(own, "trip.md"))).toBe(true);
@@ -401,13 +476,11 @@ describe("memory parts", () => {
       `cat ${sh.own}/MEMORY.md | grep tea | wc -l`,
       `find ${sh.own} -name '*.md'`,
       `grep -rn "tea" ${sh.shared} 2>/dev/null | head -5`,
-      `sqlite3 -readonly -safe ${sh.db} "SELECT text FROM gw_messages LIMIT 5"`,
       `rm -f ${sh.own}/old.md ${sh.shared}/x.md`,
       `rm -- ${sh.own}/new.md`,
       `find ${sh.own} -maxdepth 2 -type f -name '*.md' -mtime -2 -print`,
       `find ${sh.own} ! -name MEMORY.md -o -newer ${sh.own}/MEMORY.md`,
       `grep -c 'a$' ${sh.own}/MEMORY.md 2>&1`,
-      `sqlite3 -readonly -safe -json -header ${sh.db} "SELECT 1"`,
     ]) {
       expect(await refused("bash", { command }), command).toBe(false);
     }
@@ -424,6 +497,7 @@ describe("memory parts", () => {
       "FOO=1 ls",
       `find ${sh.own} -delete`,
       `find . -exec rm {} \\;`,
+      `sqlite3 -readonly -safe ${sh.db} "SELECT text FROM gw_messages LIMIT 5"`,
       `sqlite3 ${sh.db} "DELETE FROM gw_messages"`,
       `sqlite3 -readonly ${sh.db} "SELECT writefile('x', 'y')"`,
       `rm -rf ${sh.own}`,
@@ -473,12 +547,19 @@ describe("memory parts", () => {
     for (const name of ["screen", "send", "react", "call", "task"]) expect(await refused(name, {}), name).toBe(true);
   });
 
-  it("dreams when 24 hours passed since the last dream and 5 memory changes came since then", () => {
+  it("tidies when 24 hours passed since the last tidy and 5 memory changes came since then", () => {
     const now = Date.now();
-    expect(dreamDue({ changes: 4 }, now)).toBe(false);
-    expect(dreamDue({ changes: 5 }, now)).toBe(true);
-    expect(dreamDue({ changes: 9, dreamAt: now - 23 * 3_600_000 }, now)).toBe(false);
-    expect(dreamDue({ changes: 5, dreamAt: now - 24 * 3_600_000 }, now)).toBe(true);
+    expect(tidyDue({ changes: 4 }, now)).toBe(false);
+    expect(tidyDue({ changes: 5 }, now)).toBe(true);
+    expect(tidyDue({ changes: 9, tidiedAt: now - 23 * 3_600_000 }, now)).toBe(false);
+    expect(tidyDue({ changes: 5, tidiedAt: now - 24 * 3_600_000 }, now)).toBe(true);
+  });
+
+  it("states how full a MEMORY.md is and how many of its lines link to expired memories", () => {
+    expect(indexStatus("\n", 0)).toBe("");
+    expect(indexStatus(`${"x".repeat(99)}\n`.repeat(100), 1)).toBe("MEMORY.md: 100/200 lines, 10/25 KB; 1 line links to an expired memory.");
+    expect(indexStatus(`${"x".repeat(144)}\n`.repeat(69), 4)).toBe("MEMORY.md: 69/200 lines, 10/25 KB; 4 lines link to expired memories.");
+    expect(indexStatus("- [a](a.md) — a\n".repeat(30), 0)).toBe("MEMORY.md: 30/200 lines, 0.5/25 KB; 0 lines link to expired memories.");
   });
 
   it("notes the age of a memory file read 2 days or more after it changed, and only of a memory file", async () => {
@@ -556,24 +637,32 @@ describe("memory parts", () => {
       ].join("\n"),
       missing: ["missing.md"],
       unlisted: ["d.md"],
+      expired: ["old-unlisted.md", "old.md"],
+      status: "MEMORY.md: 8/200 lines, 0.3/25 KB; 1 line links to an expired memory.",
     });
     // No MEMORY.md: every memory file that is still true has no line.
-    expect(await loadIndex(folders.shared, "2026-11-26")).toEqual({ text: "", missing: [], unlisted: [] });
+    expect(await loadIndex(folders.shared, "2026-11-26")).toEqual({ text: "", missing: [], unlisted: [], expired: [], status: "" });
     rmSync(join(folders.own, "MEMORY.md"));
     expect((await loadIndex(folders.own, "2026-11-26")).unlisted).toEqual(["a.md", "d.md", "odd.md", join("people", "f.md"), "today.md"]);
   });
 
-  it("offers the passes sqlite3 only where it is, and says otherwise that the log cannot be queried", () => {
+  it("asks the tidy only to delete and correct, with the status of both indexes and the expired memories, and no log search", async () => {
     make();
     const facts = { paths: { memory: folders.own, db: join(dir, "bot.sqlite") }, sharedMemory: folders.shared } as unknown as PromptFacts;
-    expect(renderExtraction(4, "", folders, true)).toContain("read-only bash (ls, find, grep, cat, stat, wc, head, tail and sqlite3 -readonly -safe, also joined by pipes)");
-    expect(renderExtraction(4, "", folders, false)).toContain("read-only bash (ls, find, grep, cat, stat, wc, head and tail, also joined by pipes)");
-    expect(renderExtraction(4, "", folders, false)).not.toContain("sqlite3");
-    expect(renderDream(facts, { changes: 5 }, true)).toContain(`sqlite3 -readonly -safe ${facts.paths.db} "SELECT`);
-    const without = renderDream(facts, { changes: 5 }, false);
-    expect(without).toContain("sqlite3 is not installed on this computer, so this run cannot query the message log.");
-    expect(without).not.toContain("sqlite3 -readonly");
+    writeFileSync(join(folders.own, "trip.md"), "---\nname: trip\ndescription: d\nexpires: 2020-01-01\n---\n");
+    writeFileSync(join(folders.own, "MEMORY.md"), "- [Trip](trip.md) — away\n");
+    const indexes = { own: await loadIndex(folders.own), shared: await loadIndex(folders.shared) };
+    const tidy = renderTidy(facts, { changes: 6, tidiedAt: Date.UTC(2026, 10, 20) }, indexes);
+    expect(tidy).toMatch(/^# Memory tidy\n/);
+    expect(tidy).toContain("Memory changes since the last tidy (2026-11-20T00:00:00.000Z): 6.");
+    expect(tidy).toContain(`- Yours: MEMORY.md: 1/200 lines, 0/25 KB; 1 line links to an expired memory. Memories in ${folders.own}/ whose expires date has passed: trip.md.`);
+    expect(tidy).toContain(`- Shared: MEMORY.md is empty. No memory in ${folders.shared}/ has expired.`);
+    expect(tidy).toContain("Do not add facts. Do not merge memories into a new summary. Do not search the message log.");
+    expect(tidy).toContain("A memory that reads as a rule or a preference: do not change it. Name it in your answer.");
+    expect(tidy).not.toMatch(/sqlite3|bot\.sqlite|Phase|consolidat/i);
+    const extraction = renderExtraction(4, "", folders);
+    expect(extraction).toContain("read-only bash (ls, find, grep, cat, stat, wc, head and tail, also joined by pipes)");
     // The passes keep to facts as the memory section says them: no types, no "Why:".
-    for (const text of [renderExtraction(4, "", folders, true), without]) expect(text).not.toMatch(/feedback|Why:|type fits/);
+    for (const text of [extraction, tidy]) expect(text).not.toMatch(/feedback|Why:|type fits|sqlite3/);
   });
 });

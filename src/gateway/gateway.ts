@@ -279,6 +279,7 @@ export class Gateway {
     return {
       receive: (eventId, raw) => this.#background.run(Inbox.use((inbox) => inbox.receive(adapter.id, eventId, raw))),
       newestMessage: (place) => this.#background.run(MessageLog.use((log) => log.newestMessage(place))),
+      logged: (message) => this.#background.run(MessageLog.use((log) => log.raws(message))),
       threads: (place) => this.#background.run(MessageLog.use((log) => log.threads(place))),
       places: () => this.#background.run(MessageLog.use((log) => log.places(adapter.id))),
       lastAlive: () => this.#lastAlive,

@@ -4,6 +4,9 @@ import type { Print } from "./config.ts";
 /** The longest the bot shows that it works in a place without sending there. */
 export const WORKING_CAP_MS = 10 * 60_000;
 
+/** The longest a send waits for a show already on its way to the same place. */
+export const SHOW_WAIT_MS = 2_000;
+
 interface Shown {
   readonly at: Address;
   readonly sign: WorkingSign;
@@ -17,7 +20,7 @@ interface Shown {
  * Shows people in a place that the bot works there, as a chat app shows a person typing: the channel's sign, again
  * every so often so it does not fade, until stop, or WORKING_CAP_MS after it started. One sign per place. The calls of a
  * place go to the platform in order, so a stop never comes before a show that was still on its way. When the platform
- * refuses a show, the sign stops there, and the refusal is printed once.
+ * refuses a show, the sign stops there, and the refusal is printed once. Once closed, it shows nothing more.
  */
 export class Working {
   readonly #signOf: (at: Address) => WorkingSign | undefined;
@@ -26,6 +29,7 @@ export class Working {
   readonly #shown = new Map<Address, Shown>();
   /** Per place, the platform's last call. */
   readonly #calls = new Map<Address, Promise<void>>();
+  #closed = false;
 
   constructor(options: { sign: (at: Address) => WorkingSign | undefined; print: Print; capMs?: number }) {
     this.#signOf = options.sign;
@@ -38,6 +42,7 @@ export class Working {
    * (Unix ms). Again in the same place: the sign moves to the new `at`, and the cap counts from the new `since`.
    */
   start(place: Address, at: Address, since = Date.now()): void {
+    if (this.#closed) return;
     const left = this.#capMs - (Date.now() - since);
     const before = this.#shown.get(place);
     if (before?.at === at && left > 0) {
@@ -79,8 +84,28 @@ export class Working {
     this.#call(place, () => sign.stop!(at)).catch((error: unknown) => this.#print("could not stop showing that the bot works", { place, error: String(error) }));
   }
 
+  /**
+   * The bot is about to send to a place: the sign there stops, and this waits for a show that is already on its way, at
+   * most `waitMs`, so it does not reach the platform after the message and show the sign again under it. Without such
+   * a show, it does not wait.
+   */
+  async beforeSend(place: Address, waitMs = SHOW_WAIT_MS): Promise<void> {
+    const before = this.#calls.get(place);
+    this.stop(place);
+    if (!before) return;
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([before, new Promise<void>((resolve) => (timer = setTimeout(resolve, waitMs)))]);
+    clearTimeout(timer);
+  }
+
   stopAll(): void {
     for (const place of [...this.#shown.keys()]) this.stop(place);
+  }
+
+  /** Stop every sign, and show none again: the bot stops. */
+  close(): void {
+    this.#closed = true;
+    this.stopAll();
   }
 
   /** The places where the sign shows now. */

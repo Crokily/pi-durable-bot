@@ -68,6 +68,7 @@ function memorySink(options: { lastAlive?: number; newest?: Record<string, strin
       if (!events.some((event) => event.id === id)) events.push({ id, raw: JSON.parse(JSON.stringify(raw)) });
     },
     newestMessage: async (place) => options.newest?.[place],
+    logged: async () => [],
     threads: async () => [],
     places: async () => options.places ?? [],
     lastAlive: () => options.lastAlive,

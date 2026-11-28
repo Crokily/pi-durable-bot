@@ -788,12 +788,13 @@ class SlackChannel implements ChannelAdapter {
    * Slack's status line under a thread, "<app> is working…" (assistant.threads.setStatus, which chat:write allows): on
    * the thread of `at`, or on `at` itself when it starts none yet. It lasts 2 minutes, and Slack clears it when the bot
    * replies in that thread; an empty status clears it at once. Slack shows its own words, whatever the status says. A
-   * place alone has no thread, so nothing shows there.
+   * place alone has no thread, so nothing shows there. Its requests do not go through the SDK's client: they are tried
+   * once, and "too many requests" fails at once, so they never hold up a send in the client's queue.
    */
   readonly working: WorkingSign = {
     every: 90_000,
-    show: (at) => explained(this.#status(at, "is working…")),
-    stop: (at) => explained(this.#status(at, "")),
+    show: (at) => this.#status(at, "is working…"),
+    stop: (at) => this.#status(at, ""),
   };
 
   /** The thread of an address, found once: finding it is a request. */
@@ -804,12 +805,30 @@ class SlackChannel implements ChannelAdapter {
     if (!("channel" in parsed) || !parsed.ts) return;
     let thread = this.#statusIn.get(at);
     if (!thread) {
-      thread = await this.#target(at);
+      const replies = await this.#once("conversations.replies", { channel: parsed.channel, ts: parsed.ts, limit: "1" });
+      const first = (replies.messages as SlackMessage[] | undefined)?.[0];
+      thread = { channel: parsed.channel, threadTs: first?.thread_ts ?? parsed.ts };
       if (this.#statusIn.size >= 100) this.#statusIn.delete(this.#statusIn.keys().next().value!);
       this.#statusIn.set(at, thread);
     }
     if (!thread.threadTs) return;
-    await this.#client.apiCall("assistant.threads.setStatus", { channel_id: thread.channel, thread_ts: thread.threadTs, status });
+    await this.#once("assistant.threads.setStatus", { channel_id: thread.channel, thread_ts: thread.threadTs, status });
+  }
+
+  /** One Web API request, outside the SDK's client: tried once, and a "too many requests" fails at once. */
+  async #once(method: string, params: Record<string, string>): Promise<Record<string, unknown>> {
+    if (!this.#botToken) throw new Error(`channel ${this.id} is not started`);
+    const response = await fetch(new URL(method, this.#apiUrl ?? "https://slack.com/api/"), {
+      method: "POST",
+      headers: { authorization: `Bearer ${this.#botToken}`, "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(params),
+      signal: AbortSignal.timeout(this.#requests.timeout),
+    });
+    if (response.status === 429) throw new Error(`Slack ${method}: too many requests (retry after ${response.headers.get("retry-after") ?? "?"} s)`);
+    const data = (await response.json().catch(() => undefined)) as Record<string, unknown> | undefined;
+    if (!response.ok || !data) throw new Error(`Slack ${method}: HTTP ${response.status}`);
+    if (data.ok !== true) throw new Error(`Slack ${method}: ${String(data.error)}. Slack's answer: ${JSON.stringify(data)}`);
+    return data;
   }
 
   /** Where a send goes: a place, a thread (any message in it; replies go to its first message), or a person (DM). */

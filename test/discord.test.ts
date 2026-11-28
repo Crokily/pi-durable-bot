@@ -98,6 +98,7 @@ function memorySink(options: { lastAlive?: number; newest?: Record<string, strin
       if (!events.some((event) => event.id === id)) events.push({ id, raw: JSON.parse(JSON.stringify(raw)) });
     },
     newestMessage: async (place) => options.newest?.[place],
+    logged: async () => [],
     threads: async () => [],
     places: async () => options.places ?? [],
     lastAlive: () => options.lastAlive,
@@ -840,5 +841,19 @@ describe("Discord typing", () => {
     expect(fake.requested("GET", "/channels/501")).toHaveLength(1);
     fake.route("POST", "/channels/\\d+/typing", () => new Reply(403, { message: "Missing Permissions", code: 50013 }));
     await expect(channel.working.show("discord:#20/501")).rejects.toThrow("Missing Permissions");
+  });
+
+  // Codex's review: discord.js waited out a 429 on typing, tried again and said it worked.
+  it("fails at once on a rate limit, tries once, and never holds up a send", async () => {
+    const { fake, channel } = await connect();
+    let limited = 1;
+    fake.route("POST", "/channels/\\d+/typing", () =>
+      limited-- > 0 ? new Reply(429, { message: "You are being rate limited.", retry_after: 1, global: false }, { "retry-after": "1", "x-ratelimit-scope": "user" }) : undefined,
+    );
+    const started = Date.now();
+    await expect(channel.working.show("discord:#20")).rejects.toThrow(/rate limit/i);
+    await channel.send("discord:#20", "the plan", "tool:1");
+    expect(Date.now() - started).toBeLessThan(800);
+    expect(fake.requested("POST", "/channels/\\d+/typing")).toHaveLength(1);
   });
 });

@@ -181,6 +181,8 @@ export interface AgentOptions {
     sections: readonly AgentSection[];
     /** The place the main agent works on now, when it works on one: a new child works for it unless told otherwise. */
     place(): string | undefined;
+    /** Where in a place the main agent works now, the message or thread, when it knows one: kept with a child for that place. */
+    at?(place: string): string | undefined;
     /** Hand a child's failure to the main agent as a wake; the same reporter is one wake. Returns its submission ID. */
     failed(failure: ChildFailure, context: Context): Promise<string>;
   };
@@ -619,6 +621,7 @@ export class Agent {
       childModel: (model) => childModel(models, model),
       max: () => options.children.max(),
       place: () => options.children.place(),
+      at: (place) => options.children.at?.(place),
       extensions: () => childExtensions,
       last: async (conversationId, context) => lastStep(await self().#harness.conversation(conversationId, context), context).catch(() => undefined),
       // With what the child did last, read from its conversation.
@@ -1110,6 +1113,17 @@ export class Agent {
       if (record?.status === "unanswered" && record.reason === "model_error") return String(record.detail ?? "the model request failed");
     }
     return undefined;
+  }
+
+  /** Of these submissions, those that still wait in the queue or that a run works on now. */
+  async pending(ids: readonly string[]): Promise<Set<string>> {
+    const found = new Set<string>();
+    for (const id of ids) {
+      const submission = await this.#harness.submission(Number(id) as SubmissionId, context);
+      const record = submission ? await submission.status(context) : undefined;
+      if (record?.status === "queued" || record?.status === "placed") found.add(id);
+    }
+    return found;
   }
 
   /** The submissions the current run works on, or undefined while idle. */

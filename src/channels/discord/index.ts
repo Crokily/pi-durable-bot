@@ -7,7 +7,7 @@ import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { setTimeout as sleep } from "node:timers/promises";
 import { DiscordFormatConverter } from "@chat-adapter/discord";
 import { convertEmojiPlaceholders, defaultEmojiResolver } from "chat";
-import { Client, DiscordAPIError, Events, GatewayIntentBits, HTTPError, MessageType, type REST, type RequestMethod } from "discord.js";
+import { Client, DiscordAPIError, Events, GatewayIntentBits, HTTPError, MessageType, REST, type RequestMethod } from "discord.js";
 import type {
   Address,
   ChannelAdapter,
@@ -191,6 +191,8 @@ export class DiscordChannel implements ChannelAdapter {
   /** Discord's REST base URL. Tests point it at a fake Discord. */
   readonly #api: string;
   #client?: Client;
+  /** For typing only: tried once, and a rate limit fails at once, apart from the client's REST and its waits for sends. */
+  #typingRest?: REST;
   #botUserId?: string;
   /** The gateway session, for event IDs: a dispatch is unique by its session and sequence number. */
   #session?: string;
@@ -262,6 +264,7 @@ export class DiscordChannel implements ChannelAdapter {
     client.on(Events.ShardError, (error) => sink.log("gateway error", { error: String(error) }));
     client.on(Events.ShardDisconnect, (event) => sink.log("Discord closed the gateway, and it will not reconnect", { code: event.code }));
     this.#client = client;
+    this.#typingRest = new REST({ api: this.#api, retries: 0, rejectOnRateLimit: () => true, hashSweepInterval: 0, handlerSweepInterval: 0 }).setToken(token!);
     this.#readies = 0;
     try {
       await client.login(token);
@@ -279,6 +282,7 @@ export class DiscordChannel implements ChannelAdapter {
   async stop(): Promise<void> {
     const client = this.#client;
     this.#client = undefined;
+    this.#typingRest = undefined;
     await client?.destroy().catch(() => {});
     this.#running.abort();
     await this.#storing;
@@ -1022,7 +1026,7 @@ export class DiscordChannel implements ChannelAdapter {
 
   /**
    * Discord's "<bot> is typing…" line, in the channel or thread of `at`. It lasts 10 seconds; Discord has no call to
-   * stop it, so it fades.
+   * stop it, so it fades. Not tried again: a rate limit fails at once, and never makes a send wait.
    */
   readonly working: WorkingSign = { every: 8_000, show: (at) => explained(this.#typing(at)) };
 
@@ -1037,7 +1041,8 @@ export class DiscordChannel implements ChannelAdapter {
       if (this.#typingIn.size >= 100) this.#typingIn.delete(this.#typingIn.keys().next().value!);
       this.#typingIn.set(at, channel);
     }
-    await this.#rest.post(`/channels/${channel}/typing`);
+    if (!this.#typingRest) throw new Error(`channel ${this.id} is not started`);
+    await this.#typingRest.post(`/channels/${channel}/typing`);
   }
 
   /** Discord's API does not give nonces back when it lists messages, so a sent message cannot be found by its send ID. */
@@ -1167,6 +1172,11 @@ function findComponent(components: unknown, id: string): Record<string, any> | u
 function discordError(error: unknown): Error {
   if (error instanceof DiscordAPIError) return new Error(`Discord answered ${error.status}, code ${error.code}: ${error.message}`, { cause: error });
   if (error instanceof HTTPError) return new Error(`Discord answered ${error.status} ${error.message}`, { cause: error });
+  // A request that a REST client with rejectOnRateLimit did not wait for. Its message is empty.
+  if (error instanceof Error && error.name.startsWith("RateLimitError")) {
+    const { retryAfter, route } = error as Error & { retryAfter?: number; route?: string };
+    return new Error(`Discord rate limited ${route ?? "the request"}; retry after ${retryAfter ?? "?"} ms`, { cause: error });
+  }
   return error instanceof Error ? error : new Error(String(error));
 }
 

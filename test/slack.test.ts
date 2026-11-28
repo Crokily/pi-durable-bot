@@ -49,6 +49,7 @@ function memorySink(
       if (!events.some((event) => event.id === id)) events.push({ id, raw: JSON.parse(JSON.stringify(raw)) });
     },
     newestMessage: async (place) => options.newest?.[place],
+    logged: async () => [],
     threads: async (place) => options.threads?.[place] ?? [],
     places: async () => Object.keys(options.newest ?? {}),
     lastAlive: () => options.lastAlive,
@@ -951,5 +952,24 @@ describe("Slack typing", () => {
     expect(fake.called("conversations.replies")).toHaveLength(2);
     fake.route("assistant.threads.setStatus", () => ({ ok: false, error: "missing_scope" }));
     await expect(working.show("slack:#C0GENERAL/1793080262.000100")).rejects.toThrow("missing_scope");
+  });
+
+  // Codex's review: a 429 on the status, with Retry-After 1, paused the SDK client's queue and held up a send by 1 s.
+  it("fails at once when Slack says too many requests, tries once, and never holds up a send", async () => {
+    const { fake, channel } = await connect();
+    fake.post(GENERAL.id, { user: ALICE.id, text: "release plan?", ts: TS });
+    const working = channel.working!;
+    fake.fail("assistant.threads.setStatus", 429, 1, 1);
+    const started = Date.now();
+    const shown = working.show(`slack:#C0GENERAL/${TS}`);
+    const sent = channel.send("slack:#C0GENERAL", "the plan", "tool:1");
+    await expect(shown).rejects.toThrow(/too many requests \(retry after 1 s\)/);
+    await sent;
+    expect(Date.now() - started).toBeLessThan(800);
+    expect(fake.called("assistant.threads.setStatus")).toHaveLength(1);
+    // The thread lookup too: tried once.
+    fake.fail("conversations.replies", 429, 1, 1);
+    await expect(working.show("slack:#C0GENERAL/1793080299.000100")).rejects.toThrow("too many requests");
+    expect(fake.called("conversations.replies").filter((call) => call.params.ts === "1793080299.000100")).toHaveLength(1);
   });
 });

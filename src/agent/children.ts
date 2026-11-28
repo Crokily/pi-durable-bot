@@ -43,6 +43,8 @@ export type ChildRecord = {
   conversationId: ConversationId;
   /** The place the child works for, when there is one. */
   place?: string;
+  /** Where in its place: the message or thread the main agent worked on there when it started the child, when known. */
+  at?: string;
   /** The routine that started it, when one did. */
   routine?: string;
   /** The child that started it, when one did. */
@@ -97,6 +99,8 @@ export interface ChildInfo {
   title: string;
   conversationId: string;
   place?: string;
+  /** Where in its place: the message or thread the main agent worked on there when it started the child, when known. */
+  at?: string;
   /** The routine that started it, when one did. */
   routine?: string;
   /** The child that started it, when one did. */
@@ -224,6 +228,7 @@ export function childInfo(record: Readonly<ChildRecord>): ChildInfo {
     title: record.title,
     conversationId: String(record.conversationId),
     ...(record.place === undefined ? {} : { place: record.place }),
+    ...(record.at === undefined ? {} : { at: record.at }),
     ...(record.routine === undefined ? {} : { routine: record.routine }),
     ...(record.parent === undefined ? {} : { parent: record.parent }),
     ...(record.model === undefined ? {} : { model: record.model }),
@@ -326,6 +331,8 @@ export interface ChildrenHost {
   max(): number;
   /** The place the main agent works on now, when it works on one. */
   place(): string | undefined;
+  /** Where in a place the main agent works now: the message or thread it works on there, when it knows one. */
+  at(place: string): string | undefined;
   /**
    * A child's extensions as a change to the main agent's: the child's own added, the main agent's that a child does not
    * get removed. Stored as this change, not as a list, so a child follows what the main agent has now, such as the MCP
@@ -369,6 +376,8 @@ export interface ChildStart {
   /** The child that starts it, when one does. */
   parent?: string;
   place?: string;
+  /** Where in its place, the message or thread, when known. */
+  at?: string;
   /** The routine that starts it, when one does. */
   routine?: string;
   /** The model chosen for it, "provider/modelId", already checked; absent: the main agent's model. */
@@ -695,6 +704,7 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
       title: input.title,
       conversationId: conversation.id,
       ...(input.place ? { place: input.place } : {}),
+      ...(input.place && input.at ? { at: input.at } : {}),
       ...(input.routine === undefined ? {} : { routine: input.routine }),
       ...(input.parent === undefined ? {} : { parent: input.parent }),
       ...(input.chosen === undefined ? {} : { model: input.chosen }),
@@ -779,6 +789,8 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
       if (args.action === "start") {
         if (!args.title?.trim() || !args.brief?.trim()) return text("start needs a title and a brief.");
         const place = args.place?.trim() || (caller ? caller.place : host.place());
+        // A child of a child keeps its starter's message or thread when it works for the same place.
+        const at = !place ? undefined : caller ? (caller.place === place ? caller.at : undefined) : host.at(place);
         // A model of its own is checked now, so a child never starts with a model it cannot use. Without one, the
         // child has its starter's: for the main agent's, the main model, also when bot.json changes it later.
         const chosen = args.model?.trim() || caller?.model;
@@ -799,6 +811,7 @@ export function childrenExtension(host: ChildrenHost): ChildrenTools {
                 from,
                 ...(caller ? { parent: caller.id } : {}),
                 ...(place ? { place } : {}),
+                ...(at ? { at } : {}),
                 ...(chosen === undefined ? {} : { chosen }),
                 model,
                 thinking: thinkingLevel,

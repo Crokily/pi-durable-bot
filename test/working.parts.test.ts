@@ -170,3 +170,69 @@ describe("typing where the bot works", () => {
     expect(sign.calls).toEqual(["show p:#a/1"]);
   });
 });
+
+describe("typing before a send", () => {
+  // The live test on Discord: the show again every 8 s went out while the reply's send was on its way, reached Discord
+  // after the message, and showed "is typing…" again under the reply.
+  it("stops the sign and waits for a show on its way, so the show never reaches the platform after the message", async () => {
+    const sign = recordedSign(8_000);
+    const { shown } = working(sign.sign);
+    shown.start("p:#a", "p:#a/1");
+    await vi.advanceTimersByTimeAsync(0);
+    sign.slow();
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(sign.calls).toEqual(["show p:#a/1", "show p:#a/1"]);
+    let ready = false;
+    const before = shown.beforeSend("p:#a").then(() => void (ready = true));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(ready).toBe(false);
+    expect(shown.places).toEqual([]);
+    sign.release();
+    await before;
+    // The send goes now. No show comes after it, also when the sign would have shown again.
+    sign.calls.push("send");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(sign.calls).toEqual(["show p:#a/1", "show p:#a/1", "stop p:#a/1", "send"]);
+  });
+
+  it("does not wait without a show on its way, nor longer than its limit for one that hangs", async () => {
+    const sign = recordedSign(8_000, { stop: false });
+    const { shown } = working(sign.sign);
+    shown.start("p:#a", "p:#a/1");
+    await vi.advanceTimersByTimeAsync(0);
+    let ready = false;
+    void shown.beforeSend("p:#a").then(() => void (ready = true));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ready).toBe(true);
+    // A place without typing: at once too.
+    ready = false;
+    void shown.beforeSend("p:#b").then(() => void (ready = true));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ready).toBe(true);
+
+    shown.start("p:#a", "p:#a/2");
+    sign.slow();
+    await vi.advanceTimersByTimeAsync(8_000);
+    ready = false;
+    void shown.beforeSend("p:#a", 500).then(() => void (ready = true));
+    await vi.advanceTimersByTimeAsync(499);
+    expect(ready).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ready).toBe(true);
+    sign.release();
+  });
+});
+
+describe("typing of a bot that stops", () => {
+  it("shows nothing once closed: a start that comes later, from a wake still on its way, does nothing", async () => {
+    const sign = recordedSign(1_000);
+    const { shown } = working(sign.sign);
+    shown.start("p:#a", "p:#a/1");
+    await vi.advanceTimersByTimeAsync(0);
+    shown.close();
+    shown.start("p:#b", "p:#b/1");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(sign.calls).toEqual(["show p:#a/1", "stop p:#a/1"]);
+    expect(shown.places).toEqual([]);
+  });
+});

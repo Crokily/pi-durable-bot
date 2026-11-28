@@ -1,5 +1,5 @@
 import { Cause, Clock, Context, Effect, Fiber, FiberMap, FiberSet, Layer, Option, Result, type Tracer } from "effect";
-import type { PlaceInfo } from "../core/channel.ts";
+import type { Address, PlaceInfo } from "../core/channel.ts";
 import type { Judge, JudgeItem } from "../core/judge.ts";
 import type { PlaceWake, PlaceWakeReason, ThreadStart, WakeEvent, WakeFile, WakeTarget } from "../core/wake.ts";
 import { Channels } from "./channels.ts";
@@ -78,6 +78,8 @@ export class Waker extends Context.Service<
   {
     setTarget(target: WakeTarget): void;
     add(event: UndecidedEvent): Effect.Effect<void>;
+    /** A message of the bot's own reached the log: tell the bot. */
+    ownMessage(place: Address, at: number): Effect.Effect<void>;
     /** Deliver again, with the same IDs, the wakes a crash left undelivered: debounceMs after the start. */
     readonly redeliver: Effect.Effect<void, LogError>;
     readonly hooks: WakerHooks;
@@ -296,6 +298,14 @@ export class Waker extends Context.Service<
           target = next;
           stopped = false;
         },
+        ownMessage: (place, at) =>
+          Effect.sync(() => {
+            try {
+              target?.ownMessage?.(place, at);
+            } catch (error) {
+              config.print("the bot could not take its own message", { place, error: message(error) });
+            }
+          }),
         add: (event) =>
           Effect.gen(function* () {
             if (stopped) return;

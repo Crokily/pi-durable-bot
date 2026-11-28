@@ -30,6 +30,7 @@ function sink(receive: ChannelSink["receive"] = async () => {}, logs: string[] =
   return {
     receive,
     newestMessage: async () => undefined,
+    logged: async () => [],
     threads: async () => [],
     places: async () => [],
     lastAlive: () => undefined,
@@ -440,5 +441,29 @@ describe("typing", () => {
     telegram.script("sendChatAction", { ok: false, error_code: 429, description: "Too Many Requests: retry after 5", parameters: { retry_after: 5 } });
     await expect(working.show("telegram:#111/10")).rejects.toThrow("Too Many Requests");
     expect(methods("sendChatAction")).toHaveLength(3);
+  });
+
+  // Codex's review: after a restart the adapter no longer knew the topic, and typing went to the chat's General topic.
+  it("finds the forum topic in the log after a restart, for typing and for a send", async () => {
+    const logged: string[] = [];
+    await channel.start({
+      ...sink(),
+      logged: async (message) => {
+        logged.push(message);
+        return message === "telegram:#-100300/7" || message === "telegram:#-100300/8" ? [JSON.parse(JSON.stringify(updates.topicMessage.message))] : [];
+      },
+    });
+    // The topic, as a wake gives the thread of a message in it; and a message in it.
+    await channel.working!.show("telegram:#-100300/7");
+    await channel.working!.show("telegram:#-100300/8");
+    expect(methods("sendChatAction").map((call) => call.params)).toEqual([
+      { chat_id: "-100300", action: "typing", message_thread_id: 7 },
+      { chat_id: "-100300", action: "typing", message_thread_id: 7 },
+    ]);
+    await channel.send("telegram:#-100300/8", "on it", "tool:1");
+    expect(methods("sendRichMessage").at(-1)!.params).toMatchObject({ chat_id: "-100300", message_thread_id: 7 });
+    // Known from then on: one read of the log taught both.
+    await channel.working!.show("telegram:#-100300/7");
+    expect(logged).toEqual(["telegram:#-100300/7"]);
   });
 });

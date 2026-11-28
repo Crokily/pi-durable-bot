@@ -222,14 +222,19 @@ class TestChannel implements ChannelAdapter {
     return readFile(resolve(this.#dir, file.url ?? ""));
   }
 
-  /** Platform methods: edit { message, text }, delete { message }, records {}. */
+  /** Platform methods: post { to, text } (a message of the bot's, not through send), edit { message, text }, delete { message }, records {}. */
   async call(method: string, params: Record<string, unknown>): Promise<unknown> {
     if (method === "records") return this.#records();
+    // A message the bot posts without send, as a platform's own method for a photo or a card does.
+    if (method === "post") {
+      const { place, thread } = await this.#target(String(params.to ?? ""));
+      return this.#append({ type: "message", place, text: String(params.text ?? ""), ...(thread ? { thread } : {}) });
+    }
     const address = typeof params.message === "string" ? this.#parse(params.message) : undefined;
     if (!address || !("place" in address) || !address.message) throw new Error(`${method}: "message" must be a message address`);
     if (method === "edit") return this.#append({ type: "edit", place: address.place, message: address.message, text: String(params.text ?? "") });
     if (method === "delete") return this.#append({ type: "delete", place: address.place, message: address.message });
-    throw new Error(`unknown method ${method}; methods: edit, delete, records`);
+    throw new Error(`unknown method ${method}; methods: post, edit, delete, records`);
   }
 }
 

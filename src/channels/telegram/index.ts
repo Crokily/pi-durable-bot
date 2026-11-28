@@ -596,10 +596,24 @@ class TelegramChannel implements ChannelAdapter {
     const parsed = this.#parse(to);
     if ("user" in parsed) return { chat: parsed.user };
     if (parsed.message === undefined) return { chat: parsed.chat };
-    const topic = this.#topics.get(`${parsed.chat}/${parsed.message}`);
+    const topic = this.#topics.get(`${parsed.chat}/${parsed.message}`) ?? (await this.#topicFromLog(to, parsed.chat, parsed.message));
     if (topic === parsed.message) return { chat: parsed.chat, topic };
     if (topic) return { chat: parsed.chat, reply: parsed.message, topic, anyway: true };
     return { chat: parsed.chat, reply: parsed.message, anyway: (await this.#hasTopics(parsed.chat)) === false };
+  }
+
+  /**
+   * The forum topic of a message this adapter has not seen since the start, from what the log keeps of it and of its
+   * thread (a topic's thread is the topic). Only in a chat with topics; undefined when the log does not say.
+   */
+  async #topicFromLog(address: Address, chat: string, message: number): Promise<number | undefined> {
+    if (!this.#sink || (await this.#hasTopics(chat)) !== true) return undefined;
+    const raws = await this.#sink.logged(address).catch(() => []);
+    for (const raw of raws) {
+      const m = (raw && typeof raw === "object" && "sent" in raw ? (raw as { sent: unknown }).sent : raw) as TgMessage | undefined;
+      if (m && typeof m === "object" && "message_id" in m && "chat" in m) this.#learnTopics(m);
+    }
+    return this.#topics.get(`${chat}/${message}`);
   }
 
   /**

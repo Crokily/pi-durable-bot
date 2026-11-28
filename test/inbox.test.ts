@@ -12,6 +12,7 @@ import { MemoryChannel, message, withCore } from "./support/core.ts";
 const sink: ChannelSink = {
   receive: async () => {},
   newestMessage: async () => undefined,
+  logged: async () => [],
   threads: async () => [],
   places: async () => [],
   lastAlive: () => undefined,

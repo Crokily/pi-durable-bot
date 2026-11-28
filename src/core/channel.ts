@@ -100,6 +100,11 @@ export interface ChannelSink {
   receive(eventId: string, raw: unknown): Promise<void>;
   /** The newest logged message in a place, for backfill. */
   newestMessage(place: Address): Promise<Address | undefined>;
+  /**
+   * The platform's data that the log keeps of a message and of the messages in the thread it starts, newest first, at
+   * most 10: for what an adapter knew of them before a restart.
+   */
+  logged(message: Address): Promise<unknown[]>;
   /** Threads the log knows in a place. */
   threads(place: Address): Promise<Address[]>;
   /** The places of this channel account that the log knows, for backfill on platforms that cannot list them all (DMs). */

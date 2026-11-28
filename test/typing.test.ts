@@ -16,7 +16,8 @@ const isChild = (request: FakeRequest) => request.system.includes("You are a chi
  * The judge: "pricing" is related and needs an answer (0.9), "maybe" is related and may need one (0.6), the rest not.
  * The main agent answers a wake in its place, except: "stay quiet" (no send); "wait for go" (it waits until the file go
  * is in its workspace, then answers); "send first" (it answers, then waits for go); "research and tell" (a child that
- * wakes it with pots wake, whose note it passes on).
+ * wakes it with pots wake, whose note it passes on); "research slowly" (the same, but the child waits for go first);
+ * "answer natively" (it posts with call, not send, then waits for go).
  */
 function script(request: FakeRequest): FakeReply {
   if (isJudge(request)) {
@@ -27,7 +28,9 @@ function script(request: FakeRequest): FakeReply {
   }
   const last = request.messages.at(-1);
   if (isChild(request)) {
-    if (last?.role === "user") return { call: { name: "bash", arguments: { command: `pots wake --note "the answer is 42"` } } };
+    const slow = request.messages.some((message) => message.role === "user" && message.content.includes("wait for go first"));
+    const wait = slow ? "until [ -e go ]; do sleep 0.2; done; " : "";
+    if (last?.role === "user") return { call: { name: "bash", arguments: { command: `${wait}pots wake --note "the answer is 42"` } } };
     return { text: "told the main agent" };
   }
   const wake = request.messages.findLast((message) => message.role === "user" && message.content.startsWith("[wake]"))?.content ?? "";
@@ -35,9 +38,16 @@ function script(request: FakeRequest): FakeReply {
   const went = request.messages.some((message) => message.role === "tool" && message.content.includes("went"));
   const sent = request.messages.filter((message) => message.toolCalls?.includes("send")).length;
   const waitForGo = { call: { name: "bash", arguments: { command: "until [ -e go ]; do sleep 0.2; done; echo went" } } };
+  // Also as new events in a place it works on (a steer), which go into the run as they are.
+  if (last?.role === "user" && last.content.includes("stay quiet")) return { text: "nothing to say" };
   if (wake.includes("wait for go")) {
     if (!went) return last?.role === "tool" && !last.content.includes("went") ? { text: "waiting" } : waitForGo;
     return sent === 0 ? { call: { name: "send", arguments: { to: place, text: "done" } } } : { text: "done" };
+  }
+  if (wake.includes("answer natively")) {
+    const posted = request.messages.some((message) => message.toolCalls?.includes("call"));
+    if (!posted) return { call: { name: "call", arguments: { channel: "test", method: "post", params: { to: place, text: "a photo" } } } };
+    return went ? { text: "done" } : waitForGo;
   }
   if (wake.includes("send first")) {
     if (sent === 0) return { call: { name: "send", arguments: { to: place, text: "on it" } } };
@@ -47,8 +57,9 @@ function script(request: FakeRequest): FakeReply {
   if (wake.startsWith("[wake] wake from your child")) {
     return { call: { name: "send", arguments: { to: "test:#general", text: `report: ${/^Note: (.*)/m.exec(wake)?.[1] ?? "?"}` } } };
   }
-  if (wake.includes("research and tell")) return { call: { name: "task", arguments: { action: "start", title: "research", brief: "find it and tell" } } };
   if (wake.includes("stay quiet")) return { text: "nothing to say" };
+  if (wake.includes("research slowly")) return { call: { name: "task", arguments: { action: "start", title: "research", brief: "wait for go first, then find it and tell" } } };
+  if (wake.includes("research and tell")) return { call: { name: "task", arguments: { action: "start", title: "research", brief: "find it and tell" } } };
   return { call: { name: "send", arguments: { to: place, text: `ack: ${wakeLine(wake)}` } } };
 }
 
@@ -107,8 +118,9 @@ describe("typing while the bot works", { timeout: 60_000 }, () => {
     go();
     await waitFor(() => gateway.sent().length === 1 && stopped(), { what: "the reply and the stop" });
     expect(steps()).toEqual([`show test:#general/${id}`, `stop test:#general/${id}`]);
+    // The typing stops before the message goes out: no show reaches the platform after it.
     const reply = gateway.sent()[0]!;
-    expect(signs().at(-1)!.at).toBeGreaterThanOrEqual(reply.at);
+    expect(signs().filter((sign) => sign.type === "show").at(-1)!.at).toBeLessThanOrEqual(reply.at);
     await pause(1_500);
     expect(steps()).toHaveLength(2);
   });
@@ -186,6 +198,53 @@ describe("typing while the bot works", { timeout: 60_000 }, () => {
     expect(steps().at(-1)).toBe(`stop test:#general/${second}`);
   });
 
+  it("stops when the bot answers with a platform call instead of send, while its run goes on", async () => {
+    await setUp();
+    const id = gateway.say("general", "alice", `@${ME} please answer natively`);
+    await waitFor(() => gateway.sent().length === 1 && stopped(), { what: "the post and the stop" });
+    expect(steps()).toEqual([`show test:#general/${id}`, `stop test:#general/${id}`]);
+    await pause(2_000);
+    expect(steps()).toHaveLength(2);
+    expect(gateway.output.some((line) => line.message === "agent idle")).toBe(false);
+    go();
+  });
+
+  it("goes on when an old message of the bot's comes into the log late, as a replay does", async () => {
+    await setUp();
+    const id = gateway.say("general", "alice", `@${ME} please wait for go`);
+    await waitFor(() => signs().length >= 1, { what: "the sign" });
+    // A message of the bot's from before the mention, which the platform gives only now.
+    appendFileSync(
+      platformFile(gateway.platformDir),
+      `${JSON.stringify({ id: `m-${randomUUID()}`, at: Date.now() - 60_000, type: "message", place: "general", person: ME, text: "an old answer" })}\n`,
+    );
+    await waitFor(() => gateway.query("SELECT 1 FROM gw_messages WHERE text = 'an old answer'").length === 1, { what: "the old message in the log" });
+    const before = signs().length;
+    await pause(2_500);
+    expect(steps()).toEqual([`show test:#general/${id}`]);
+    expect(signs().length).toBeGreaterThan(before);
+    go();
+    await waitFor(() => gateway.sent().length === 2 && stopped(), { what: "the reply" });
+  });
+
+  it("shows a child's wake on the message the child was started for, not on a newer one in the place", async () => {
+    await setUp();
+    const first = gateway.say("general", "alice", `@${ME} please research slowly`);
+    await waitFor(() => stopped() && steps().length === 2, { what: "the first run's end" });
+    const second = gateway.say("general", "bob", `@${ME} please stay quiet`);
+    await waitFor(() => stopped() && steps().length === 4, { what: "the second run's end" });
+    go();
+    await waitFor(() => gateway.sent().some((record) => record.text === "report: the answer is 42") && stopped() && steps().length === 6, { what: "the report" });
+    expect(steps()).toEqual([
+      `show test:#general/${first}`,
+      `stop test:#general/${first}`,
+      `show test:#general/${second}`,
+      `stop test:#general/${second}`,
+      `show test:#general/${first}`,
+      `stop test:#general/${first}`,
+    ]);
+  });
+
   it("does not hold up the reply when the platform refuses, and says so once", async () => {
     await setUp({ modelDelayMs: 1_500 });
     writeFileSync(join(gateway.platformDir, "refuse-working"), "");
@@ -206,6 +265,24 @@ describe("typing after a restart", { timeout: 90_000 }, () => {
     await gateway.start();
     await waitFor(() => gateway.sent().length === 1 && stopped(), { what: "the reply after the restart" });
     expect(steps()).toEqual([`show test:#general/${id}`, `stop test:#general/${id}`]);
+  });
+
+  it("shows again on the newest mention, also one the run had not taken in yet, and keeps no row of what is over", async () => {
+    await setUp();
+    const first = gateway.say("general", "alice", `@${ME} please wait for go`);
+    await waitFor(() => signs().length >= 1, { what: "the sign" });
+    const second = gateway.say("general", "bob", `@${ME} one more thing`);
+    await waitFor(() => steps().length === 3, { what: "the sign on the new mention" });
+    await gateway.kill();
+    rmSync(join(gateway.platformDir, "working.jsonl"));
+    await gateway.start();
+    await waitFor(() => signs().length >= 1, { what: "the sign after the restart" });
+    expect(steps()[0]).toBe(`show test:#general/${second}`);
+    go();
+    await waitFor(() => gateway.sent().length >= 1 && stopped() && gateway.output.some((line) => line.message === "agent idle"), { what: "the reply" });
+    expect(steps().every((step) => step.endsWith(`/${second}`))).toBe(true);
+    expect(first).toBeDefined();
+    expect(gateway.query("SELECT submission FROM bot_working")).toEqual([]);
   });
 
   it("does not show again where the bot sent before the restart", async () => {

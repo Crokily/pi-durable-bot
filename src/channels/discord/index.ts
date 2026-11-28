@@ -19,6 +19,7 @@ import type {
   PersonInfo,
   PlaceInfo,
   SentMessage,
+  WorkingSign,
 } from "../../core/channel.ts";
 import { expandHome, readSecrets } from "../../core/env-file.ts";
 import { noForm, parseFormId } from "../../core/forms.ts";
@@ -1017,6 +1018,26 @@ export class DiscordChannel implements ChannelAdapter {
     })) as ApiMessage;
     const raw: Raw = { source: "sent", sendId, message, ...(target.thread ? { parent: target.place } : {}) };
     return { message: this.#messageAt(target, message.id), place: this.place(target.place), raw };
+  }
+
+  /**
+   * Discord's "<bot> is typing…" line, in the channel or thread of `at`. It lasts 10 seconds; Discord has no call to
+   * stop it, so it fades.
+   */
+  readonly working: WorkingSign = { every: 8_000, show: (at) => explained(this.#typing(at)) };
+
+  /** Where typing shows for an address, found once: finding a message's thread is a request. */
+  readonly #typingIn = new Map<Address, string>();
+
+  async #typing(at: Address): Promise<void> {
+    let channel = this.#typingIn.get(at);
+    if (!channel) {
+      const target = await this.#target(at);
+      channel = target.thread ?? target.place;
+      if (this.#typingIn.size >= 100) this.#typingIn.delete(this.#typingIn.keys().next().value!);
+      this.#typingIn.set(at, channel);
+    }
+    await this.#rest.post(`/channels/${channel}/typing`);
   }
 
   /** Discord's API does not give nonces back when it lists messages, so a sent message cannot be found by its send ID. */

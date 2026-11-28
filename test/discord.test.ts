@@ -817,3 +817,28 @@ describe("Discord channel", () => {
     expect(start).toBeLessThanOrEqual(after - 60_000);
   });
 });
+
+describe("Discord typing", () => {
+  it("shows typing in the channel or thread of the message that woke the bot, finds it once, and has no stop", async () => {
+    const { fake, channel, gateway } = await connect();
+    await gateway([["THREAD_CREATE", thread("600", "20", "Release plan")]], 1);
+    fake.route("POST", "/channels/\\d+/typing", () => undefined);
+    expect(channel.working.every).toBe(8_000);
+    expect(channel.working.stop).toBeUndefined();
+    // A message with no thread: its channel, looked up once.
+    await channel.working.show("discord:#20/501");
+    await channel.working.show("discord:#20/501");
+    // A message in a thread, and the thread itself: the thread.
+    await channel.working.show("discord:#20/600/601");
+    await channel.working.show("discord:#20/600");
+    expect(fake.requested("POST", "/channels/\\d+/typing").map((request) => request.path)).toEqual([
+      "/channels/20/typing",
+      "/channels/20/typing",
+      "/channels/600/typing",
+      "/channels/600/typing",
+    ]);
+    expect(fake.requested("GET", "/channels/501")).toHaveLength(1);
+    fake.route("POST", "/channels/\\d+/typing", () => new Reply(403, { message: "Missing Permissions", code: 50013 }));
+    await expect(channel.working.show("discord:#20/501")).rejects.toThrow("Missing Permissions");
+  });
+});

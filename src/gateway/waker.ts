@@ -31,7 +31,7 @@ const JUDGE_RETRY_MS = [2_000, 8_000] as const;
  * for this bot, and there is nothing for the judge to decide. The adapters leave out what comes at every keystroke
  * (Discord's autocomplete, Slack's block_suggestion): those are not events.
  */
-const ANSWER_KINDS = new Set(["interaction", "command", "form"]);
+export const ANSWER_KINDS: ReadonlySet<string> = new Set(["interaction", "command", "form"]);
 
 /** Someone used a button, a menu, a command or a form of the bot's. */
 function answersMe(event: UndecidedEvent): boolean {

@@ -13,6 +13,7 @@ import type {
   PersonInfo,
   PlaceInfo,
   SentMessage,
+  WorkingSign,
 } from "../../core/channel.ts";
 import { expandHome } from "../../core/env-file.ts";
 
@@ -27,10 +28,13 @@ import { expandHome } from "../../core/env-file.ts";
  * Places are plain names. A name starting with "dm-" is a one-to-one DM, "group-" a group chat, others are channels.
  * Addresses: <id>:#<place>, <id>:#<place>/<message id>, <id>:@<person>.
  * files: [{ name, type, url }], where url is a file path, relative to the directory; fetchFile reads it.
+ * The bot's typing goes to `working.jsonl` in the same directory, { type: "show" | "stop", to, at }, shown again every
+ * `workingEvery` ms (by default 1000). While a file `refuse-working` is there, the platform refuses to show it.
  */
 export function createChannel(config: ChannelConfig, env: ChannelEnv): ChannelAdapter {
   if (typeof config.dir !== "string") throw new Error(`channel ${config.id}: "dir" must name the test platform directory`);
-  return new TestChannel(config.id, expandHome(config.dir), typeof config.me === "string" ? config.me : "bot", env);
+  const every = typeof config.workingEvery === "number" ? config.workingEvery : 1_000;
+  return new TestChannel(config.id, expandHome(config.dir), typeof config.me === "string" ? config.me : "bot", env, every);
 }
 
 interface PlatformRecord {
@@ -58,9 +62,15 @@ class TestChannel implements ChannelAdapter {
   #offset = 0;
   #timer?: NodeJS.Timeout;
   #reading: Promise<void> = Promise.resolve();
+  readonly working: WorkingSign;
 
-  constructor(id: string, dir: string, me: string, env: ChannelEnv) {
+  constructor(id: string, dir: string, me: string, env: ChannelEnv, every: number) {
     this.id = id;
+    const record = async (type: string, to: Address) => {
+      if (existsSync(join(dir, "refuse-working"))) throw new Error("the test platform refuses typing");
+      await appendFile(join(dir, "working.jsonl"), `${JSON.stringify({ type, to, at: Date.now() })}\n`);
+    };
+    this.working = { every, show: (at) => record("show", at), stop: (at) => record("stop", at) };
     this.#dir = dir;
     this.#file = join(dir, "platform.jsonl");
     this.#me = me;

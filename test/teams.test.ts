@@ -911,3 +911,25 @@ describe("Teams: backfill", () => {
     }
   });
 });
+
+describe("Teams typing", () => {
+  it("posts a typing activity in the thread or chat of the message, every 3 seconds, and only once when Teams refuses", async () => {
+    const { sockets, channel, fake } = await connect();
+    await sockets.send(inChannel({}));
+    await sockets.send(activity({ id: "1731800000003", from: BOB }));
+    fake.route("POST", "/teams/v3/conversations/([^/]+)/activities", () => ({ id: "1" }));
+    const working = channel.working!;
+    expect(working.every).toBe(3_000);
+    expect(working.stop).toBeUndefined();
+    await working.show(`teams:#${CHANNEL}/1731800000001`);
+    await working.show(`teams:#${CHAT}/1731800000003`);
+    const posted = () => fake.requested("POST", "/teams/v3/conversations/.*/activities");
+    expect(posted().map((request) => [request.path, request.body])).toEqual([
+      [`/teams/v3/conversations/${CHANNEL};messageid=1731800000001/activities`, { type: "typing" }],
+      [`/teams/v3/conversations/${CHAT}/activities`, { type: "typing" }],
+    ]);
+    fake.route("POST", "/teams/v3/conversations/([^/]+)/activities", () => new Reply(429, { error: { code: "TooManyRequests", message: "slow down" } }));
+    await expect(working.show(`teams:#${CHAT}/1731800000003`)).rejects.toThrow("429");
+    expect(posted()).toHaveLength(3);
+  });
+});

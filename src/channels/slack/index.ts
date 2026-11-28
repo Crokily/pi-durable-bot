@@ -18,6 +18,7 @@ import type {
   PersonInfo,
   PlaceInfo,
   SentMessage,
+  WorkingSign,
 } from "../../core/channel.ts";
 import { expandHome, readSecrets } from "../../core/env-file.ts";
 import { noForm, parseFormId } from "../../core/forms.ts";
@@ -781,6 +782,34 @@ class SlackChannel implements ChannelAdapter {
       }
     }
     return undefined;
+  }
+
+  /**
+   * Slack's status line under a thread, "<app> is working…" (assistant.threads.setStatus, which chat:write allows): on
+   * the thread of `at`, or on `at` itself when it starts none yet. It lasts 2 minutes, and Slack clears it when the bot
+   * replies in that thread; an empty status clears it at once. Slack shows its own words, whatever the status says. A
+   * place alone has no thread, so nothing shows there.
+   */
+  readonly working: WorkingSign = {
+    every: 90_000,
+    show: (at) => explained(this.#status(at, "is working…")),
+    stop: (at) => explained(this.#status(at, "")),
+  };
+
+  /** The thread of an address, found once: finding it is a request. */
+  readonly #statusIn = new Map<Address, { channel: string; threadTs?: string }>();
+
+  async #status(at: Address, status: string): Promise<void> {
+    const parsed = this.#parse(at);
+    if (!("channel" in parsed) || !parsed.ts) return;
+    let thread = this.#statusIn.get(at);
+    if (!thread) {
+      thread = await this.#target(at);
+      if (this.#statusIn.size >= 100) this.#statusIn.delete(this.#statusIn.keys().next().value!);
+      this.#statusIn.set(at, thread);
+    }
+    if (!thread.threadTs) return;
+    await this.#client.apiCall("assistant.threads.setStatus", { channel_id: thread.channel, thread_ts: thread.threadTs, status });
   }
 
   /** Where a send goes: a place, a thread (any message in it; replies go to its first message), or a person (DM). */

@@ -923,3 +923,33 @@ describe("sending", () => {
     expect(fake.called("chat.postMessage")[0]!.params.markdown_text).toBe("ask @alice or @Alice, or <@U0ALICE>");
   });
 });
+
+describe("Slack typing", () => {
+  it("sets the status of the thread of the message that woke the bot, every 90 seconds, and clears it with an empty one", async () => {
+    const { fake, channel } = await connect();
+    fake.post(GENERAL.id, { user: ALICE.id, text: "release plan?", ts: TS });
+    fake.post(GENERAL.id, { user: BOB.id, text: "in the thread", ts: "1793080261.000100", thread_ts: TS });
+    fake.post(GENERAL.id, { user: BOB.id, text: "no thread", ts: "1793080262.000100" });
+    fake.route("assistant.threads.setStatus", () => ({}));
+    const working = channel.working!;
+    expect(working.every).toBe(90_000);
+    // A reply in a thread: the thread's first message, looked up once.
+    await working.show("slack:#C0GENERAL/1793080261.000100");
+    await working.show("slack:#C0GENERAL/1793080261.000100");
+    await working.stop!("slack:#C0GENERAL/1793080261.000100");
+    // A message with no thread yet: under it.
+    await working.show("slack:#C0GENERAL/1793080262.000100");
+    // A place alone: nothing.
+    await working.show("slack:#C0GENERAL");
+    const status = (thread_ts: string, status: string) => ({ channel_id: GENERAL.id, thread_ts, status });
+    expect(fake.called("assistant.threads.setStatus").map((call) => call.params)).toEqual([
+      status(TS, "is working…"),
+      status(TS, "is working…"),
+      status(TS, ""),
+      status("1793080262.000100", "is working…"),
+    ]);
+    expect(fake.called("conversations.replies")).toHaveLength(2);
+    fake.route("assistant.threads.setStatus", () => ({ ok: false, error: "missing_scope" }));
+    await expect(working.show("slack:#C0GENERAL/1793080262.000100")).rejects.toThrow("missing_scope");
+  });
+});

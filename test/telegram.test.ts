@@ -423,3 +423,22 @@ describe("sending", () => {
     expect(methods("pinChatMessage")[0]!.params).toEqual({ chat_id: -100200, message_id: 20 });
   });
 });
+
+describe("typing", () => {
+  it("sends typing to the chat, in the topic of the message, every 4 seconds, and does not wait when Telegram says to", async () => {
+    await channel.start(sink());
+    for (const update of [updates.dm, updates.topicMessage]) await channel.translate(JSON.parse(JSON.stringify(update)));
+    const working = channel.working!;
+    expect(working.every).toBe(4_000);
+    expect(working.stop).toBeUndefined();
+    await working.show("telegram:#111/10");
+    await working.show("telegram:#-100300/8");
+    expect(methods("sendChatAction").map((call) => call.params)).toEqual([
+      { chat_id: "111", action: "typing" },
+      { chat_id: "-100300", action: "typing", message_thread_id: 7 },
+    ]);
+    telegram.script("sendChatAction", { ok: false, error_code: 429, description: "Too Many Requests: retry after 5", parameters: { retry_after: 5 } });
+    await expect(working.show("telegram:#111/10")).rejects.toThrow("Too Many Requests");
+    expect(methods("sendChatAction")).toHaveLength(3);
+  });
+});

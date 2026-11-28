@@ -157,6 +157,24 @@ export interface ChannelAdapter {
    * gateway saves it. Without this method the gateway does not download files, and the wake gives their URL.
    */
   fetchFile?(file: FileInfo, signal: AbortSignal): Promise<Uint8Array | AsyncIterable<Uint8Array>>;
+  /** How people on this platform see that the bot works, as a chat app shows a person typing. Without it, they see nothing. */
+  readonly working?: WorkingSign;
+}
+
+/**
+ * The platform's sign that the bot works. The gateway shows it again every `every` ms while the bot works, and stops it
+ * when the bot sends there, its run ends or 10 minutes pass.
+ */
+export interface WorkingSign {
+  /** How often to show it again, in ms, so it does not fade while the bot works. */
+  readonly every: number;
+  /**
+   * Show the sign where `at` is: the message that woke the bot, the thread it is in, or the place. A failure (no
+   * permission, a rate limit) stops the sign there until the next message that wakes the bot.
+   */
+  show(at: Address): Promise<void>;
+  /** Take the sign away at once. Without it, the sign fades by itself. */
+  stop?(at: Address): Promise<void>;
 }
 
 /** What a channel module exports: a factory from the channel's entry in bot.json. */

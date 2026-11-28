@@ -23,6 +23,7 @@ import type {
   PlaceInfo,
   PlaceKind,
   SentMessage,
+  WorkingSign,
 } from "../../core/channel.ts";
 import { expandHome, readSecrets } from "../../core/env-file.ts";
 import { quietLogger, RouteAdapter, type SocketConnection, type SocketHandlers, TeamsApp, useSocketConnections } from "./sdk.ts";
@@ -987,6 +988,19 @@ export class TeamsChannel implements ChannelAdapter {
     return { message: this.#messageAt(where, answer.id), place: this.place(target.conversation), raw: { source: "sent", sendId, markdown: text, activity: sent } satisfies Raw };
   }
 
+  /**
+   * A "typing" activity in the conversation of `at`, in its thread in a channel. Teams shows it about 3 seconds. It
+   * counts toward the conversation's rate limits as a message does, so it is not tried again.
+   */
+  readonly working: WorkingSign = {
+    every: 3_000,
+    show: async (at) => {
+      const target = await this.#target(at);
+      const conversationId = target.root ? `${target.conversation};messageid=${target.root}` : target.conversation;
+      await this.#fetch("bot", "POST", `${this.#serviceUrl(target.conversation)}/v3/conversations/${conversationId}/activities`, { type: "typing" }, true);
+    },
+  };
+
   /** Teams keeps no send ID on a message. */
   async findSent(_to: Address, _sendId: string, _since: number): Promise<SentMessage | undefined> {
     return undefined;
@@ -1157,9 +1171,9 @@ export class TeamsChannel implements ChannelAdapter {
    * One request to Teams or Graph. One that fails before Teams answers, or that Teams answers with "too many requests"
    * or "busy", is tried again after the wait Teams asks for or a growing one, until a try fails a minute or more after
    * the first began. Each try, its token included, has REQUEST_TIMEOUT_MS. stop ends the request and its waits. The
-   * error says what Teams answered, never the token.
+   * error says what Teams answered, never the token. once: no second try.
    */
-  async #fetch(kind: "bot" | "graph", method: string, url: string, body?: unknown): Promise<unknown> {
+  async #fetch(kind: "bot" | "graph", method: string, url: string, body?: unknown, once = false): Promise<unknown> {
     const stopping = this.#stopping.signal;
     const retryMs = this.#endpoints.timeouts?.retry ?? RETRY_MS;
     const started = Date.now();
@@ -1189,7 +1203,7 @@ export class TeamsChannel implements ChannelAdapter {
         failure = `${kind === "graph" ? "Microsoft Graph" : "Teams"} did not answer: ${errorText(error)}`;
         wait = backoff(attempt);
       }
-      if (Date.now() - started >= retryMs) throw new TeamsError(`${failure}; tried for ${Math.round((Date.now() - started) / 1000)} s, then gave up`);
+      if (once || Date.now() - started >= retryMs) throw new TeamsError(`${failure}; tried for ${Math.round((Date.now() - started) / 1000)} s, then gave up`);
       await sleep(Math.min(wait, Math.max(retryMs - (Date.now() - started), 0)), undefined, { signal: stopping }).catch(() => {});
     }
   }

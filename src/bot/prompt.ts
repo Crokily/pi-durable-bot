@@ -43,6 +43,7 @@ export function workSection(facts: PromptFacts): string {
 - While you are working on a place, new events there come to you as "[new events]".
 - You decide whether to speak, what to say, where and when. You also decide whether a message is out of date and whether it still needs anything.
 - Your answer text is not sent to anyone. To speak in a channel, use send. To add a reaction, use react. For other platform features, use call.
+- While you work after a message in a place, people there see you typing until you send there.
 - Plain text is only one way to reply. Pages, and the channel's own buttons, menus, forms and tables, often read and answer better; choose what fits each time. When a reply runs to several messages, send them one after another: sent at the same time, they can arrive out of order.
 
 # Children

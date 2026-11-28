@@ -23,6 +23,7 @@ import type {
   PlaceInfo,
   PlaceKind,
   SentMessage,
+  WorkingSign,
 } from "../../core/channel.ts";
 import { expandHome, readSecrets } from "../../core/env-file.ts";
 import { quietLogger, RouteAdapter, type SocketConnection, type SocketHandlers, TeamsApp, useSocketConnections } from "./sdk.ts";
@@ -980,12 +981,26 @@ export class TeamsChannel implements ChannelAdapter {
     const target = await this.#target(to);
     const activity: Activity = { type: "message", text: content, textFormat: "markdown", ...(entities.length ? { entities } : {}) };
     const conversationId = target.root ? `${target.conversation};messageid=${target.root}` : target.conversation;
+    await this.#sink?.sending(this.place(target.conversation));
     const answer = (await this.#fetch("bot", "POST", `${this.#serviceUrl(target.conversation)}/v3/conversations/${conversationId}/activities`, activity)) as { id?: string };
     if (!answer?.id) throw new Error("Teams took the message but gave no ID");
     const sent: Activity = { ...activity, id: answer.id, conversation: { id: conversationId }, ...(this.#botId ? { from: { id: this.#botId, name: this.#env.botName } } : {}), timestamp: new Date().toISOString() };
     const where: Where = { conversation: target.conversation, ...(target.root ? { root: target.root } : {}) };
     return { message: this.#messageAt(where, answer.id), place: this.place(target.conversation), raw: { source: "sent", sendId, markdown: text, activity: sent } satisfies Raw };
   }
+
+  /**
+   * A "typing" activity in the conversation of `at`, in its thread in a channel. Teams shows it about 3 seconds. It
+   * counts toward the conversation's rate limits as a message does, so it is not tried again.
+   */
+  readonly working: WorkingSign = {
+    every: 3_000,
+    show: async (at) => {
+      const target = await this.#target(at);
+      const conversationId = target.root ? `${target.conversation};messageid=${target.root}` : target.conversation;
+      await this.#fetch("bot", "POST", `${this.#serviceUrl(target.conversation)}/v3/conversations/${conversationId}/activities`, { type: "typing" }, true);
+    },
+  };
 
   /** Teams keeps no send ID on a message. */
   async findSent(_to: Address, _sendId: string, _since: number): Promise<SentMessage | undefined> {
@@ -1096,7 +1111,8 @@ export class TeamsChannel implements ChannelAdapter {
    * A request with the bot's token. method is "<HTTP method> <path>": a path of Teams' Bot Connector API (/v3/…), at
    * the service URL of the conversation in it; or "graph:<HTTP method> <path>" for Microsoft Graph, with the app's own
    * token (what the app's resource-specific permissions allow). params are the query for GET and DELETE, and the JSON
-   * body for the others. A message posted with POST /v3/conversations/<ID>/activities is stored as the bot's own.
+   * body for the others. A message posted with POST /v3/conversations/<ID>/activities, or as a reply with POST
+   * /v3/conversations/<ID>/activities/<activity ID>, is stored as the bot's own.
    */
   async call(method: string, params: Record<string, unknown>): Promise<unknown> {
     const match = /^(graph:)?(GET|POST|PUT|PATCH|DELETE) (\/\S+)$/.exec(method.trim());
@@ -1110,11 +1126,20 @@ export class TeamsChannel implements ChannelAdapter {
     }
     if (!path.startsWith("/v3/")) throw new Error(`a Teams path starts with /v3/, for example /v3/conversations/<ID>/activities; for Microsoft Graph, use "graph:${verb} ${path}"`);
     const conversation = /^\/v3\/conversations\/([^/;]+)/.exec(path)?.[1];
+    const [, posted, replied] = (verb === "POST" && (body?.type === undefined || body.type === "message") && /^\/v3\/conversations\/([^/]+)\/activities(?:\/([^/]+))?$/.exec(path)) || [];
+    // A message the bot posts: the typing there stops first.
+    if (posted && conversation) await this.#sink?.sending(this.place(conversation));
     const result = await this.#fetch("bot", verb, `${this.#serviceUrl(conversation)}${path}${query?.size ? `?${query}` : ""}`, body);
-    const posted = /^\/v3\/conversations\/([^/]+)\/activities$/.exec(path)?.[1];
     const id = (result as { id?: unknown } | null)?.id;
-    if (verb === "POST" && posted && typeof id === "string" && (body?.type === undefined || body.type === "message")) {
-      const activity = { ...body, id, conversation: { id: posted }, ...(this.#botId ? { from: { id: this.#botId, name: this.#env.botName } } : {}), timestamp: new Date().toISOString() };
+    if (posted && typeof id === "string") {
+      const activity = {
+        ...body,
+        id,
+        conversation: { id: posted },
+        ...(replied ? { replyToId: replied } : {}),
+        ...(this.#botId ? { from: { id: this.#botId, name: this.#env.botName } } : {}),
+        timestamp: new Date().toISOString(),
+      };
       await this.#sink?.receive(`sent:${messageKey(whereOf(activity)!, id)}`, { source: "sent", activity } satisfies Raw).catch((error: unknown) => this.#sink?.log("sent message not stored", { error: String(error) }));
     }
     return result;
@@ -1157,9 +1182,9 @@ export class TeamsChannel implements ChannelAdapter {
    * One request to Teams or Graph. One that fails before Teams answers, or that Teams answers with "too many requests"
    * or "busy", is tried again after the wait Teams asks for or a growing one, until a try fails a minute or more after
    * the first began. Each try, its token included, has REQUEST_TIMEOUT_MS. stop ends the request and its waits. The
-   * error says what Teams answered, never the token.
+   * error says what Teams answered, never the token. once: no second try.
    */
-  async #fetch(kind: "bot" | "graph", method: string, url: string, body?: unknown): Promise<unknown> {
+  async #fetch(kind: "bot" | "graph", method: string, url: string, body?: unknown, once = false): Promise<unknown> {
     const stopping = this.#stopping.signal;
     const retryMs = this.#endpoints.timeouts?.retry ?? RETRY_MS;
     const started = Date.now();
@@ -1189,7 +1214,7 @@ export class TeamsChannel implements ChannelAdapter {
         failure = `${kind === "graph" ? "Microsoft Graph" : "Teams"} did not answer: ${errorText(error)}`;
         wait = backoff(attempt);
       }
-      if (Date.now() - started >= retryMs) throw new TeamsError(`${failure}; tried for ${Math.round((Date.now() - started) / 1000)} s, then gave up`);
+      if (once || Date.now() - started >= retryMs) throw new TeamsError(`${failure}; tried for ${Math.round((Date.now() - started) / 1000)} s, then gave up`);
       await sleep(Math.min(wait, Math.max(retryMs - (Date.now() - started), 0)), undefined, { signal: stopping }).catch(() => {});
     }
   }

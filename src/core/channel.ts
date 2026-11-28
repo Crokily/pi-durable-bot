@@ -100,6 +100,11 @@ export interface ChannelSink {
   receive(eventId: string, raw: unknown): Promise<void>;
   /** The newest logged message in a place, for backfill. */
   newestMessage(place: Address): Promise<Address | undefined>;
+  /**
+   * The platform's data that the log keeps of a message and of the messages in the thread it starts, newest first, at
+   * most 10: for what an adapter knew of them before a restart.
+   */
+  logged(message: Address): Promise<unknown[]>;
   /** Threads the log knows in a place. */
   threads(place: Address): Promise<Address[]>;
   /** The places of this channel account that the log knows, for backfill on platforms that cannot list them all (DMs). */
@@ -112,6 +117,11 @@ export interface ChannelSink {
   formOpened(id: string, opening: FormOpening): Promise<void>;
   /** What a form opened for, by the adapter's ID, also after a restart; undefined when unknown. */
   formOpening(id: string): Promise<FormOpening | undefined>;
+  /**
+   * The bot is about to post a message in this place, by a send or a platform call: called once the destination is
+   * known, right before the post. It resolves when the post may go (at most a few seconds); it never fails.
+   */
+  sending(place: Address): Promise<void>;
   log(message: string, data?: Record<string, unknown>): void;
 }
 
@@ -157,6 +167,25 @@ export interface ChannelAdapter {
    * gateway saves it. Without this method the gateway does not download files, and the wake gives their URL.
    */
   fetchFile?(file: FileInfo, signal: AbortSignal): Promise<Uint8Array | AsyncIterable<Uint8Array>>;
+  /** How people on this platform see that the bot works, as a chat app shows a person typing. Without it, they see nothing. */
+  readonly working?: WorkingSign;
+}
+
+/**
+ * The platform's sign that the bot works. The gateway shows it again every `every` ms while the bot works, and stops it
+ * when the bot sends there, its run ends or 10 minutes pass.
+ */
+export interface WorkingSign {
+  /** How often to show it again, in ms, so it does not fade while the bot works. */
+  readonly every: number;
+  /**
+   * Show the sign where `at` is: the message that woke the bot, the thread it is in, or the place. A failure (no
+   * permission, a rate limit) stops the sign there until the next message that wakes the bot. `signal` aborts once
+   * the sign stops there: a show that first had to look something up then shows nothing.
+   */
+  show(at: Address, signal?: AbortSignal): Promise<void>;
+  /** Take the sign away at once. Without it, the sign fades by itself. */
+  stop?(at: Address): Promise<void>;
 }
 
 /** What a channel module exports: a factory from the channel's entry in bot.json. */

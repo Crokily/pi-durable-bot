@@ -1,5 +1,5 @@
 import { Cause, Clock, Context, Effect, Fiber, FiberMap, FiberSet, Layer, Option, Result, type Tracer } from "effect";
-import type { PlaceInfo } from "../core/channel.ts";
+import type { Address, PlaceInfo } from "../core/channel.ts";
 import type { Judge, JudgeItem } from "../core/judge.ts";
 import type { PlaceWake, PlaceWakeReason, ThreadStart, WakeEvent, WakeFile, WakeTarget } from "../core/wake.ts";
 import { Channels } from "./channels.ts";
@@ -31,7 +31,7 @@ const JUDGE_RETRY_MS = [2_000, 8_000] as const;
  * for this bot, and there is nothing for the judge to decide. The adapters leave out what comes at every keystroke
  * (Discord's autocomplete, Slack's block_suggestion): those are not events.
  */
-const ANSWER_KINDS = new Set(["interaction", "command", "form"]);
+export const ANSWER_KINDS: ReadonlySet<string> = new Set(["interaction", "command", "form"]);
 
 /** Someone used a button, a menu, a command or a form of the bot's. */
 function answersMe(event: UndecidedEvent): boolean {
@@ -78,6 +78,8 @@ export class Waker extends Context.Service<
   {
     setTarget(target: WakeTarget): void;
     add(event: UndecidedEvent): Effect.Effect<void>;
+    /** A message of the bot's own reached the log: tell the bot. */
+    ownMessage(place: Address, at: number): Effect.Effect<void>;
     /** Deliver again, with the same IDs, the wakes a crash left undelivered: debounceMs after the start. */
     readonly redeliver: Effect.Effect<void, LogError>;
     readonly hooks: WakerHooks;
@@ -296,6 +298,14 @@ export class Waker extends Context.Service<
           target = next;
           stopped = false;
         },
+        ownMessage: (place, at) =>
+          Effect.sync(() => {
+            try {
+              target?.ownMessage?.(place, at);
+            } catch (error) {
+              config.print("the bot could not take its own message", { place, error: message(error) });
+            }
+          }),
         add: (event) =>
           Effect.gen(function* () {
             if (stopped) return;

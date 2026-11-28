@@ -17,6 +17,7 @@ import type {
   PersonInfo,
   PlaceInfo,
   SentMessage,
+  WorkingSign,
 } from "../../core/channel.ts";
 import { expandHome, readSecrets } from "../../core/env-file.ts";
 import { GatewayTelegramAdapter, markdownV2 } from "./sdk.ts";
@@ -517,6 +518,7 @@ class TelegramChannel implements ChannelAdapter {
       ...(target.topic ? { message_thread_id: target.topic } : {}),
       ...(target.reply ? { reply_parameters: { message_id: target.reply, ...(target.anyway ? { allow_sending_without_reply: true } : {}) } } : {}),
     };
+    await this.#sink?.sending(this.place(target.chat));
     let sent: TgMessage;
     try {
       try {
@@ -562,6 +564,20 @@ class TelegramChannel implements ChannelAdapter {
   }
 
   /**
+   * Telegram's "typing…" in the chat of `at`, in its forum topic when it has one. It lasts at most 5 seconds, and
+   * Telegram clears it when the bot sends there. A channel (one that only posts) shows none. Not tried again when
+   * Telegram says to wait.
+   */
+  readonly working: WorkingSign = {
+    every: 4_000,
+    show: async (at) => {
+      const target = await this.#target(at);
+      if (this.#chats.get(target.chat)?.type === "channel") return;
+      await this.#api("sendChatAction", { chat_id: target.chat, action: "typing", ...(target.topic ? { message_thread_id: target.topic } : {}) }, undefined, false);
+    },
+  };
+
+  /**
    * Always undefined: the Bot API cannot read messages, so a sent message cannot be found again. When a crash comes
    * between Telegram taking a message and the outbox recording it, the message is sent again.
    */
@@ -581,10 +597,24 @@ class TelegramChannel implements ChannelAdapter {
     const parsed = this.#parse(to);
     if ("user" in parsed) return { chat: parsed.user };
     if (parsed.message === undefined) return { chat: parsed.chat };
-    const topic = this.#topics.get(`${parsed.chat}/${parsed.message}`);
+    const topic = this.#topics.get(`${parsed.chat}/${parsed.message}`) ?? (await this.#topicFromLog(to, parsed.chat, parsed.message));
     if (topic === parsed.message) return { chat: parsed.chat, topic };
     if (topic) return { chat: parsed.chat, reply: parsed.message, topic, anyway: true };
     return { chat: parsed.chat, reply: parsed.message, anyway: (await this.#hasTopics(parsed.chat)) === false };
+  }
+
+  /**
+   * The forum topic of a message this adapter has not seen since the start, from what the log keeps of it and of its
+   * thread (a topic's thread is the topic). Only in a chat with topics; undefined when the log does not say.
+   */
+  async #topicFromLog(address: Address, chat: string, message: number): Promise<number | undefined> {
+    if (!this.#sink || (await this.#hasTopics(chat)) !== true) return undefined;
+    const raws = await this.#sink.logged(address).catch(() => []);
+    for (const raw of raws) {
+      const m = (raw && typeof raw === "object" && "sent" in raw ? (raw as { sent: unknown }).sent : raw) as TgMessage | undefined;
+      if (m && typeof m === "object" && "message_id" in m && "chat" in m) this.#learnTopics(m);
+    }
+    return this.#topics.get(`${chat}/${message}`);
   }
 
   /**
@@ -671,7 +701,11 @@ class TelegramChannel implements ChannelAdapter {
    * bot's own, as Discord and Slack send theirs back; a store that fails is logged, and the call still succeeds.
    */
   async call(method: string, params: Record<string, unknown>): Promise<unknown> {
-    const result = await this.#api(method, await withUploads(params));
+    const uploads = await withUploads(params);
+    // A message the bot posts: the typing there stops first.
+    const chat = /^send(?!ChatAction)/.test(method) ? String(params.chat_id ?? "") : "";
+    if (/^-?\d+$/.test(chat)) await this.#sink?.sending(this.place(chat));
+    const result = await this.#api(method, uploads);
     const isOwn = (value: unknown): value is TgMessage => {
       const m = value as TgMessage | undefined;
       return typeof m?.message_id === "number" && m.chat !== undefined && m.from?.id === this.#bot?.id;
@@ -700,7 +734,8 @@ class TelegramChannel implements ChannelAdapter {
   }
 
   /** Call a Bot API method. Too many requests (429): wait as long as Telegram says, up to a minute, and try twice more. */
-  async #api<T>(method: string, params: Record<string, unknown> | FormData = {}, signal?: AbortSignal): Promise<T> {
+  /** retry: wait and try again, at most 3 times, when Telegram says to wait a little. */
+  async #api<T>(method: string, params: Record<string, unknown> | FormData = {}, signal?: AbortSignal, retry = true): Promise<T> {
     if (!this.#token) throw new Error(`channel ${this.id} is not started`);
     for (let attempt = 1; ; attempt++) {
       const json = !(params instanceof FormData);
@@ -729,7 +764,7 @@ class TelegramChannel implements ChannelAdapter {
       const moved = data.parameters?.migrate_to_chat_id;
       const description = (data.description ?? `HTTP ${response.status}`) + (moved !== undefined ? `; its new address is ${this.place(String(moved))}` : "");
       const error = new TelegramError(method, data.error_code ?? response.status, description, data.parameters?.retry_after);
-      if (error.code !== 429 || error.retryAfter === undefined || error.retryAfter > 60 || attempt === 3) throw error;
+      if (!retry || error.code !== 429 || error.retryAfter === undefined || error.retryAfter > 60 || attempt === 3) throw error;
       await wait(error.retryAfter * 1000, undefined, signal ? { signal } : {});
     }
   }

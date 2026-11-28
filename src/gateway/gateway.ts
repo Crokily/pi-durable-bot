@@ -68,6 +68,7 @@ export class Gateway {
   readonly #print: GatewayOptions["print"];
   #lastAlive: number | undefined;
   #started = false;
+  #target: WakeTarget | undefined;
   #stopping: Promise<void> | undefined;
   readonly timers: TimersHandle;
   readonly forms: FormsHandle;
@@ -145,6 +146,7 @@ export class Gateway {
         const waker = yield* Waker;
         const inbox = yield* Inbox;
         waker.setTarget(target);
+        self.#target = target;
         const lastAlive = yield* log.getState("last_alive");
         self.#lastAlive = lastAlive ? Number(lastAlive) : undefined;
 
@@ -279,12 +281,20 @@ export class Gateway {
     return {
       receive: (eventId, raw) => this.#background.run(Inbox.use((inbox) => inbox.receive(adapter.id, eventId, raw))),
       newestMessage: (place) => this.#background.run(MessageLog.use((log) => log.newestMessage(place))),
+      logged: (message) => this.#background.run(MessageLog.use((log) => log.raws(message))),
       threads: (place) => this.#background.run(MessageLog.use((log) => log.threads(place))),
       places: () => this.#background.run(MessageLog.use((log) => log.places(adapter.id))),
       lastAlive: () => this.#lastAlive,
       form: (name) => this.#background.run(Forms.use((forms) => forms.get(name))),
       formOpened: (id, opening) => this.#background.run(Forms.use((forms) => forms.opened(adapter.id, id, opening))),
       formOpening: (id) => this.#background.run(Forms.use((forms) => forms.opening(id))),
+      sending: async (place) => {
+        try {
+          await this.#target?.beforeSend?.(place);
+        } catch (error) {
+          this.#print(`${adapter.id}: the bot could not prepare a post`, { place, error: String(error) });
+        }
+      },
       log: (message, data) => this.#print(`${adapter.id}: ${message}`, data),
     };
   }

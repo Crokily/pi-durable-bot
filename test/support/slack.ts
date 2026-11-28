@@ -65,7 +65,7 @@ export class FakeSlack {
   readonly #messages = new Map<string, SlackMessage[]>();
   readonly #routes: { method: string; answer: Answer }[] = [];
   /** Methods whose next calls fail before an answer: with an HTTP status, or with no answer at all ("silent"). */
-  readonly #failures = new Map<string, { status: number | "silent"; left: number }>();
+  readonly #failures = new Map<string, { status: number | "silent"; left: number; retryAfter?: number }>();
   readonly #server: Server;
   readonly #socketServer: WebSocketServer;
   #socket?: WebSocket;
@@ -106,8 +106,8 @@ export class FakeSlack {
    * Fail the next `times` calls of a method before any answer, as Slack's servers do at times: with an HTTP status such
    * as 408 or 503 and no body, or "silent", with no answer until the client gives up. The calls are recorded.
    */
-  fail(method: string, status: number | "silent", times = Number.POSITIVE_INFINITY): void {
-    this.#failures.set(method, { status, left: times });
+  fail(method: string, status: number | "silent", times = Number.POSITIVE_INFINITY, retryAfter?: number): void {
+    this.#failures.set(method, { status, left: times, ...(retryAfter === undefined ? {} : { retryAfter }) });
   }
 
   called(method: string): Call[] {
@@ -236,7 +236,7 @@ export class FakeSlack {
     const failure = this.#failures.get(call.method);
     if (failure && failure.left > 0) {
       failure.left--;
-      if (failure.status !== "silent") response.writeHead(failure.status).end();
+      if (failure.status !== "silent") response.writeHead(failure.status, failure.retryAfter === undefined ? {} : { "retry-after": String(failure.retryAfter) }).end();
       return;
     }
     const result = this.#answer(call);

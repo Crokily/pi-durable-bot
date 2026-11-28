@@ -67,14 +67,21 @@ describe("Teams in HTTP mode, through the gateway", () => {
       // The answer is logged once Teams took it: wait for the log, not for the request.
       const logged = () => gateway.query<{ kind: string; place: string; person: string; text: string }>("SELECT kind, place, person, text FROM gw_events WHERE channel = 'teams' ORDER BY id");
       await waitFor(() => logged().some((row) => row.kind === "message" && row.text.startsWith("ack:")), { timeout: 20_000, what: "the bot's answer in the log" });
-      const [posted] = fake.requested("POST", "/teams/v3/conversations/.*/activities");
+      // While the bot worked on the DM, Alice saw it typing, in the same conversation, before its answer.
+      const activities = fake.requested("POST", "/teams/v3/conversations/.*/activities");
+      const typing = activities.filter((request) => request.body.type === "typing");
+      expect(typing.length).toBeGreaterThanOrEqual(1);
+      expect(typing[0]!.path).toBe("/teams/v3/conversations/a:dm-alice/activities");
+      expect(activities.indexOf(typing[0]!)).toBe(0);
+      const messages = activities.filter((request) => request.body.type === "message");
+      const [posted] = messages;
       expect(posted!.path).toBe("/teams/v3/conversations/a:dm-alice/activities");
       expect(posted!.body).toMatchObject({ type: "message", textFormat: "markdown" });
       expect(posted!.body.text).toContain("ack:");
       const rows = logged();
       expect(rows[0]).toEqual({ kind: "message", place: "teams:#a:dm-alice", person: "teams:@aad-alice", text: "what does the pricing look like?" });
       expect(rows.filter((row) => row.text.startsWith("ack:"))).toHaveLength(1);
-      expect(fake.requested("POST", "/teams/v3/conversations/.*/activities")).toHaveLength(1);
+      expect(messages).toHaveLength(1);
       expect(posted!.auth).toBeUndefined();
     } finally {
       await fake.close();

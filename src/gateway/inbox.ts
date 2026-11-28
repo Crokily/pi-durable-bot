@@ -76,6 +76,8 @@ export class Inbox extends Context.Service<
           const events = yield* log.apply(channel, eventId, happenings);
           yield* Effect.annotateCurrentSpan({ happenings: happenings.length, events: events.map((event) => event.id).join(",") });
           for (const event of events) yield* waker.add(event);
+          // The bot's own messages, by any way it sent them: a send, or a platform call.
+          for (const h of happenings) if (h.kind === "message" && h.fromMe && h.place) yield* waker.ownMessage(h.place.address, h.at);
         }).pipe(
           Effect.catchCause((cause) => {
             if (Cause.hasInterruptsOnly(cause)) return Effect.void;

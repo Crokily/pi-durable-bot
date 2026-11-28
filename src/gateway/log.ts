@@ -193,6 +193,8 @@ export class MessageLog extends Context.Service<
     readonly pendingWakes: Effect.Effect<PlaceWake[], LogError>;
     // Reads for backfill and the judge
     newestMessage(place: Address): Effect.Effect<Address | undefined, LogError>;
+    /** The raw data of a message and of the messages in the thread it starts, newest first, at most 10. */
+    raws(message: Address): Effect.Effect<unknown[], LogError>;
     threads(place: Address): Effect.Effect<Address[], LogError>;
     /** The places of a channel account that the log knows. */
     places(channel: string): Effect.Effect<Address[], LogError>;
@@ -286,6 +288,17 @@ function makeLog(sql: Sql): MessageLog["Service"] {
 
     newestMessage: (place) =>
       db(async () => (await sql.get<{ address: string }>("SELECT address FROM gw_messages WHERE place = ? ORDER BY at DESC LIMIT 1", place))?.address),
+
+    raws: (message) =>
+      db(async () =>
+        (
+          await sql.all<{ raw: string }>(
+            "SELECT raw FROM gw_messages WHERE (address = ? OR thread = ?) AND raw IS NOT NULL ORDER BY at DESC LIMIT 10",
+            message,
+            message,
+          )
+        ).map((row) => JSON.parse(row.raw) as unknown),
+      ),
 
     threads: (place) =>
       db(async () => {

@@ -13,6 +13,7 @@ import type {
   PersonInfo,
   PlaceInfo,
   SentMessage,
+  WorkingSign,
 } from "../../core/channel.ts";
 import { expandHome } from "../../core/env-file.ts";
 
@@ -27,10 +28,13 @@ import { expandHome } from "../../core/env-file.ts";
  * Places are plain names. A name starting with "dm-" is a one-to-one DM, "group-" a group chat, others are channels.
  * Addresses: <id>:#<place>, <id>:#<place>/<message id>, <id>:@<person>.
  * files: [{ name, type, url }], where url is a file path, relative to the directory; fetchFile reads it.
+ * The bot's typing goes to `working.jsonl` in the same directory, { type: "show" | "stop", to, at }, shown again every
+ * `workingEvery` ms (by default 1000). While a file `refuse-working` is there, the platform refuses to show it.
  */
 export function createChannel(config: ChannelConfig, env: ChannelEnv): ChannelAdapter {
   if (typeof config.dir !== "string") throw new Error(`channel ${config.id}: "dir" must name the test platform directory`);
-  return new TestChannel(config.id, expandHome(config.dir), typeof config.me === "string" ? config.me : "bot", env);
+  const every = typeof config.workingEvery === "number" ? config.workingEvery : 1_000;
+  return new TestChannel(config.id, expandHome(config.dir), typeof config.me === "string" ? config.me : "bot", env, every);
 }
 
 interface PlatformRecord {
@@ -58,9 +62,16 @@ class TestChannel implements ChannelAdapter {
   #offset = 0;
   #timer?: NodeJS.Timeout;
   #reading: Promise<void> = Promise.resolve();
+  #sink?: ChannelSink;
+  readonly working: WorkingSign;
 
-  constructor(id: string, dir: string, me: string, env: ChannelEnv) {
+  constructor(id: string, dir: string, me: string, env: ChannelEnv, every: number) {
     this.id = id;
+    const record = async (type: string, to: Address) => {
+      if (existsSync(join(dir, "refuse-working"))) throw new Error("the test platform refuses typing");
+      await appendFile(join(dir, "working.jsonl"), `${JSON.stringify({ type, to, at: Date.now() })}\n`);
+    };
+    this.working = { every, show: (at) => record("show", at), stop: (at) => record("stop", at) };
     this.#dir = dir;
     this.#file = join(dir, "platform.jsonl");
     this.#me = me;
@@ -77,6 +88,7 @@ class TestChannel implements ChannelAdapter {
    * already has. On a bot's first start there was no "while down": it starts at the end, as the Slack adapter does.
    */
   async start(sink: ChannelSink): Promise<void> {
+    this.#sink = sink;
     this.#offset = sink.lastAlive() === undefined && existsSync(this.#file) ? (await stat(this.#file)).size : 0;
     const poll = () => {
       this.#reading = this.#reading.then(() => this.#read(sink)).catch((error) => sink.log("read failed", { error: String(error) }));
@@ -192,6 +204,7 @@ class TestChannel implements ChannelAdapter {
 
   async send(to: Address, text: string, sendId: string): Promise<SentMessage> {
     const { place, thread } = await this.#target(to);
+    await this.#sink?.sending(this.#place(place).address);
     const record = await this.#append({ type: "message", place, text, send_id: sendId, ...(thread ? { thread } : {}) });
     return { message: this.#message(place, record.id), place: this.#place(place).address, raw: record };
   }
@@ -212,14 +225,20 @@ class TestChannel implements ChannelAdapter {
     return readFile(resolve(this.#dir, file.url ?? ""));
   }
 
-  /** Platform methods: edit { message, text }, delete { message }, records {}. */
+  /** Platform methods: post { to, text } (a message of the bot's, not through send), edit { message, text }, delete { message }, records {}. */
   async call(method: string, params: Record<string, unknown>): Promise<unknown> {
     if (method === "records") return this.#records();
+    // A message the bot posts without send, as a platform's own method for a photo or a card does.
+    if (method === "post") {
+      const { place, thread } = await this.#target(String(params.to ?? ""));
+      await this.#sink?.sending(this.#place(place).address);
+      return this.#append({ type: "message", place, text: String(params.text ?? ""), ...(thread ? { thread } : {}) });
+    }
     const address = typeof params.message === "string" ? this.#parse(params.message) : undefined;
     if (!address || !("place" in address) || !address.message) throw new Error(`${method}: "message" must be a message address`);
     if (method === "edit") return this.#append({ type: "edit", place: address.place, message: address.message, text: String(params.text ?? "") });
     if (method === "delete") return this.#append({ type: "delete", place: address.place, message: address.message });
-    throw new Error(`unknown method ${method}; methods: edit, delete, records`);
+    throw new Error(`unknown method ${method}; methods: post, edit, delete, records`);
   }
 }
 

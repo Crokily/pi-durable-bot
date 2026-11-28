@@ -17,10 +17,12 @@ export interface FakeRequest {
 export class Reply {
   readonly status: number;
   readonly body: unknown;
+  readonly headers: Record<string, string>;
 
-  constructor(status: number, body?: unknown) {
+  constructor(status: number, body?: unknown, headers: Record<string, string> = {}) {
     this.status = status;
     this.body = body;
+    this.headers = headers;
   }
 }
 
@@ -145,16 +147,17 @@ export class FakeDiscord {
       for (const route of this.#routes) {
         const match = route.method === recorded.method ? route.path.exec(raw) : null;
         if (match) {
-          answer = route.answer(recorded, match);
+          // An answer can be a promise: a slow Discord.
+          answer = await route.answer(recorded, match);
           break;
         }
       }
     }
     const reply = answer instanceof Reply ? answer : answer === undefined ? new Reply(204) : new Reply(200, answer);
     if (reply.body === undefined) {
-      response.writeHead(reply.status).end();
+      response.writeHead(reply.status, reply.headers).end();
       return;
     }
-    response.writeHead(reply.status, { "content-type": "application/json" }).end(JSON.stringify(reply.body));
+    response.writeHead(reply.status, { ...reply.headers, "content-type": "application/json" }).end(JSON.stringify(reply.body));
   }
 }

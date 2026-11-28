@@ -88,7 +88,10 @@ function message(fields: Record<string, unknown>) {
 
 /** A sink like the gateway's: it drops a known event ID, and keeps raws as JSON, as the inbox does. */
 /** fail: the receive of this event ID fails while it returns true. */
-function memorySink(options: { lastAlive?: number; newest?: Record<string, string>; places?: string[]; fail?: (id: string) => boolean; forms?: Record<string, Record<string, unknown>> } = {}) {
+/** sending: told when the adapter is about to post in a place. */
+function memorySink(
+  options: { lastAlive?: number; newest?: Record<string, string>; places?: string[]; fail?: (id: string) => boolean; forms?: Record<string, Record<string, unknown>>; sending?: (place: string) => void } = {},
+) {
   const events: { id: string; raw: any }[] = [];
   const logs: string[] = [];
   const forms = new Map(Object.entries(options.forms ?? {}));
@@ -98,6 +101,8 @@ function memorySink(options: { lastAlive?: number; newest?: Record<string, strin
       if (!events.some((event) => event.id === id)) events.push({ id, raw: JSON.parse(JSON.stringify(raw)) });
     },
     newestMessage: async (place) => options.newest?.[place],
+    logged: async () => [],
+    sending: async (place) => options.sending?.(place),
     threads: async () => [],
     places: async () => options.places ?? [],
     lastAlive: () => options.lastAlive,
@@ -127,10 +132,11 @@ afterEach(async () => {
 });
 
 /** A started adapter on a fake Discord with the server Lab, and the sink it stores into. */
-async function connect(options: Parameters<typeof memorySink>[0] = {}) {
+/** token: the bot token as the env file has it. */
+async function connect(options: Parameters<typeof memorySink>[0] & { token?: string } = {}) {
   const fake = await FakeDiscord.start();
   const dir = mkdtempSync(join(tmpdir(), "pots-discord-"));
-  writeFileSync(join(dir, "discord.env"), "DISCORD_BOT_TOKEN=test-token\n");
+  writeFileSync(join(dir, "discord.env"), `DISCORD_BOT_TOKEN=${options.token ?? "test-token"}\n`);
   const channel = new DiscordChannel("discord", join(dir, "discord.env"), { botDir: dir, botName: "Pots", log: () => {} }, fake.api);
   cleanup.push(async () => {
     await channel.stop();
@@ -815,5 +821,96 @@ describe("Discord channel", () => {
     const start = timeOf(fake.requested("GET", "/channels/20/messages")[0]!.query.get("after")!);
     expect(start).toBeGreaterThanOrEqual(before - 60_000);
     expect(start).toBeLessThanOrEqual(after - 60_000);
+  });
+});
+
+describe("Discord typing", () => {
+  it("shows typing in the channel or thread of the message that woke the bot, finds it once, and has no stop", async () => {
+    const { fake, channel, gateway } = await connect();
+    await gateway([["THREAD_CREATE", thread("600", "20", "Release plan")]], 1);
+    fake.route("POST", "/channels/\\d+/typing", () => undefined);
+    expect(channel.working.every).toBe(8_000);
+    expect(channel.working.stop).toBeUndefined();
+    // A message with no thread: its channel, looked up once.
+    await channel.working.show("discord:#20/501");
+    await channel.working.show("discord:#20/501");
+    // A message in a thread, and the thread itself: the thread.
+    await channel.working.show("discord:#20/600/601");
+    await channel.working.show("discord:#20/600");
+    expect(fake.requested("POST", "/channels/\\d+/typing").map((request) => request.path)).toEqual([
+      "/channels/20/typing",
+      "/channels/20/typing",
+      "/channels/600/typing",
+      "/channels/600/typing",
+    ]);
+    expect(fake.requested("GET", "/channels/501")).toHaveLength(1);
+    fake.route("POST", "/channels/\\d+/typing", () => new Reply(403, { message: "Missing Permissions", code: 50013 }));
+    await expect(channel.working.show("discord:#20/501")).rejects.toThrow("Missing Permissions");
+  });
+
+  // Codex's review: discord.js waited out a 429 on typing, tried again and said it worked.
+  it("fails at once on a rate limit, tries once, and never holds up a send", async () => {
+    const { fake, channel } = await connect();
+    let limited = 1;
+    fake.route("POST", "/channels/\\d+/typing", () =>
+      limited-- > 0 ? new Reply(429, { message: "You are being rate limited.", retry_after: 1, global: false }, { "retry-after": "1", "x-ratelimit-scope": "user" }) : undefined,
+    );
+    const started = Date.now();
+    await expect(channel.working.show("discord:#20")).rejects.toThrow(/rate limit/i);
+    await channel.send("discord:#20", "the plan", "tool:1");
+    expect(Date.now() - started).toBeLessThan(800);
+    expect(fake.requested("POST", "/channels/\\d+/typing")).toHaveLength(1);
+  });
+
+  // Codex's review: a 429 on the lookup of an uncached message's thread was waited out on the client that sends, and
+  // the typing went out after the reply.
+  it("looks up the thread on the typing client too: a rate limit there fails at once and holds up no send", async () => {
+    const { fake, channel } = await connect();
+    fake.route("GET", "/channels/501", () => new Reply(429, { message: "You are being rate limited.", retry_after: 3, global: false }, { "retry-after": "3", "x-ratelimit-scope": "user" }));
+    fake.route("POST", "/channels/\\d+/typing", () => undefined);
+    const started = Date.now();
+    await expect(channel.working.show("discord:#20/501")).rejects.toThrow(/rate limit/i);
+    await channel.send("discord:#20", "the plan", "tool:1");
+    expect(Date.now() - started).toBeLessThan(800);
+    expect(fake.requested("GET", "/channels/501")).toHaveLength(1);
+    expect(fake.requested("POST", "/channels/\\d+/typing")).toHaveLength(0);
+  });
+
+  it("does not show typing when the sign stopped while it looked up the thread", async () => {
+    const { fake, channel } = await connect();
+    let answer = () => {};
+    fake.route("GET", "/channels/501", () => new Promise<Reply>((resolve) => (answer = () => resolve(new Reply(404, { message: "Unknown Channel", code: 10003 })))));
+    fake.route("POST", "/channels/\\d+/typing", () => undefined);
+    const stopped = new AbortController();
+    const show = channel.working.show("discord:#20/501", stopped.signal);
+    await until(() => fake.requested("GET", "/channels/501").length === 1);
+    stopped.abort();
+    answer();
+    await show;
+    expect(fake.requested("POST", "/channels/\\d+/typing")).toHaveLength(0);
+    // Found now: the next show goes at once.
+    await channel.working.show("discord:#20/501");
+    expect(fake.requested("POST", "/channels/\\d+/typing").map((request) => request.path)).toEqual(["/channels/20/typing"]);
+  });
+
+  it("takes a token given with its Bot prefix as sends do", async () => {
+    const { fake, channel } = await connect({ token: "Bot test-token" });
+    fake.route("POST", "/channels/\\d+/typing", () => undefined);
+    await channel.working.show("discord:#20");
+    await channel.send("discord:#20", "the plan", "tool:1");
+    expect(fake.requested("POST", "/channels/\\d+/typing")[0]!.auth).toBe("Bot test-token");
+    expect(fake.requested("POST", "/channels/\\d+/messages")[0]!.auth).toBe("Bot test-token");
+  });
+
+  it("says where it posts right before it posts: a send, also to a person, and a message posted with call", async () => {
+    const said: string[] = [];
+    let fake!: FakeDiscord;
+    const connected = await connect({ sending: (place) => void said.push(`${place} after ${fake.requested("POST", "/channels/\\d+/messages").length}`) });
+    fake = connected.fake;
+    fake.route("POST", "/users/@me/channels", () => ({ id: "700", type: 1, last_message_id: null, recipients: [ALICE] }));
+    await connected.channel.send("discord:@200", "hi", "tool:1");
+    await connected.channel.send("discord:#20", "the plan", "tool:2");
+    await connected.channel.call("POST /channels/20/messages", { content: "a photo" });
+    expect(said).toEqual(["discord:#700 after 0", "discord:#20 after 1", "discord:#20 after 2"]);
   });
 });

@@ -25,10 +25,12 @@ import { KnownSecrets } from "../core/secrets.ts";
 import { VERSION } from "../core/version.ts";
 import type { Judge } from "../core/judge.ts";
 import { formatTime } from "../core/time.ts";
-import type { Delivered, PlaceWake, WakeTarget } from "../core/wake.ts";
+import type { Delivered, PlaceWake, WakeEvent, WakeTarget } from "../core/wake.ts";
 import type { Print, RunCommand } from "../gateway/config.ts";
 import { renderForms } from "../gateway/forms.ts";
 import { Gateway, type TimersHandle } from "../gateway/gateway.ts";
+import { ANSWER_KINDS } from "../gateway/waker.ts";
+import { Working } from "../gateway/working.ts";
 import { describeSchedule, describeWork, type RoutineInput, renderRoutines } from "../gateway/routines.ts";
 import type { DueTimer } from "../gateway/timers.ts";
 import type { PageHost } from "../pages/host.ts";
@@ -69,13 +71,45 @@ CREATE TABLE IF NOT EXISTS bot_wakes (
   reason TEXT NOT NULL,
   place TEXT,
   text TEXT NOT NULL,
-  submission TEXT
+  submission TEXT,
+  at_address TEXT
 );
 CREATE TABLE IF NOT EXISTS bot_state (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS bot_working (
+  submission TEXT PRIMARY KEY,
+  place TEXT NOT NULL,
+  at TEXT NOT NULL,
+  wanted INTEGER NOT NULL,
+  since INTEGER,
+  event_at INTEGER NOT NULL DEFAULT 0
+);
 `;
+
+/** Columns added to tables of an earlier version. */
+const ADDED_COLUMNS = [
+  { table: "bot_wakes", column: "at_address", type: "TEXT" },
+  { table: "bot_working", column: "event_at", type: "INTEGER NOT NULL DEFAULT 0" },
+] as const;
+
+/** The typing people wait to see for one submission. */
+interface Typing {
+  /** The place, and where in it: the message or thread, or the place. */
+  readonly place: Address;
+  readonly at: Address;
+  /** When the message people wait on came (Unix ms, the platform's): a message of the bot's from before it does not answer it. */
+  readonly eventAt: number;
+  /** When the bot learned that people wait (Unix ms, this computer's). */
+  readonly wanted: number;
+  /** When the typing first showed, for the cap. */
+  since?: number;
+  shown?: boolean;
+}
+
+/** The later of two typings: the newer message, then the later wish. */
+const later = (a: Typing, b: Typing) => a.eventAt > b.eventAt || (a.eventAt === b.eventAt && a.wanted >= b.wanted);
 
 export interface BotEnvironment {
   /** The folder with every bot's folder. */
@@ -97,6 +131,31 @@ const NO_PROJECT_CONTEXT = "Project-specific instructions and guidelines: none f
 const NO_SKILLS = "Skills: none found.";
 /** What the bot says where it was woken when its model fails. */
 const FAILURE_NOTICE = "I could not work on this: my model did not answer. The reason is in pots status on the computer I run on.";
+/** The judge's "respond" from which people see the bot typing: below it, most wakes got no answer. */
+const WORKING_RESPOND = 0.8;
+
+/**
+ * The event of a wake that people wait on the bot for, so they see it typing while it works: a DM, a mention, a use of
+ * its button, menu, command or form, or what the judge found it should very likely answer. A steer is judged by the
+ * same rules, without the judge, which does not see it.
+ */
+function waitedOn(wake: PlaceWake): WakeEvent | undefined {
+  const answers = (event: WakeEvent) => ANSWER_KINDS.has(event.kind);
+  switch (wake.reason) {
+    case "dm":
+      return wake.events.at(-1);
+    case "mention":
+      return wake.events.findLast((event) => event.mentionsMe);
+    case "interaction":
+      return wake.events.findLast(answers);
+    case "relevant":
+      return wake.judged && "respond" in wake.judged && wake.judged.respond >= WORKING_RESPOND ? wake.events.at(-1) : undefined;
+    case "steer":
+      return wake.place.kind === "dm" ? wake.events.at(-1) : wake.events.findLast((event) => event.mentionsMe || answers(event));
+    default:
+      return undefined;
+  }
+}
 
 /**
  * One bot: a person with a name, an AGENTS.md, responsibilities, memory, timed wakes, a workspace and one long
@@ -125,6 +184,8 @@ export class Bot implements WakeTarget {
   readonly #control: ControlServer;
   /** Which place each wake submission is about, for "is the bot working on this place". */
   readonly #submissionPlaces = new Map<string, Address>();
+  /** Where in its place each wake submission is about: the message or thread, for the children it starts. */
+  readonly #submissionAt = new Map<string, Address>();
   /** How the last failed run ended, for pots status and pots chat. */
   #lastError: { at: number; error: string } | undefined;
   /**
@@ -135,6 +196,19 @@ export class Bot implements WakeTarget {
   readonly #failureNotices = new Map<Address, { sendId: string; state: "sending" | "sent" | "unsent" }>();
   /** Places the agent sent or reacted to in its current busy period. */
   readonly #touched = new Set<Address>();
+  /** The typing people see where the agent works. */
+  readonly #working: Working;
+  /**
+   * The submissions whose people see the agent typing once it works on them, until it sends there or that run ends:
+   * where (the place, and the message or thread), and since when it shows. Kept in bot_working for a restart.
+   */
+  readonly #typing = new Map<string, Typing>();
+  /** The submissions of runs that ended lately, which a wake handed over too late for its run must not show. */
+  readonly #ended = new Set<string>();
+  /** The inputs of the run the typing follows. */
+  #typingRun: readonly string[];
+  /** Per place, when the bot last began to post there (Unix ms, this computer's). */
+  readonly #postedAt = new Map<Address, number>();
 
   private constructor(init: {
     id: string;
@@ -167,10 +241,16 @@ export class Bot implements WakeTarget {
     this.#left = init.left;
     this.#judge = init.judge;
     this.#control = new ControlServer(init.paths.socket, this.#routes());
+    this.#working = new Working({
+      sign: (at) => this.#gateway.adapterFor(at).working,
+      print: (message, data) => this.#print(message, data),
+    });
+    this.#typingRun = this.#agent.runInputs ?? [];
     let working: readonly string[] = [];
     this.#agent.onRunChange((inputs) => {
       if (!inputs) this.#touched.clear();
       this.#print(inputs ? "agent working" : "agent idle", inputs ? { inputs } : {});
+      this.#followRun(inputs);
       // A run grows by the inputs that come while it works, and it ended when its first input changes: pi-durable can
       // end one run and start the next in one commit, with no idle between.
       const ran = working.length > 0 && inputs?.[0] !== working[0] ? working : undefined;
@@ -222,6 +302,10 @@ export class Bot implements WakeTarget {
     opened: (agent: Agent) => void,
   ): Promise<Bot> {
     await sql.exec(WAKES_SCHEMA);
+    for (const { table, column, type } of ADDED_COLUMNS) {
+      const columns = await sql.all<{ name: string }>(`PRAGMA table_info(${table})`);
+      if (!columns.some((each) => each.name === column)) await sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    }
     // The version whose prompt the conversation shows.
     const shownVersion = (await sql.all<{ value: string }>("SELECT value FROM bot_state WHERE key = 'prompt_version'"))[0]?.value;
 
@@ -390,6 +474,7 @@ export class Bot implements WakeTarget {
           { name: "remembered", render: async () => (memoryOn() ? childMemorySection(facts(), await indexes()) : undefined), pin: true },
         ],
         place: () => (bot ? bot.#currentPlace() : undefined),
+        at: (place) => (bot ? bot.#currentAt(place) : undefined),
         failed: (failure) => self().#deliverChildFailure(failure),
       },
       // What a new version says counts at once; without an upgrade, the sections stay as the page began.
@@ -465,16 +550,20 @@ export class Bot implements WakeTarget {
     };
     // Right before a memory pass forks the main conversation. The next start must make the pass.
     agent.crashTests.beforeMemoryPass = () => crashTest(paths.crashBeforeMemoryPass, "crash test: dying before the memory pass", "bot")(id);
-    for (const row of await sql.all<{ submission: string; place: string }>(
-      "SELECT submission, place FROM bot_wakes WHERE submission IS NOT NULL AND place IS NOT NULL ORDER BY at DESC LIMIT 1000",
+    for (const row of await sql.all<{ submission: string; place: string; where: string | null }>(
+      "SELECT submission, place, at_address AS \"where\" FROM bot_wakes WHERE submission IS NOT NULL AND place IS NOT NULL ORDER BY at DESC LIMIT 1000",
     )) {
       bot.#submissionPlaces.set(row.submission, row.place);
+      if (row.where) bot.#submissionAt.set(row.submission, row.where);
     }
+    await bot.#loadTyping();
     let adapters: ChannelAdapter[] = [];
     try {
       adapters = await Promise.all(definition.channels.map((channel) => bot!.#loadChannel(channel)));
       await gateway.start(bot, adapters);
       await agent.resume();
+      // The run the last process left unfinished goes on: where people waited, and the bot did not send since, they see it typing again.
+      bot.#restoreTyping();
       await timers.start();
       if (existsSync(paths.firstWake)) {
         await timers.add(Date.now(), await readFile(paths.firstWake, "utf8"));
@@ -485,6 +574,7 @@ export class Bot implements WakeTarget {
       env.pages.register(pages);
       pages.startCleanup();
     } catch (error) {
+      bot.#working.close();
       await timers.stop();
       await gateway.stop();
       throw error;
@@ -501,6 +591,8 @@ export class Bot implements WakeTarget {
    */
   async stop(): Promise<void> {
     this.#env.pages.unregister(this.id);
+    // Also a wake that is still on its way shows nothing any more.
+    this.#working.close();
     // The commands that the routines and the agent interrupt as they stop are those the bot was waiting on.
     this.#scopes?.close();
     try {
@@ -573,6 +665,12 @@ export class Bot implements WakeTarget {
     return this.#agent.children.filter((child) => child.since !== undefined && child.stoppedAt === undefined && (place === undefined || child.place === place));
   }
 
+  /** Where in a place the main agent works now: the message or thread of the newest wake of its run there. */
+  #currentAt(place: Address): Address | undefined {
+    const submission = (this.#agent.runInputs ?? []).findLast((each) => this.#submissionPlaces.get(each) === place && this.#submissionAt.has(each));
+    return submission === undefined ? undefined : this.#submissionAt.get(submission);
+  }
+
   /** The place the main agent works on now, when its run is about one place. */
   #currentPlace(): Address | undefined {
     const places = new Set((this.#agent.runInputs ?? []).map((submission) => this.#submissionPlaces.get(submission)).filter((place) => place !== undefined));
@@ -583,7 +681,13 @@ export class Bot implements WakeTarget {
     const me = this.#gateway.channels.find((channel) => channel.owns(wake.place.address))?.me;
     const children = await this.#agent.childrenNow(this.#workingChildren(wake.place.address));
     const text = renderPlaceWake(wake, await this.#agent.contextStatus(), me, children);
-    return this.#submit(wake.id, wake.reason, wake.place.address, text, wake.reason === "steer", caller);
+    const event = waitedOn(wake);
+    const about = event ?? wake.events.at(-1);
+    const at = about?.thread ?? about?.message;
+    const delivered = await this.#submit(wake.id, wake.reason, wake.place.address, text, wake.reason === "steer", caller, at);
+    // A steer goes into the run at its next step, which can be long in coming: it shows at once.
+    if (event) await this.#wantTyping(delivered.submission, wake.place.address, at ?? wake.place.address, event.at, wake.reason === "steer");
+    return delivered;
   }
 
   responsibilities(): Promise<string> {
@@ -595,7 +699,10 @@ export class Bot implements WakeTarget {
     // A wake a child set from its own commands, which have its ID in POTS_CHILD.
     const child = timer.set_by === "agent" && timer.child !== null ? this.#agent.children.find((each) => each.id === timer.child) : undefined;
     const text = renderTimerWake(timer, await this.#agent.contextStatus(), children, child);
-    return this.#submit(`timer:${timer.id}`, timer.set_by === "agent" ? "timer" : timer.set_by, child?.place, text, false, caller);
+    const delivered = await this.#submit(`timer:${timer.id}`, timer.set_by === "agent" ? "timer" : timer.set_by, child?.place, text, false, caller, child?.at);
+    // A child that works for a place woke the agent: the people there see it typing, where the child was started.
+    if (child?.place) await this.#wantTyping(delivered.submission, child.place, child.at ?? child.place, Date.now());
+    return delivered;
   }
 
   /** A child could not go on: a wake for the main agent, once per reporter, also when this runs again after a restart. */
@@ -605,13 +712,16 @@ export class Bot implements WakeTarget {
     const before = (await this.#sql.all<{ submission: string }>("SELECT submission FROM bot_wakes WHERE id = ?", id))[0];
     if (before) return before.submission;
     const text = renderChildFailure(failure, await this.#agent.contextStatus());
-    const delivered = await this.#gateway.wake({ reason: "child", child: failure.child.id, ...(failure.child.place ? { place: failure.child.place } : {}) }, (caller) =>
-      this.#submit(id, "child", failure.child.place, text, false, caller),
+    const place = failure.child.place;
+    const delivered = await this.#gateway.wake({ reason: "child", child: failure.child.id, ...(place ? { place } : {}) }, (caller) =>
+      this.#submit(id, "child", place, text, false, caller, failure.child.at),
     );
+    if (place) await this.#wantTyping(delivered.submission, place, failure.child.at ?? place, Date.now());
     return delivered.submission;
   }
 
-  async #submit(id: string, reason: string, place: Address | undefined, text: string, steer: boolean, caller?: TelemetrySpan): Promise<Delivered> {
+  /** at: where in the place, the message or thread, when the wake is about one. */
+  async #submit(id: string, reason: string, place: Address | undefined, text: string, steer: boolean, caller?: TelemetrySpan, at?: Address): Promise<Delivered> {
     // What the memory passes changed since the last wake, once, at the end of this one, as Claude Code tells it. Taken
     // at once, so two wakes never give the same note; not by a wake given again after a crash, which does not go out
     // again; and put back when the wake could not go out.
@@ -638,14 +748,16 @@ export class Bot implements WakeTarget {
     }
     const { id: submission, trace } = submitted;
     if (place) this.#submissionPlaces.set(submission, place);
+    if (place && at) this.#submissionAt.set(submission, at);
     await this.#sql.run(
-      "INSERT OR IGNORE INTO bot_wakes (id, at, reason, place, text, submission) VALUES (?, ?, ?, ?, ?, ?)",
+      "INSERT OR IGNORE INTO bot_wakes (id, at, reason, place, text, submission, at_address) VALUES (?, ?, ?, ?, ?, ?, ?)",
       id,
       Date.now(),
       reason,
       place ?? null,
       text,
       submission,
+      place && at ? at : null,
     );
     return { submission, run: trace };
   }
@@ -678,10 +790,31 @@ export class Bot implements WakeTarget {
 
   /** trace: the agent's tool call, when the action comes from one. */
   async send(to: Address, text: string, sendId: string, trace?: TelemetrySpan) {
+    const started = Date.now();
     // The wakes the agent works on now: the send links to them.
     const sent = await this.#gateway.send(sendId, to, text, this.#agent.runInputs ?? [], trace);
     this.#touch(sent.place);
+    if (sent.place) this.#answered(sent.place, (typing) => typing.wanted <= started);
     return sent;
+  }
+
+  /**
+   * The channel is about to post a message of the bot's in a place, for a send or a platform call: the typing there
+   * stops first, so it does not show again under the message.
+   */
+  async beforeSend(place: Address): Promise<void> {
+    this.#postedAt.set(place, Date.now());
+    await this.#working.beforeSend(place);
+  }
+
+  /**
+   * A message of the agent's reached the log, sent by any way: it answers the typing there of the messages before it,
+   * by the platform's time, and the typing that showed when the bot last began to post there. A message of the same
+   * time (Telegram's are to the second) does not count as after: it can be an older message that came late.
+   */
+  ownMessage(place: Address, at: number): void {
+    const posted = this.#postedAt.get(place) ?? -Infinity;
+    this.#answered(place, (typing) => typing.eventAt < at || typing.wanted <= posted);
   }
 
   async react(message: Address, emoji: string, remove: boolean, trace?: TelemetrySpan): Promise<void> {
@@ -695,6 +828,133 @@ export class Bot implements WakeTarget {
 
   #touch(place: Address | undefined): void {
     if (place && this.#agent.runInputs) this.#touched.add(place);
+  }
+
+  // ---- Typing ----
+
+  /**
+   * The typing that the last process left, for the submissions that still wait in the queue or that a run works on;
+   * the rest (answered, withdrawn, or older than a day) goes.
+   */
+  async #loadTyping(): Promise<void> {
+    await this.#sql.run("DELETE FROM bot_working WHERE wanted < ?", Date.now() - 24 * 60 * 60_000);
+    const rows = await this.#sql.all<{ submission: string; place: string; at: string; wanted: number; since: number | null; event_at: number }>(
+      "SELECT submission, place, at, wanted, since, event_at FROM bot_working ORDER BY wanted",
+    );
+    const pending = await this.#agent.pending(rows.map((row) => row.submission));
+    for (const row of rows) {
+      if (!pending.has(row.submission)) {
+        await this.#sql.run("DELETE FROM bot_working WHERE submission = ?", row.submission);
+        continue;
+      }
+      this.#typing.set(row.submission, {
+        place: row.place,
+        at: row.at,
+        eventAt: row.event_at,
+        wanted: row.wanted,
+        ...(row.since !== null ? { since: row.since, shown: true } : {}),
+      });
+    }
+  }
+
+  /**
+   * After a restart: in each place, the newest of what showed before and of what the run works on now shows again, with
+   * the cap counted from when it first showed.
+   */
+  #restoreTyping(): void {
+    const running = new Set(this.#agent.runInputs ?? []);
+    const places = new Set<Address>();
+    for (const [submission, typing] of this.#typing) {
+      if (!typing.shown && !running.has(submission)) continue;
+      this.#markShown(submission, typing);
+      places.add(typing.place);
+    }
+    for (const place of places) this.#showNewest(place);
+  }
+
+  /**
+   * People in a place wait on the agent for this submission, about a message from eventAt: they see it typing once it
+   * works on it, or at once (now).
+   */
+  async #wantTyping(submission: string, place: Address, at: Address, eventAt: number, now = false): Promise<void> {
+    // Given again after a crash, or for a run that is over already.
+    if (this.#typing.has(submission) || this.#ended.has(submission)) return;
+    const typing: Typing = { place, at, eventAt, wanted: Date.now() };
+    this.#typing.set(submission, typing);
+    await this.#sql
+      .run("INSERT OR IGNORE INTO bot_working (submission, place, at, wanted, event_at) VALUES (?, ?, ?, ?, ?)", submission, place, at, typing.wanted, eventAt)
+      .catch((error: unknown) => this.#print("could not keep where the bot shows typing", { error: String(error) }));
+    if (now) this.#startTyping(submission, typing);
+    this.#showTyping();
+  }
+
+  /** Show typing for the submissions the current run works on, once each. */
+  #showTyping(): void {
+    for (const submission of this.#agent.runInputs ?? []) {
+      const typing = this.#typing.get(submission);
+      if (typing && !typing.shown) this.#startTyping(submission, typing);
+    }
+  }
+
+  #startTyping(submission: string, typing: Typing): void {
+    this.#markShown(submission, typing);
+    this.#working.start(typing.place, typing.at, typing.since);
+  }
+
+  /** It shows from now, or from when it first showed: kept for a restart. */
+  #markShown(submission: string, typing: Typing): void {
+    typing.shown = true;
+    if (typing.since !== undefined) return;
+    typing.since = Date.now();
+    this.#sql
+      .run("UPDATE bot_working SET since = ? WHERE submission = ?", typing.since, submission)
+      .catch((error: unknown) => this.#print("could not keep where the bot shows typing", { error: String(error) }));
+  }
+
+  /** In a place, the typing of the newest message that people still wait on shows; with none, it stops. */
+  #showNewest(place: Address): void {
+    let newest: Typing | undefined;
+    for (const typing of this.#typing.values()) if (typing.place === place && typing.shown && (!newest || later(typing, newest))) newest = typing;
+    if (newest) this.#working.start(place, newest.at, newest.since);
+    else this.#working.stop(place);
+  }
+
+  /** The run changed: the typing of a run that ended stops, and the typing of what the run works on now shows. */
+  #followRun(inputs: readonly string[] | undefined): void {
+    const ended = this.#typingRun.length > 0 && inputs?.[0] !== this.#typingRun[0] ? this.#typingRun : [];
+    this.#typingRun = inputs ?? [];
+    const stopped = new Set<Address>();
+    for (const submission of ended) {
+      this.#ended.add(submission);
+      const typing = this.#typing.get(submission);
+      if (!typing) continue;
+      this.#typing.delete(submission);
+      if (typing.shown) stopped.add(typing.place);
+      this.#sql.run("DELETE FROM bot_working WHERE submission = ?", submission).catch(() => {});
+    }
+    // A steer that came too late for the run that ended goes into the next one: its people still wait.
+    for (const place of stopped) this.#showNewest(place);
+    // Only the last runs matter: a wake is handed over at most a moment after its run ends.
+    for (const submission of this.#ended) {
+      if (this.#ended.size <= 200) break;
+      this.#ended.delete(submission);
+    }
+    this.#showTyping();
+  }
+
+  /**
+   * The agent's message reached a place: the typing there that it answers stops, and the typing of a newer message that
+   * people still wait on stays, until a new message there that people wait on it for.
+   */
+  #answered(place: Address, answers: (typing: Typing) => boolean): void {
+    let any = false;
+    for (const [submission, typing] of this.#typing) {
+      if (typing.place !== place || !typing.shown || !answers(typing)) continue;
+      any = true;
+      this.#typing.delete(submission);
+      this.#sql.run("DELETE FROM bot_working WHERE submission = ?", submission).catch(() => {});
+    }
+    if (any) this.#showNewest(place);
   }
 
   async turnPage(note: string): Promise<{ notesChars: number }> {

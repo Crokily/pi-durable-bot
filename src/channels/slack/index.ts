@@ -5,6 +5,7 @@ import { Readable } from "node:stream";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { createMemoryState } from "@chat-adapter/state-memory";
 import type { SlackEvent } from "@chat-adapter/slack";
+import { LogLevel, WebClient } from "@slack/web-api";
 import { Chat, convertEmojiPlaceholders, defaultEmojiResolver, type Message, stringifyMarkdown } from "chat";
 import type {
   Address,
@@ -142,6 +143,9 @@ class SlackChannel implements ChannelAdapter {
   readonly #apiUrl: string | undefined;
   readonly #requests: SlackRequests;
   #sdk?: GatewaySlackAdapter;
+  /** For typing only: the same transport as the SDK's client, but tried once, and "too many requests" fails at once. */
+  #typingClient?: WebClient;
+  #sink?: ChannelSink;
   #botToken?: string;
   #botUserId?: string;
   readonly #places = new Map<string, { info: PlaceInfo; at: number }>();
@@ -204,12 +208,22 @@ class SlackChannel implements ChannelAdapter {
     const chat = new Chat({ userName: this.#env.botName, adapters: { slack: sdk }, state: createMemoryState(), logger: "warn" });
     await chat.initialize();
     this.#sdk = sdk;
+    this.#sink = sink;
+    this.#typingClient = new WebClient(tokens.SLACK_BOT_TOKEN!, {
+      timeout: this.#requests.timeout,
+      retryConfig: { retries: 0 },
+      rejectRateLimitedCalls: true,
+      logLevel: LogLevel.ERROR,
+      ...(this.#apiUrl ? { slackApiUrl: this.#apiUrl } : {}),
+    });
     this.#botToken = tokens.SLACK_BOT_TOKEN!;
     this.#botUserId = sdk.botUserId;
     if (!this.#botUserId) throw new Error("Slack did not say who the bot is");
   }
 
   async stop(): Promise<void> {
+    this.#typingClient = undefined;
+    this.#sink = undefined;
     await this.#sdk?.disconnect().catch(() => {});
   }
 
@@ -758,6 +772,7 @@ class SlackChannel implements ChannelAdapter {
     const refused = refusal(markdown);
     if (refused) throw new Error(refused);
     const { channel, threadTs } = await this.#target(to);
+    await this.#sink?.sending(this.place(channel));
     const posted = await this.#sdk!.postWithSendId(this.#sdk!.threadIdFor(channel, threadTs), markdown, sendId);
     const response = posted.raw as { channel?: string; message?: SlackMessage };
     const message: SlackMessage = {
@@ -788,47 +803,35 @@ class SlackChannel implements ChannelAdapter {
    * Slack's status line under a thread, "<app> is working…" (assistant.threads.setStatus, which chat:write allows): on
    * the thread of `at`, or on `at` itself when it starts none yet. It lasts 2 minutes, and Slack clears it when the bot
    * replies in that thread; an empty status clears it at once. Slack shows its own words, whatever the status says. A
-   * place alone has no thread, so nothing shows there. Its requests do not go through the SDK's client: they are tried
-   * once, and "too many requests" fails at once, so they never hold up a send in the client's queue.
+   * place alone has no thread, so nothing shows there. Its requests go through a client of their own: they are tried
+   * once, and "too many requests" fails at once, so they never hold up a send in the SDK client's queue.
    */
   readonly working: WorkingSign = {
     every: 90_000,
-    show: (at) => this.#status(at, "is working…"),
+    show: (at, signal) => this.#status(at, "is working…", signal),
     stop: (at) => this.#status(at, ""),
   };
 
   /** The thread of an address, found once: finding it is a request. */
   readonly #statusIn = new Map<Address, { channel: string; threadTs?: string }>();
 
-  async #status(at: Address, status: string): Promise<void> {
+  async #status(at: Address, status: string, signal?: AbortSignal): Promise<void> {
     const parsed = this.#parse(at);
     if (!("channel" in parsed) || !parsed.ts) return;
+    const client = this.#typingClient;
+    if (!client) throw new Error(`channel ${this.id} is not started`);
     let thread = this.#statusIn.get(at);
     if (!thread) {
-      const replies = await this.#once("conversations.replies", { channel: parsed.channel, ts: parsed.ts, limit: "1" });
+      const replies = await client.conversations.replies({ channel: parsed.channel, ts: parsed.ts, limit: 1 });
       const first = (replies.messages as SlackMessage[] | undefined)?.[0];
       thread = { channel: parsed.channel, threadTs: first?.thread_ts ?? parsed.ts };
       if (this.#statusIn.size >= 100) this.#statusIn.delete(this.#statusIn.keys().next().value!);
       this.#statusIn.set(at, thread);
+      // The bot sent there while it looked.
+      if (signal?.aborted) return;
     }
     if (!thread.threadTs) return;
-    await this.#once("assistant.threads.setStatus", { channel_id: thread.channel, thread_ts: thread.threadTs, status });
-  }
-
-  /** One Web API request, outside the SDK's client: tried once, and a "too many requests" fails at once. */
-  async #once(method: string, params: Record<string, string>): Promise<Record<string, unknown>> {
-    if (!this.#botToken) throw new Error(`channel ${this.id} is not started`);
-    const response = await fetch(new URL(method, this.#apiUrl ?? "https://slack.com/api/"), {
-      method: "POST",
-      headers: { authorization: `Bearer ${this.#botToken}`, "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams(params),
-      signal: AbortSignal.timeout(this.#requests.timeout),
-    });
-    if (response.status === 429) throw new Error(`Slack ${method}: too many requests (retry after ${response.headers.get("retry-after") ?? "?"} s)`);
-    const data = (await response.json().catch(() => undefined)) as Record<string, unknown> | undefined;
-    if (!response.ok || !data) throw new Error(`Slack ${method}: HTTP ${response.status}`);
-    if (data.ok !== true) throw new Error(`Slack ${method}: ${String(data.error)}. Slack's answer: ${JSON.stringify(data)}`);
-    return data;
+    await client.assistant.threads.setStatus({ channel_id: thread.channel, thread_ts: thread.threadTs, status });
   }
 
   /** Where a send goes: a place, a thread (any message in it; replies go to its first message), or a person (DM). */
@@ -912,6 +915,9 @@ class SlackChannel implements ChannelAdapter {
     if (Array.isArray(args.file_uploads)) {
       args.file_uploads = await Promise.all(args.file_uploads.map((upload: unknown) => (upload && typeof upload === "object" ? withLocalFiles(upload as Record<string, unknown>) : upload)));
     }
+    // A message the bot posts: the typing there stops first.
+    const posted = method === "chat.postMessage" ? args.channel : method === "files.uploadV2" ? args.channel_id : undefined;
+    if (typeof posted === "string" && /^[CDG][A-Z0-9]+$/.test(posted)) await this.#sink?.sending(this.place(posted));
     if (typeof helper === "function") return helper.call(owner, args);
     return client.apiCall(method, args);
   }

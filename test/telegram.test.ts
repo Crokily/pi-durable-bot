@@ -26,11 +26,13 @@ afterEach(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-function sink(receive: ChannelSink["receive"] = async () => {}, logs: string[] = []): ChannelSink {
+/** sending: told when the adapter is about to post in a place. */
+function sink(receive: ChannelSink["receive"] = async () => {}, logs: string[] = [], sending?: (place: string) => void): ChannelSink {
   return {
     receive,
     newestMessage: async () => undefined,
     logged: async () => [],
+    sending: async (place) => sending?.(place),
     threads: async () => [],
     places: async () => [],
     lastAlive: () => undefined,
@@ -388,6 +390,19 @@ describe("sending", () => {
       expect.objectContaining({ kind: "message", message: "telegram:#111/30", fromMe: true, text: "the chart", files: [expect.objectContaining({ url: "telegram-file:AgAC-large", size: 700 })] }),
     ]);
     expect(await channel.translate(calls[3]!.raw)).toEqual([expect.objectContaining({ kind: "edit", message: "telegram:#111/30", fromMe: true, text: "the new chart" })]);
+  });
+
+  it("says where it posts right before it posts: a send, also to a person, and a message sent with call", async () => {
+    const said: string[] = [];
+    const posts = () => telegram.calls.filter((call) => /^send(?!ChatAction)/.test(call.method)).length;
+    await channel.start(sink(undefined, [], (place) => void said.push(`${place} after ${posts()}`)));
+    await channel.send("telegram:@111", "hi", "s1");
+    await channel.send("telegram:#-100300", "the plan", "s2");
+    telegram.script("sendPhoto", { ok: true, result: { message_id: 30, from: BOT, chat: { id: 111, type: "private" }, date: 1_800_000_000, photo: [] } });
+    await channel.call("sendPhoto", { chat_id: 111, photo: "AgAC-large" });
+    await channel.call("sendChatAction", { chat_id: 111, action: "typing" });
+    await channel.call("pinChatMessage", { chat_id: 111, message_id: 30 });
+    expect(said).toEqual(["telegram:#111 after 0", "telegram:#-100300 after 1", "telegram:#111 after 2"]);
   });
 
   it("gives Telegram's description when it refuses a call, a send or a reaction, and never the token", async () => {

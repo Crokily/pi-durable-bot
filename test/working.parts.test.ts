@@ -221,6 +221,62 @@ describe("typing before a send", () => {
     expect(ready).toBe(true);
     sign.release();
   });
+
+  // Slack: a second send in a thread waited 2 s for the clear of the first, with no show on its way.
+  it("never waits for a stop, and a show that waits behind one when the sign stops does not go", async () => {
+    const calls: string[] = [];
+    let clear = () => {};
+    const sign: WorkingSign = {
+      every: 90_000,
+      show: async (at, signal) => void calls.push(`show ${at}${signal?.aborted ? " (stopped)" : ""}`),
+      stop: (at) => {
+        calls.push(`stop ${at}`);
+        return new Promise<void>((resolve) => (clear = resolve));
+      },
+    };
+    const { shown } = working(sign);
+    shown.start("p:#a", "p:#a/1");
+    await vi.advanceTimersByTimeAsync(0);
+    let ready = false;
+    void shown.beforeSend("p:#a").then(() => void (ready = true));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ready).toBe(true);
+    // The clear is still on its way: the second send does not wait for it.
+    ready = false;
+    void shown.beforeSend("p:#a").then(() => void (ready = true));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ready).toBe(true);
+    // A new message there: its show waits behind the clear. A send now stops it, and does not wait.
+    shown.start("p:#a", "p:#a/2");
+    ready = false;
+    void shown.beforeSend("p:#a").then(() => void (ready = true));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ready).toBe(true);
+    clear();
+    await vi.advanceTimersByTimeAsync(100_000);
+    // No show of p:#a/2; its clear changes nothing.
+    expect(calls).toEqual(["show p:#a/1", "stop p:#a/1", "stop p:#a/2"]);
+  });
+
+  it("aborts the signal of a show on its way when the sign stops, so a show that first looks something up can drop", async () => {
+    let signal: AbortSignal | undefined;
+    let looked = () => {};
+    const sign: WorkingSign = {
+      every: 8_000,
+      show: async (_at, given) => {
+        signal = given;
+        await new Promise<void>((resolve) => (looked = resolve));
+      },
+    };
+    const { shown } = working(sign);
+    shown.start("p:#a", "p:#a/1");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(signal?.aborted).toBe(false);
+    const before = shown.beforeSend("p:#a");
+    expect(signal?.aborted).toBe(true);
+    looked();
+    await before;
+  });
 });
 
 describe("typing of a bot that stops", () => {

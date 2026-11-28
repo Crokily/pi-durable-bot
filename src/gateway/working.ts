@@ -14,6 +14,8 @@ interface Shown {
   cap: NodeJS.Timeout;
   /** A show is on its way; the next one waits for the one after it. */
   showing: boolean;
+  /** Aborts when the sign stops. */
+  readonly stopped: AbortController;
 }
 
 /**
@@ -29,6 +31,8 @@ export class Working {
   readonly #shown = new Map<Address, Shown>();
   /** Per place, the platform's last call. */
   readonly #calls = new Map<Address, Promise<void>>();
+  /** Per place, the show that has gone to the platform and not come back yet. */
+  readonly #shows = new Map<Address, Promise<void>>();
   #closed = false;
 
   constructor(options: { sign: (at: Address) => WorkingSign | undefined; print: Print; capMs?: number }) {
@@ -57,7 +61,24 @@ export class Working {
     const show = () => {
       if (shown.showing) return;
       shown.showing = true;
-      this.#call(place, () => sign.show(at)).then(
+      const { signal } = shown.stopped;
+      // A show still waiting for the call before it when the sign stops does not go, and a send does not wait for it.
+      const waits = this.#calls.has(place);
+      let done!: () => void;
+      const tracked = new Promise<void>((resolve) => (done = resolve));
+      this.#shows.set(place, tracked);
+      void tracked.then(() => {
+        if (this.#shows.get(place) === tracked) this.#shows.delete(place);
+      });
+      let started = false;
+      if (waits) signal.addEventListener("abort", () => started || done(), { once: true });
+      const call = this.#call(place, () => {
+        if (waits && signal.aborted) return Promise.resolve();
+        started = true;
+        return sign.show(at, signal);
+      });
+      call.then(done, done);
+      call.then(
         () => void (shown.showing = false),
         (error: unknown) => {
           shown.showing = false;
@@ -69,7 +90,7 @@ export class Working {
     };
     const repeat = setInterval(show, Math.max(1_000, sign.every));
     repeat.unref();
-    const shown: Shown = { at, sign, repeat, cap: this.#capTimer(place, left), showing: false };
+    const shown: Shown = { at, sign, repeat, cap: this.#capTimer(place, left), showing: false, stopped: new AbortController() };
     this.#shown.set(place, shown);
     show();
   }
@@ -87,10 +108,10 @@ export class Working {
   /**
    * The bot is about to send to a place: the sign there stops, and this waits for a show that is already on its way, at
    * most `waitMs`, so it does not reach the platform after the message and show the sign again under it. Without such
-   * a show, it does not wait.
+   * a show, it does not wait; nor for a stop.
    */
   async beforeSend(place: Address, waitMs = SHOW_WAIT_MS): Promise<void> {
-    const before = this.#calls.get(place);
+    const before = this.#shows.get(place);
     this.stop(place);
     if (!before) return;
     let timer: NodeJS.Timeout | undefined;
@@ -130,6 +151,7 @@ export class Working {
   #end(place: Address, shown: Shown): void {
     clearInterval(shown.repeat);
     clearTimeout(shown.cap);
+    shown.stopped.abort();
     this.#shown.delete(place);
   }
 

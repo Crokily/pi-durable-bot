@@ -94,6 +94,8 @@ export interface WakeTarget {
    * this place, at this time (Unix ms, the platform's).
    */
   ownMessage?(place: Address, at: number): void;
+  /** The bot is about to post a message in this place (see ChannelSink.sending). */
+  beforeSend?(place: Address): Promise<void>;
   /** What the bot is responsible for, for the judge. */
   responsibilities(): Promise<string>;
   /** The bot's name, for the judge. */

@@ -193,6 +193,7 @@ export class DiscordChannel implements ChannelAdapter {
   #client?: Client;
   /** For typing only: tried once, and a rate limit fails at once, apart from the client's REST and its waits for sends. */
   #typingRest?: REST;
+  #sink?: ChannelSink;
   #botUserId?: string;
   /** The gateway session, for event IDs: a dispatch is unique by its session and sequence number. */
   #session?: string;
@@ -264,7 +265,7 @@ export class DiscordChannel implements ChannelAdapter {
     client.on(Events.ShardError, (error) => sink.log("gateway error", { error: String(error) }));
     client.on(Events.ShardDisconnect, (event) => sink.log("Discord closed the gateway, and it will not reconnect", { code: event.code }));
     this.#client = client;
-    this.#typingRest = new REST({ api: this.#api, retries: 0, rejectOnRateLimit: () => true, hashSweepInterval: 0, handlerSweepInterval: 0 }).setToken(token!);
+    this.#sink = sink;
     this.#readies = 0;
     try {
       await client.login(token);
@@ -274,6 +275,8 @@ export class DiscordChannel implements ChannelAdapter {
       }
       throw error;
     }
+    // The token as login() made it, without a "Bot " prefix: the REST client adds its own.
+    this.#typingRest = new REST({ api: this.#api, retries: 0, rejectOnRateLimit: () => true, hashSweepInterval: 0, handlerSweepInterval: 0 }).setToken(client.token ?? token!);
     this.#botUserId ??= client.user?.id;
     if (!this.#botUserId) throw new Error("Discord did not say who the bot is");
   }
@@ -283,6 +286,7 @@ export class DiscordChannel implements ChannelAdapter {
     const client = this.#client;
     this.#client = undefined;
     this.#typingRest = undefined;
+    this.#sink = undefined;
     await client?.destroy().catch(() => {});
     this.#running.abort();
     await this.#storing;
@@ -808,10 +812,10 @@ export class DiscordChannel implements ChannelAdapter {
    * Where a channel's messages are: in the channel itself, or in a thread, whose place is its parent channel. The
    * parent stored with the event comes first, then the channel type the event gives, then the cache or Discord.
    */
-  async #locate(channelId: string, type?: number, parent?: string): Promise<{ place: string; thread?: string }> {
+  async #locate(channelId: string, type?: number, parent?: string, rest = this.#rest): Promise<{ place: string; thread?: string }> {
     if (parent) return { place: parent, thread: channelId };
     if (type !== undefined && !THREADS.has(type)) return { place: channelId };
-    const channel = await this.#channel(channelId).catch(() => undefined);
+    const channel = await this.#channel(channelId, rest).catch(() => undefined);
     if (channel && THREADS.has(channel.type) && channel.parent_id) return { place: channel.parent_id, thread: channel.id };
     return { place: channelId };
   }
@@ -853,10 +857,10 @@ export class DiscordChannel implements ChannelAdapter {
     }
   }
 
-  async #channel(id: string): Promise<ApiChannel> {
+  async #channel(id: string, rest = this.#rest): Promise<ApiChannel> {
     const cached = this.#channels.get(id);
     if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.channel;
-    return this.#remember((await this.#rest.get(`/channels/${id}`)) as ApiChannel);
+    return this.#remember((await rest.get(`/channels/${id}`)) as ApiChannel);
   }
 
   #remember(channel: ApiChannel): ApiChannel {
@@ -1012,6 +1016,7 @@ export class DiscordChannel implements ChannelAdapter {
     const refused = refusal(content);
     if (refused) throw new Error(refused);
     const target = await this.#target(to);
+    await this.#sink?.sending(this.place(target.place));
     const message = (await this.#rest.post(`/channels/${target.thread ?? target.place}/messages`, {
       body: {
         content,
@@ -1028,21 +1033,25 @@ export class DiscordChannel implements ChannelAdapter {
    * Discord's "<bot> is typing…" line, in the channel or thread of `at`. It lasts 10 seconds; Discord has no call to
    * stop it, so it fades. Not tried again: a rate limit fails at once, and never makes a send wait.
    */
-  readonly working: WorkingSign = { every: 8_000, show: (at) => explained(this.#typing(at)) };
+  readonly working: WorkingSign = { every: 8_000, show: (at, signal) => explained(this.#typing(at, signal)) };
 
   /** Where typing shows for an address, found once: finding a message's thread is a request. */
   readonly #typingIn = new Map<Address, string>();
 
-  async #typing(at: Address): Promise<void> {
+  async #typing(at: Address, signal?: AbortSignal): Promise<void> {
+    const rest = this.#typingRest;
+    if (!rest) throw new Error(`channel ${this.id} is not started`);
     let channel = this.#typingIn.get(at);
     if (!channel) {
-      const target = await this.#target(at);
+      // Also its lookups are tried once, and never wait in the queue of the client that sends.
+      const target = await this.#target(at, rest);
       channel = target.thread ?? target.place;
       if (this.#typingIn.size >= 100) this.#typingIn.delete(this.#typingIn.keys().next().value!);
       this.#typingIn.set(at, channel);
+      // The bot sent there while it looked: typing now would show under the message.
+      if (signal?.aborted) return;
     }
-    if (!this.#typingRest) throw new Error(`channel ${this.id} is not started`);
-    await this.#typingRest.post(`/channels/${channel}/typing`);
+    await rest.post(`/channels/${channel}/typing`);
   }
 
   /** Discord's API does not give nonces back when it lists messages, so a sent message cannot be found by its send ID. */
@@ -1055,29 +1064,29 @@ export class DiscordChannel implements ChannelAdapter {
    * or in its thread. A thread's first message (the thread's address): post in the thread, as a reply only when that
    * message is in the thread (a forum post); a message that has no thread gets a reply in its channel.
    */
-  async #target(to: Address): Promise<{ place: string; thread?: string; reply?: string }> {
+  async #target(to: Address, rest = this.#rest): Promise<{ place: string; thread?: string; reply?: string }> {
     const parsed = this.#parse(to);
     if ("user" in parsed) {
       let dm = this.#dms.get(parsed.user);
       if (!dm) {
-        dm = this.#remember((await this.#rest.post("/users/@me/channels", { body: { recipient_id: parsed.user } })) as ApiChannel).id;
+        dm = this.#remember((await rest.post("/users/@me/channels", { body: { recipient_id: parsed.user } })) as ApiChannel).id;
         this.#dms.set(parsed.user, dm);
       }
       return { place: dm };
     }
-    if (!parsed.message) return this.#locate(parsed.channel);
+    if (!parsed.message) return this.#locate(parsed.channel, undefined, undefined, rest);
     if (parsed.thread) return { place: parsed.channel, thread: parsed.thread, reply: parsed.message };
-    const channel = await this.#channel(parsed.channel);
+    const channel = await this.#channel(parsed.channel, rest);
     if (channel.type === DM || channel.type === GROUP_DM) return { place: parsed.channel, reply: parsed.message };
-    const thread = await this.#threadOf(parsed.message);
+    const thread = await this.#threadOf(parsed.message, rest);
     if (thread?.parent_id === parsed.channel) return { place: parsed.channel, thread: thread.id, ...(FORUMS.has(channel.type) ? { reply: thread.id } : {}) };
     return { place: parsed.channel, reply: parsed.message };
   }
 
   /** The thread with this ID, if there is one the bot can see. */
-  async #threadOf(id: string): Promise<ApiChannel | undefined> {
+  async #threadOf(id: string, rest = this.#rest): Promise<ApiChannel | undefined> {
     try {
-      const channel = await this.#channel(id);
+      const channel = await this.#channel(id, rest);
       return THREADS.has(channel.type) ? channel : undefined;
     } catch (error) {
       if (error instanceof DiscordAPIError && (error.status === 404 || error.status === 403)) return undefined;
@@ -1136,6 +1145,9 @@ export class DiscordChannel implements ChannelAdapter {
       result = await this.#rest.request({ ...request, ...(query.size ? { query } : {}) });
     } else {
       const files = typeof file === "string" ? [{ name: basename(file), data: await readFile(expandHome(file)) }] : undefined;
+      // A message the bot posts: the typing there stops first.
+      const posted = verb === "POST" ? /^\/channels\/(\d+)\/messages$/.exec(request.fullRoute)?.[1] : undefined;
+      if (posted) await this.#sink?.sending(this.place((await this.#locate(posted).catch(() => ({ place: posted }))).place));
       result = await this.#rest.request({ ...request, body, ...(files ? { files } : {}) });
     }
     // An answer with no content (204).

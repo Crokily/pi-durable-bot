@@ -17,7 +17,9 @@ const isChild = (request: FakeRequest) => request.system.includes("You are a chi
  * The main agent answers a wake in its place, except: "stay quiet" (no send); "wait for go" (it waits until the file go
  * is in its workspace, then answers); "send first" (it answers, then waits for go); "research and tell" (a child that
  * wakes it with pots wake, whose note it passes on); "research slowly" (the same, but the child waits for go first);
- * "answer natively" (it posts with call, not send, then waits for go).
+ * "research twice" (the same, but on the first report it starts a second child, whose report it passes on);
+ * "answer natively" (it posts with call, not send, then waits for go). "write to me" with "wait for go": the reply goes
+ * to alice, the person, not to the place.
  */
 function script(request: FakeRequest): FakeReply {
   if (isJudge(request)) {
@@ -30,7 +32,8 @@ function script(request: FakeRequest): FakeReply {
   if (isChild(request)) {
     const slow = request.messages.some((message) => message.role === "user" && message.content.includes("wait for go first"));
     const wait = slow ? "until [ -e go ]; do sleep 0.2; done; " : "";
-    if (last?.role === "user") return { call: { name: "bash", arguments: { command: `${wait}pots wake --note "the answer is 42"` } } };
+    const again = request.messages.some((message) => message.role === "user" && message.content.includes("look again"));
+    if (last?.role === "user") return { call: { name: "bash", arguments: { command: `${wait}pots wake --note "the answer is ${again ? 43 : 42}"` } } };
     return { text: "told the main agent" };
   }
   const wake = request.messages.findLast((message) => message.role === "user" && message.content.startsWith("[wake]"))?.content ?? "";
@@ -42,7 +45,8 @@ function script(request: FakeRequest): FakeReply {
   if (last?.role === "user" && last.content.includes("stay quiet")) return { text: "nothing to say" };
   if (wake.includes("wait for go")) {
     if (!went) return last?.role === "tool" && !last.content.includes("went") ? { text: "waiting" } : waitForGo;
-    return sent === 0 ? { call: { name: "send", arguments: { to: place, text: "done" } } } : { text: "done" };
+    const to = wake.includes("write to me") ? "test:@alice" : place;
+    return sent === 0 ? { call: { name: "send", arguments: { to, text: "done" } } } : { text: "done" };
   }
   if (wake.includes("answer natively")) {
     const posted = request.messages.some((message) => message.toolCalls?.includes("call"));
@@ -54,12 +58,16 @@ function script(request: FakeRequest): FakeReply {
     return went ? { text: "done" } : waitForGo;
   }
   if (last?.role !== "user") return { text: "done" };
+  const twice = request.messages.some((message) => message.role === "user" && message.content.includes("research twice"));
+  if (wake.startsWith("[wake] wake from your child") && twice && wake.includes("the answer is 42")) {
+    return { call: { name: "task", arguments: { action: "start", title: "research again", brief: "look again, then tell" } } };
+  }
   if (wake.startsWith("[wake] wake from your child")) {
     return { call: { name: "send", arguments: { to: "test:#general", text: `report: ${/^Note: (.*)/m.exec(wake)?.[1] ?? "?"}` } } };
   }
   if (wake.includes("stay quiet")) return { text: "nothing to say" };
   if (wake.includes("research slowly")) return { call: { name: "task", arguments: { action: "start", title: "research", brief: "wait for go first, then find it and tell" } } };
-  if (wake.includes("research and tell")) return { call: { name: "task", arguments: { action: "start", title: "research", brief: "find it and tell" } } };
+  if (wake.includes("research and tell") || wake.includes("research twice")) return { call: { name: "task", arguments: { action: "start", title: "research", brief: "find it and tell" } } };
   return { call: { name: "send", arguments: { to: place, text: `ack: ${wakeLine(wake)}` } } };
 }
 
@@ -203,10 +211,38 @@ describe("typing while the bot works", { timeout: 60_000 }, () => {
     const id = gateway.say("general", "alice", `@${ME} please answer natively`);
     await waitFor(() => gateway.sent().length === 1 && stopped(), { what: "the post and the stop" });
     expect(steps()).toEqual([`show test:#general/${id}`, `stop test:#general/${id}`]);
+    // The channel stopped the typing right before it posted.
+    expect(signs().find((sign) => sign.type === "stop")!.at).toBeLessThanOrEqual(gateway.sent()[0]!.at);
     await pause(2_000);
     expect(steps()).toHaveLength(2);
     expect(gateway.output.some((line) => line.message === "agent idle")).toBe(false);
     go();
+  });
+
+  it("stops before a reply sent to the person, not to the place, as before one sent to the place", async () => {
+    await setUp();
+    const dm = gateway.say("dm-alice", "alice", "please wait for go, then write to me");
+    await waitFor(() => signs().length >= 2, { what: "the sign, shown again" });
+    go();
+    await waitFor(() => gateway.sent().length === 1 && stopped(), { what: "the reply and the stop" });
+    const reply = gateway.sent()[0]!;
+    expect(reply.place).toBe("dm-alice");
+    expect(steps()).toEqual([`show test:#dm-alice/${dm}`, `stop test:#dm-alice/${dm}`]);
+    expect(signs().find((sign) => sign.type === "stop")!.at).toBeLessThanOrEqual(reply.at);
+  });
+
+  // Telegram gives times to the second: an older message of the bot's can have the same time as the mention.
+  it("goes on when an old message of the bot's with the same time as the mention comes into the log late", async () => {
+    await setUp();
+    const id = gateway.say("general", "alice", `@${ME} please wait for go`);
+    await waitFor(() => signs().length >= 1, { what: "the sign" });
+    const at = gateway.records().find((record) => record.id === id)!.at;
+    appendFileSync(platformFile(gateway.platformDir), `${JSON.stringify({ id: `m-${randomUUID()}`, at, type: "message", place: "general", person: ME, text: "an old answer" })}\n`);
+    await waitFor(() => gateway.query("SELECT 1 FROM gw_messages WHERE text = 'an old answer'").length === 1, { what: "the old message in the log" });
+    await pause(2_000);
+    expect(steps()).toEqual([`show test:#general/${id}`]);
+    go();
+    await waitFor(() => gateway.sent().length === 2 && stopped(), { what: "the reply" });
   });
 
   it("goes on when an old message of the bot's comes into the log late, as a replay does", async () => {
@@ -243,6 +279,14 @@ describe("typing while the bot works", { timeout: 60_000 }, () => {
       `show test:#general/${first}`,
       `stop test:#general/${first}`,
     ]);
+  });
+
+  it("keeps the message for a child that the bot starts when an earlier child's report wakes it", async () => {
+    await setUp();
+    const id = gateway.say("general", "alice", `@${ME} please research twice`);
+    await waitFor(() => gateway.sent().some((record) => record.text === "report: the answer is 43") && stopped() && steps().length >= 6, { what: "the second report" });
+    // Each wake, also the second child's, shows on the message, never on the bare place.
+    expect(steps()).toEqual(Array.from({ length: 3 }, () => [`show test:#general/${id}`, `stop test:#general/${id}`]).flat());
   });
 
   it("does not hold up the reply when the platform refuses, and says so once", async () => {

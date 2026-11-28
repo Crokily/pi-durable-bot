@@ -207,6 +207,8 @@ export class Bot implements WakeTarget {
   readonly #ended = new Set<string>();
   /** The inputs of the run the typing follows. */
   #typingRun: readonly string[];
+  /** Per place, when the bot last began to post there (Unix ms, this computer's). */
+  readonly #postedAt = new Map<Address, number>();
 
   private constructor(init: {
     id: string;
@@ -697,7 +699,7 @@ export class Bot implements WakeTarget {
     // A wake a child set from its own commands, which have its ID in POTS_CHILD.
     const child = timer.set_by === "agent" && timer.child !== null ? this.#agent.children.find((each) => each.id === timer.child) : undefined;
     const text = renderTimerWake(timer, await this.#agent.contextStatus(), children, child);
-    const delivered = await this.#submit(`timer:${timer.id}`, timer.set_by === "agent" ? "timer" : timer.set_by, child?.place, text, false, caller);
+    const delivered = await this.#submit(`timer:${timer.id}`, timer.set_by === "agent" ? "timer" : timer.set_by, child?.place, text, false, caller, child?.at);
     // A child that works for a place woke the agent: the people there see it typing, where the child was started.
     if (child?.place) await this.#wantTyping(delivered.submission, child.place, child.at ?? child.place, Date.now());
     return delivered;
@@ -712,7 +714,7 @@ export class Bot implements WakeTarget {
     const text = renderChildFailure(failure, await this.#agent.contextStatus());
     const place = failure.child.place;
     const delivered = await this.#gateway.wake({ reason: "child", child: failure.child.id, ...(place ? { place } : {}) }, (caller) =>
-      this.#submit(id, "child", place, text, false, caller),
+      this.#submit(id, "child", place, text, false, caller, failure.child.at),
     );
     if (place) await this.#wantTyping(delivered.submission, place, failure.child.at ?? place, Date.now());
     return delivered.submission;
@@ -788,10 +790,7 @@ export class Bot implements WakeTarget {
 
   /** trace: the agent's tool call, when the action comes from one. */
   async send(to: Address, text: string, sendId: string, trace?: TelemetrySpan) {
-    // The typing there stops before the message goes out, so it does not show again under the message.
     const started = Date.now();
-    const place = this.#placeOf(to);
-    if (place) await this.#working.beforeSend(place);
     // The wakes the agent works on now: the send links to them.
     const sent = await this.#gateway.send(sendId, to, text, this.#agent.runInputs ?? [], trace);
     this.#touch(sent.place);
@@ -799,17 +798,23 @@ export class Bot implements WakeTarget {
     return sent;
   }
 
-  /** A message of the agent's reached the log, sent by any way: it answers the typing of the messages before it there. */
-  ownMessage(place: Address, at: number): void {
-    this.#answered(place, (typing) => typing.eventAt <= at);
+  /**
+   * The channel is about to post a message of the bot's in a place, for a send or a platform call: the typing there
+   * stops first, so it does not show again under the message.
+   */
+  async beforeSend(place: Address): Promise<void> {
+    this.#postedAt.set(place, Date.now());
+    await this.#working.beforeSend(place);
   }
 
-  #placeOf(address: Address): Address | undefined {
-    try {
-      return this.#gateway.adapterFor(address).placeOf(address);
-    } catch {
-      return undefined;
-    }
+  /**
+   * A message of the agent's reached the log, sent by any way: it answers the typing there of the messages before it,
+   * by the platform's time, and the typing that showed when the bot last began to post there. A message of the same
+   * time (Telegram's are to the second) does not count as after: it can be an older message that came late.
+   */
+  ownMessage(place: Address, at: number): void {
+    const posted = this.#postedAt.get(place) ?? -Infinity;
+    this.#answered(place, (typing) => typing.eventAt < at || typing.wanted <= posted);
   }
 
   async react(message: Address, emoji: string, remove: boolean, trace?: TelemetrySpan): Promise<void> {

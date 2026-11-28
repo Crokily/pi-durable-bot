@@ -518,6 +518,7 @@ class TelegramChannel implements ChannelAdapter {
       ...(target.topic ? { message_thread_id: target.topic } : {}),
       ...(target.reply ? { reply_parameters: { message_id: target.reply, ...(target.anyway ? { allow_sending_without_reply: true } : {}) } } : {}),
     };
+    await this.#sink?.sending(this.place(target.chat));
     let sent: TgMessage;
     try {
       try {
@@ -700,7 +701,11 @@ class TelegramChannel implements ChannelAdapter {
    * bot's own, as Discord and Slack send theirs back; a store that fails is logged, and the call still succeeds.
    */
   async call(method: string, params: Record<string, unknown>): Promise<unknown> {
-    const result = await this.#api(method, await withUploads(params));
+    const uploads = await withUploads(params);
+    // A message the bot posts: the typing there stops first.
+    const chat = /^send(?!ChatAction)/.test(method) ? String(params.chat_id ?? "") : "";
+    if (/^-?\d+$/.test(chat)) await this.#sink?.sending(this.place(chat));
+    const result = await this.#api(method, uploads);
     const isOwn = (value: unknown): value is TgMessage => {
       const m = value as TgMessage | undefined;
       return typeof m?.message_id === "number" && m.chat !== undefined && m.from?.id === this.#bot?.id;

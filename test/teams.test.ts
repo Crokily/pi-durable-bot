@@ -58,7 +58,8 @@ const inChannel = (fields: Record<string, unknown> = {}, root = "1731800000001")
 const inDm = (fields: Record<string, unknown> = {}) => activity({ conversation: { id: DM, conversationType: "personal", tenantId: TENANT }, ...fields });
 
 /** A sink like the gateway's: it drops a known event ID, and keeps raws as JSON, as the inbox does. */
-function memorySink(options: { lastAlive?: number; newest?: Record<string, string>; places?: string[]; fail?: (id: string) => boolean; delay?: Promise<void> } = {}) {
+/** sending: told when the adapter is about to post in a place. */
+function memorySink(options: { lastAlive?: number; newest?: Record<string, string>; places?: string[]; fail?: (id: string) => boolean; delay?: Promise<void>; sending?: (place: string) => void } = {}) {
   const events: { id: string; raw: any }[] = [];
   const logs: string[] = [];
   const sink: ChannelSink = {
@@ -69,6 +70,7 @@ function memorySink(options: { lastAlive?: number; newest?: Record<string, strin
     },
     newestMessage: async (place) => options.newest?.[place],
     logged: async () => [],
+    sending: async (place) => options.sending?.(place),
     threads: async () => [],
     places: async () => options.places ?? [],
     lastAlive: () => options.lastAlive,
@@ -531,6 +533,23 @@ describe("Teams: sending", () => {
     expect(own).toMatchObject({ kind: "message", fromMe: true, message: `teams:#${CHAT}/1731800000300` });
     await expect(channel.call("GET /conversations", {})).rejects.toThrow(/starts with \/v3\//);
     await expect(channel.call("teams.send", {})).rejects.toThrow(/call takes/);
+  });
+
+  // Codex's review: a direct reply (POST …/activities/<ID>) was not stored, so the typing it answers went on.
+  it("call: stores a message posted as a direct reply as the bot's own, a reply to that activity, and says where it posts first", async () => {
+    const said: string[] = [];
+    let fake!: Awaited<ReturnType<typeof connect>>["fake"];
+    const connected = await connect({ sending: (place) => void said.push(`${place} after ${fake.requested("POST", "/teams/v3/.*").length}`) });
+    fake = connected.fake;
+    fake.route("POST", "/teams/v3/conversations/([^/]+)/activities/([^/]+)", () => ({ id: "1731800000400" }));
+    await connected.channel.call(`POST /v3/conversations/${CHAT}/activities/1731800000100`, { type: "message", text: "a reply" });
+    // Typing is no message: not stored, and nothing said.
+    await connected.channel.call(`POST /v3/conversations/${CHAT}/activities/1731800000100`, { type: "typing" });
+    expect(connected.events.map((event) => event.id)).toEqual([`sent:${CHAT}/1731800000400`]);
+    expect(connected.events[0]!.raw.activity).toMatchObject({ id: "1731800000400", replyToId: "1731800000100", text: "a reply" });
+    const [own] = await translated(connected.channel, connected.events);
+    expect(own).toMatchObject({ kind: "message", fromMe: true, message: `teams:#${CHAT}/1731800000400` });
+    expect(said).toEqual([`teams:#${CHAT} after 0`]);
   });
 });
 

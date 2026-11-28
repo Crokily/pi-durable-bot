@@ -147,7 +147,8 @@ export class FakeDiscord {
       for (const route of this.#routes) {
         const match = route.method === recorded.method ? route.path.exec(raw) : null;
         if (match) {
-          answer = route.answer(recorded, match);
+          // An answer can be a promise: a slow Discord.
+          answer = await route.answer(recorded, match);
           break;
         }
       }

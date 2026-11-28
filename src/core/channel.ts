@@ -117,6 +117,11 @@ export interface ChannelSink {
   formOpened(id: string, opening: FormOpening): Promise<void>;
   /** What a form opened for, by the adapter's ID, also after a restart; undefined when unknown. */
   formOpening(id: string): Promise<FormOpening | undefined>;
+  /**
+   * The bot is about to post a message in this place, by a send or a platform call: called once the destination is
+   * known, right before the post. It resolves when the post may go (at most a few seconds); it never fails.
+   */
+  sending(place: Address): Promise<void>;
   log(message: string, data?: Record<string, unknown>): void;
 }
 
@@ -175,9 +180,10 @@ export interface WorkingSign {
   readonly every: number;
   /**
    * Show the sign where `at` is: the message that woke the bot, the thread it is in, or the place. A failure (no
-   * permission, a rate limit) stops the sign there until the next message that wakes the bot.
+   * permission, a rate limit) stops the sign there until the next message that wakes the bot. `signal` aborts once
+   * the sign stops there: a show that first had to look something up then shows nothing.
    */
-  show(at: Address): Promise<void>;
+  show(at: Address, signal?: AbortSignal): Promise<void>;
   /** Take the sign away at once. Without it, the sign fades by itself. */
   stop?(at: Address): Promise<void>;
 }

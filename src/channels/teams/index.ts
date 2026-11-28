@@ -981,6 +981,7 @@ export class TeamsChannel implements ChannelAdapter {
     const target = await this.#target(to);
     const activity: Activity = { type: "message", text: content, textFormat: "markdown", ...(entities.length ? { entities } : {}) };
     const conversationId = target.root ? `${target.conversation};messageid=${target.root}` : target.conversation;
+    await this.#sink?.sending(this.place(target.conversation));
     const answer = (await this.#fetch("bot", "POST", `${this.#serviceUrl(target.conversation)}/v3/conversations/${conversationId}/activities`, activity)) as { id?: string };
     if (!answer?.id) throw new Error("Teams took the message but gave no ID");
     const sent: Activity = { ...activity, id: answer.id, conversation: { id: conversationId }, ...(this.#botId ? { from: { id: this.#botId, name: this.#env.botName } } : {}), timestamp: new Date().toISOString() };
@@ -1110,7 +1111,8 @@ export class TeamsChannel implements ChannelAdapter {
    * A request with the bot's token. method is "<HTTP method> <path>": a path of Teams' Bot Connector API (/v3/…), at
    * the service URL of the conversation in it; or "graph:<HTTP method> <path>" for Microsoft Graph, with the app's own
    * token (what the app's resource-specific permissions allow). params are the query for GET and DELETE, and the JSON
-   * body for the others. A message posted with POST /v3/conversations/<ID>/activities is stored as the bot's own.
+   * body for the others. A message posted with POST /v3/conversations/<ID>/activities, or as a reply with POST
+   * /v3/conversations/<ID>/activities/<activity ID>, is stored as the bot's own.
    */
   async call(method: string, params: Record<string, unknown>): Promise<unknown> {
     const match = /^(graph:)?(GET|POST|PUT|PATCH|DELETE) (\/\S+)$/.exec(method.trim());
@@ -1124,11 +1126,20 @@ export class TeamsChannel implements ChannelAdapter {
     }
     if (!path.startsWith("/v3/")) throw new Error(`a Teams path starts with /v3/, for example /v3/conversations/<ID>/activities; for Microsoft Graph, use "graph:${verb} ${path}"`);
     const conversation = /^\/v3\/conversations\/([^/;]+)/.exec(path)?.[1];
+    const [, posted, replied] = (verb === "POST" && (body?.type === undefined || body.type === "message") && /^\/v3\/conversations\/([^/]+)\/activities(?:\/([^/]+))?$/.exec(path)) || [];
+    // A message the bot posts: the typing there stops first.
+    if (posted && conversation) await this.#sink?.sending(this.place(conversation));
     const result = await this.#fetch("bot", verb, `${this.#serviceUrl(conversation)}${path}${query?.size ? `?${query}` : ""}`, body);
-    const posted = /^\/v3\/conversations\/([^/]+)\/activities$/.exec(path)?.[1];
     const id = (result as { id?: unknown } | null)?.id;
-    if (verb === "POST" && posted && typeof id === "string" && (body?.type === undefined || body.type === "message")) {
-      const activity = { ...body, id, conversation: { id: posted }, ...(this.#botId ? { from: { id: this.#botId, name: this.#env.botName } } : {}), timestamp: new Date().toISOString() };
+    if (posted && typeof id === "string") {
+      const activity = {
+        ...body,
+        id,
+        conversation: { id: posted },
+        ...(replied ? { replyToId: replied } : {}),
+        ...(this.#botId ? { from: { id: this.#botId, name: this.#env.botName } } : {}),
+        timestamp: new Date().toISOString(),
+      };
       await this.#sink?.receive(`sent:${messageKey(whereOf(activity)!, id)}`, { source: "sent", activity } satisfies Raw).catch((error: unknown) => this.#sink?.log("sent message not stored", { error: String(error) }));
     }
     return result;

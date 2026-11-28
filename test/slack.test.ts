@@ -38,7 +38,7 @@ const formStore = (): FormStore => ({ forms: new Map(), openings: new Map() });
 /** A sink like the gateway's: it drops a known event ID, and keeps raws as JSON, as the inbox does. */
 /** fail: the receive of this event ID fails while it returns true. newest: the newest logged message of each place. */
 function memorySink(
-  options: { lastAlive?: number; newest?: Record<string, string>; threads?: Record<string, string[]>; fail?: (id: string) => boolean; store?: FormStore } = {},
+  options: { lastAlive?: number; newest?: Record<string, string>; threads?: Record<string, string[]>; fail?: (id: string) => boolean; store?: FormStore; sending?: (place: string) => void } = {},
 ) {
   const events: { id: string; raw: any }[] = [];
   const logs: string[] = [];
@@ -50,6 +50,7 @@ function memorySink(
     },
     newestMessage: async (place) => options.newest?.[place],
     logged: async () => [],
+    sending: async (place) => options.sending?.(place),
     threads: async (place) => options.threads?.[place] ?? [],
     places: async () => Object.keys(options.newest ?? {}),
     lastAlive: () => options.lastAlive,
@@ -950,6 +951,8 @@ describe("Slack typing", () => {
       status("1793080262.000100", "is working…"),
     ]);
     expect(fake.called("conversations.replies")).toHaveLength(2);
+    // Through a Slack client of its own, with the bot token.
+    expect(fake.called("assistant.threads.setStatus").map((call) => call.auth)).toEqual(Array(4).fill(`Bearer ${BOT_TOKEN}`));
     fake.route("assistant.threads.setStatus", () => ({ ok: false, error: "missing_scope" }));
     await expect(working.show("slack:#C0GENERAL/1793080262.000100")).rejects.toThrow("missing_scope");
   });
@@ -963,13 +966,24 @@ describe("Slack typing", () => {
     const started = Date.now();
     const shown = working.show(`slack:#C0GENERAL/${TS}`);
     const sent = channel.send("slack:#C0GENERAL", "the plan", "tool:1");
-    await expect(shown).rejects.toThrow(/too many requests \(retry after 1 s\)/);
+    await expect(shown).rejects.toThrow(/rate-limit .* 1 second/);
     await sent;
     expect(Date.now() - started).toBeLessThan(800);
     expect(fake.called("assistant.threads.setStatus")).toHaveLength(1);
     // The thread lookup too: tried once.
     fake.fail("conversations.replies", 429, 1, 1);
-    await expect(working.show("slack:#C0GENERAL/1793080299.000100")).rejects.toThrow("too many requests");
+    await expect(working.show("slack:#C0GENERAL/1793080299.000100")).rejects.toThrow("rate-limit");
     expect(fake.called("conversations.replies").filter((call) => call.params.ts === "1793080299.000100")).toHaveLength(1);
+  });
+  it("says where it posts right before it posts: a send, also to a person, and a message posted with call", async () => {
+    const said: string[] = [];
+    let fake!: FakeSlack;
+    const connected = await connect({ sending: (place) => void said.push(`${place} after ${fake.called("chat.postMessage").length}`) });
+    fake = connected.fake;
+    await connected.channel.send("slack:@U0ALICE", "psst", "tool:1");
+    await connected.channel.send("slack:#C0GENERAL", "the plan", "tool:2");
+    await connected.channel.call("chat.postMessage", { channel: GENERAL.id, text: "a card" });
+    await connected.channel.call("conversations.info", { channel: GENERAL.id });
+    expect(said).toEqual(["slack:#D0ALICE after 0", "slack:#C0GENERAL after 1", "slack:#C0GENERAL after 2"]);
   });
 });
